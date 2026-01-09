@@ -7,6 +7,7 @@ using System.Net;
 using System.Text;
 using Yarp.ReverseProxy.Configuration;
 using Yarp.ReverseProxy.Health;
+using Yarp.ReverseProxy.LoadBalancing;
 using LyWaf.Middleware;
 using LyWaf.Transformer;
 using Yarp.ReverseProxy.Transforms;
@@ -947,6 +948,14 @@ public class Program
         builder.Services.AddSingleton<IProbingRequestFactory, LyxProbingRequestFactory>();
         builder.Services.AddSingleton<IActiveHealthCheckPolicy, LyxActiveHealthPolicy>();
 
+        // 注册自定义负载均衡策略
+        builder.Services.AddSingleton<ILoadBalancingPolicy, WeightedRoundRobinPolicy>();
+        builder.Services.AddSingleton<ILoadBalancingPolicy, WeightedLeastConnectionsPolicy>();
+        builder.Services.AddSingleton<ILoadBalancingPolicy, IpHashPolicy>();
+        builder.Services.AddSingleton<ILoadBalancingPolicy, GenericHashPolicy>();
+        builder.Services.AddSingleton<ILoadBalancingPolicy, WeightedRandomPolicy>();
+        builder.Services.AddSingleton<ILoadBalancingPolicy, ConsistentHashPolicy>();
+
         Analysis.DoStartAnalysis();
 
         var wafInfos = new WafInfoOptions();
@@ -1013,6 +1022,8 @@ public class Program
         var proxyPorts = wafInfos.Listens.Select(l => $"*:{l.Port}").ToArray();
         app.MapReverseProxy(proxyApp =>
         {
+            // IP访问控制和连接限制（应放在较前面位置）
+            proxyApp.UseMiddleware<AccessControlMiddleware>();
             // 自动 HTTPS 重定向
             proxyApp.UseMiddleware<AutoHttpsMiddleware>();
             proxyApp.UseMiddleware<WafControlMiddleware>();

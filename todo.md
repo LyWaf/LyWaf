@@ -62,3 +62,28 @@ proxy
 stop
 environ
 reload
+
+
+负载均衡的轮询机制
+轮询（Round Robin）：默认方式，按顺序分发请求。
+
+加权轮询（Weighted Round Robin）：根据服务器权重分配请求。
+
+最少连接（Least Connections）：将请求发给当前连接数最少的服务器。
+
+加权最少连接（Weighted Least Connections）：考虑权重的连接数最少算法。
+
+IP哈希（IP Hash）：基于客户端IP分配，确保同一用户访问同一服务器。
+
+通用哈希（Generic Hash）：基于自定义变量（如URL、参数）进行哈希。
+
+随机（Random）：随机选择服务器，可选择带权重的随机。
+
+
+7. 安全与限流
+
+访问控制：基于IP的访问限制。
+
+请求限速：限制到后端服务器的请求速率。
+
+连接限制：限制到每个后端服务器的连接数。

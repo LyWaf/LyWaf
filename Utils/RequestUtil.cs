@@ -21,6 +21,22 @@ namespace LyWaf.Utils
                 return val.ToString();
             }
 
+            if (request.Headers.TryGetValue("Forwarded", out var forwardedValues))
+            {
+                var forwardedStr = string.Join(", ", forwardedValues.ToArray());
+                foreach (var entry in forwardedStr.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    foreach (var part in entry.Split(';', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var kv = part.Trim();
+                        if (kv.StartsWith("for=", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return kv[4..].Trim('"', ' ');
+                        }
+                    }
+                }
+            }
+
             return request.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "";
         }
 

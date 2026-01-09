@@ -248,34 +248,35 @@ namespace LyWaf.Policy
 
                 if (succ)
                 {
+                    // 成功时递增成功次数
                     var now = PassTimes.GetValueOrDefault(address) + 1;
+                    PassTimes[address] = now;
                     if (now >= passTimes)
                     {
+                        // 达到成功次数阈值，清除失败计数
                         FailTimes[address] = 0;
-                    }
-                    else
-                    {
-                        if (!FailTimes.ContainsKey(address))
-                        {
-                            FailTimes[address] = 0;
-                        }
                     }
                 }
                 else
                 {
+                    // 失败时递增失败次数
                     var now = FailTimes.GetValueOrDefault(address) + 1;
-                    FailTimes[address] = FailTimes.GetValueOrDefault(address) + 1;
+                    FailTimes[address] = now;
                     if (now >= failTimes)
                     {
+                        // 达到失败次数阈值，清除成功计数
                         PassTimes[address] = 0;
                     }
-                    else
-                    {
-                        if (!PassTimes.ContainsKey(address))
-                        {
-                            PassTimes[address] = 0;
-                        }
-                    }
+                }
+
+                // 确保字典中有对应的键
+                if (!PassTimes.ContainsKey(address))
+                {
+                    PassTimes[address] = 0;
+                }
+                if (!FailTimes.ContainsKey(address))
+                {
+                    FailTimes[address] = 0;
                 }
 
                 if (PassTimes[address] >= passTimes)
@@ -290,9 +291,10 @@ namespace LyWaf.Policy
                 {
                     newHealthStates[i] = new NewActiveDestinationHealth(probingResults[i].Destination, DestinationHealth.Unknown);
                 }
-
-                _healthUpdater.SetActive(cluster, newHealthStates);
             }
+
+            // 在循环外部一次性更新所有健康状态
+            _healthUpdater.SetActive(cluster, newHealthStates);
         }
     }
 

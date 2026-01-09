@@ -122,6 +122,68 @@ SpeedLimit:
       /file/*: 10
     IpEverys:
       127.0.0.1: 300
+
+  # =============== IP访问控制配置 ===============
+  AccessControl:
+    # 是否启用访问控制
+    Enabled: true
+    # 访问控制模式: Whitelist(白名单模式) 或 Blacklist(黑名单模式)
+    # Whitelist: 只允许白名单中的IP访问
+    # Blacklist: 拒绝黑名单中的IP访问
+    Mode: Blacklist
+    # 拒绝访问时返回的HTTP状态码
+    RejectStatusCode: 403
+    # 拒绝访问时返回的消息，支持占位符: {ClientIp}, {Path}, {Method}, {Host}, {Time}
+    RejectMessage: "Access Denied: {ClientIp}"
+    # IP白名单，支持CIDR格式
+    # 白名单模式下，只有在此列表中的IP才能访问
+    # 黑名单模式下，此列表中的IP不受黑名单限制
+    Whitelist:
+      - 127.0.0.1
+      - 10.0.0.0/8           # 10.x.x.x 内网
+      - 172.16.0.0/12        # 172.16.x.x - 172.31.x.x 内网
+      - 192.168.0.0/16       # 192.168.x.x 内网
+    # IP黑名单，支持CIDR格式
+    # 在黑名单模式下，此列表中的IP将被拒绝访问
+    Blacklist:
+      - 127.0.0.0/8
+      # - 1.2.3.4            # 单个IP
+      # - 1.2.3.0/24         # 1.2.3.0 - 1.2.3.255 整个网段
+      # - 203.0.113.0/24     # 示例网段
+    # 基于路径的访问控制规则
+    PathRules:
+      # /admin/* 路径只允许内网访问
+      /admin/*:
+        Allow:
+          - 127.0.0.1
+          - 192.168.0.0/16
+        Deny: []
+      # /api/internal/* 路径拒绝外网访问
+      # /api/internal/*:
+      #   Allow:
+      #     - 10.0.0.0/8
+      #   Deny: []
+
+  # =============== 连接限制配置 ===============
+  ConnectionLimit:
+    # 是否启用连接限制
+    Enabled: false
+    # 每个客户端IP的最大并发连接数，0表示不限制
+    MaxConnectionsPerIp: 100
+    # 每个后端服务器的最大并发连接数，0表示不限制
+    MaxConnectionsPerDestination: 1000
+    # 全局最大并发连接数，0表示不限制
+    MaxTotalConnections: 10000
+    # 超过连接限制时返回的HTTP状态码
+    RejectStatusCode: 503
+    # 超过连接限制时返回的消息
+    RejectMessage: "Too Many Connections"
+    # 基于路径的连接限制
+    # Key为路径（支持通配符），Value为最大连接数
+    PathLimits:
+      /api/heavy/*: 10
+      /download/*: 50
+
 FileProvider:
   Everys:
     127.0.0.1#/file:
@@ -169,6 +231,21 @@ ReverseProxy:
         RateLimiter: Concurrency
   Clusters:
     cluster1:
+      # =============== 负载均衡策略配置 ===============
+      # 支持的负载均衡策略:
+      #   RoundRobin        - 轮询 (默认): 按顺序分发请求
+      #   Random            - 随机: 随机选择服务器
+      #   LeastRequests     - 最少连接: 将请求发给当前连接数最少的服务器
+      #   PowerOfTwoChoices - 二选一: 随机选两个，取负载低的那个
+      #   First             - 总是第一个: 始终选择第一个可用的目标
+      #   ---------- 自定义策略 ----------
+      #   WeightedRoundRobin     - 加权轮询: 根据服务器权重分配请求
+      #   WeightedLeastConnections - 加权最少连接: 考虑权重的连接数最少算法
+      #   IpHash                 - IP哈希: 基于客户端IP分配，确保同一用户访问同一服务器
+      #   GenericHash            - 通用哈希: 基于自定义变量（如URL、参数）进行哈希
+      #   WeightedRandom         - 加权随机: 根据权重随机选择服务器
+      #   ConsistentHash         - 一致性哈希: 使用一致性哈希环，节点变化时最小化请求迁移
+      LoadBalancingPolicy: WeightedRoundRobin
       HealthCheck:
         Active:
           Enabled: true
@@ -195,12 +272,38 @@ ReverseProxy:
         LyxActiveHealth.ContentCheck: "Match"
         LyxActiveHealth.AvalidContent: "WebSocket"
         LyxActiveHealth.AvalidHeaders: Transfer-Encoding=chunked
+        # =============== GenericHash/ConsistentHash 哈希键配置 ===============
+        # 支持的变量:
+        #   {Path}        - 请求路径
+        #   {Query}       - 完整查询字符串
+        #   {Query.xxx}   - 指定查询参数
+        #   {Header.xxx}  - 指定请求头
+        #   {Cookie.xxx}  - 指定Cookie
+        #   {IP}          - 客户端IP
+        # 示例: HashKey: "{IP}"                    # 按IP分配 (默认)
+        # 示例: HashKey: "{Path}"                  # 按路径分配
+        # 示例: HashKey: "{Query.user_id}"         # 按用户ID参数分配
+        # 示例: HashKey: "{Header.Authorization}"  # 按认证头分配
+        # 示例: HashKey: "{Cookie.session_id}"     # 按会话ID分配
+        # HashKey: "{IP}"
 
       Destinations:
         destination1:
           # Address: 'http://127.0.0.1:8080/'
           Address: 'https://ttw.caishen.ai/'
+          Metadata:
+            # 权重配置: 用于 WeightedRoundRobin, WeightedLeastConnections, WeightedRandom
+            # 权重越高，被分配的请求越多
+            Weight: "3"
+            # 虚拟节点数: 用于 ConsistentHash, 默认150
+            # VirtualNodes: "150"
+        destination2:
+          Address: 'https://ttw.caishen.ai/'
+          Metadata:
+            Weight: "1"
     cluster2:
+      # 使用 IP 哈希策略
+      LoadBalancingPolicy: IpHash
       Destinations:
         destination1:
           # Address: 'http://127.0.0.1:8080/'

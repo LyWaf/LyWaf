@@ -1,4 +1,3 @@
-
 using LyWaf.Services;
 using LyWaf.Services.Statistic;
 using LyWaf.Shared;
@@ -7,6 +6,32 @@ namespace LyWaf.Utils;
 
 public class WafUtil
 {
+    /// <summary>
+    /// 格式化消息，替换占位符
+    /// 支持的占位符:
+    ///   {ClientIp} - 客户端IP
+    ///   {Path} - 请求路径
+    ///   {Method} - 请求方法
+    ///   {Host} - 请求Host
+    ///   {Time} - 当前时间
+    /// </summary>
+    public static string FormatMessage(string message, HttpContext context)
+    {
+        if (string.IsNullOrEmpty(message))
+            return message;
+
+        var result = message;
+        var clientIp = RequestUtil.GetClientIp(context.Request);
+
+        result = result.Replace("{ClientIp}", clientIp);
+        result = result.Replace("{Path}", context.Request.Path.Value ?? "/");
+        result = result.Replace("{Method}", context.Request.Method);
+        result = result.Replace("{Host}", context.Request.Host.ToString());
+        result = result.Replace("{Time}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+
+        return result;
+    }
+
     public const string FB_OUTPUT_HTML = """
         <!DOCTYPE html>
         <html>
