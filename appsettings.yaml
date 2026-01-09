@@ -1,0 +1,207 @@
+# 如果觉得好用，请收藏或则分享本站
+Logging:
+  LogLevel:
+    Default: Debug
+    Microsoft.AspNetCore: Warning
+AllowedHosts: '*'
+WafInfos:
+  Listens:
+    - Host: 0.0.0.0
+      Port: 7031
+    - Port: 5002
+      # AutoHttpsPort: 443
+    - Host: 0.0.0.0
+      Port: 443
+      IsHttps: true
+  Certs:
+    - Host: "*.lx"
+      PemFile: .well-known/pri_key.pem
+      KeyFile: .well-known/pri_key.pem.key
+    - Host: "*."
+      PemFile: .well-known/pri_key.pem
+      KeyFile: .well-known/pri_key.pem.key
+  HeaderUps:
+    aa: bb
+    cc: dd
+  HeaderDowns:
+    ee: ff
+    gg: hh
+  Forwarded:
+    IsX: false
+    Method: append
+Statistic:
+  PathStas:
+    # 不带任何的就是需要完整匹配如 /api
+    # 后面带有星号的就是前缀匹配如 /api/*
+    # 中间带有大括号的则表示规则匹配  /api/{aaa}/bbb 则 /api/xxx/bbb 符合, /api/aass/dd/bbb不符合
+    # 匹配到任一规则后则不进行后续匹配, 未匹配到则按原请求进行统计
+    - /api/{aaa}/bbb
+    - /api/cc/dd/*
+    - /api1/*
+    - /file/*
+    - /api1/aaaa
+  WhitePaths:
+    - /api2/*
+    - /file/*
+  Config:
+    # 最小的检测数量, 访问数大于该数才进行检查是否合法, 请设置大于20的值
+    fbLimit: 30
+    # 上一条请求还未结束直接发下一条的请求
+    notWaitFbRatio: 0.9
+    # 默认的封禁时长, 单位为秒
+    defaultFbTime: 200
+    # 取最高频率的几项进行计算占比
+    maxFreqGetNums: 3
+    # 至少需要访问的次数
+    maxFreqMinReqs: 100
+    # 前几的占比超过该比例则封禁
+    maxFreqFbRatio: 0.8
+  LimitCc:
+    - Period: 60
+      LimitNum: 20
+      Path: /api1/*
+      FbTime: "00:03:00"
+Protect:
+
+  # 检查query里面的请求
+  OpenArgsCheck: true
+  # Post检查会预先读取body的内容, 会比较大的程度拖慢响应速度
+  OpenPostCheck: true
+  # 最大请求大小
+  MaxRequestBodySize: 10000
+  # 具体的检测参数正则配置
+  RegexArgsList:
+    - (?:aaa\/\W*passwd)
+  # 具体的检测参数正则配置
+  RegexPostList:
+    - (?:aaa\/\W*passwd)
+SpeedLimit:
+  Limits:
+    # Fixed 固定窗口
+    # Sliding 滑动窗口
+    # Token 令牌桶
+    # Concurrency 并发限定
+    # https://learn.microsoft.com/zh-cn/aspnet/core/performance/rate-limit?view=aspnetcore-9.0
+    Global:
+      Name: Fixed
+      PermitLimit: 20
+      Window: "00:00:05"
+      QueueOrder: 0
+      QueueLimit: 10
+    Fixed:
+      Name: Fixed
+      PermitLimit: 20
+      Window: "00:00:05"
+      QueueOrder: 0
+      QueueLimit: 10
+    Sliding:
+      Name: Sliding
+      PermitLimit: 20
+      Window: "00:00:05"
+      SegmentsPerWindow: 10
+      QueueOrder: 0
+      QueueLimit: 10
+    Token:
+      Name: Token
+      PermitLimit: 20
+      ReplenishmentPeriod: "00:00:05"
+      TokensPerPeriod: 10
+      QueueOrder: 0
+      QueueLimit: 10
+    Concurrency:
+      Name: Concurrency
+      PermitLimit: 1
+      QueueOrder: 0
+      QueueLimit: 0
+  Default: Global
+  Throttled:
+    # 全局限速, 以下速度均为 K/s
+    Global: 0
+    Everys:
+      /api/*: 100
+      /file/*: 10
+    IpEverys:
+      127.0.0.1: 300
+FileProvider:
+  Everys:
+    127.0.0.1#/file:
+      BasePath: E:/caishen
+      MaxFileSize: 1024 #单位K
+      TryFiles:
+        - $path
+        - $path/
+        - caishen13.cn/$path
+  RemoveExtensions:
+    -
+      ".css1"
+  MimeExtensions:
+    ".png": "application/octet-stream"
+ReverseProxy:
+  Routes:
+    route1:
+      ClusterId: cluster1
+      Match:
+        Path: 'test1/{**catch-all}'
+      Transforms:
+        # Forwarded:proto=http;host="127.0.0.1:5002";for=192.168.1.117;by=_1ecb8ezFf
+        # -
+        #   Forwarded: by,for,host,proto
+        #   ForFormat: ip
+        #   ByFormat: Random
+        #   Action: Append
+        # 自动添加格式
+        # -
+        #   X-Forwarded: Set
+        #   For: Append
+        #   HeaderPrefix: X-Forwarded-
+        # -
+        #   RequestHeader: X-Forwarded-For
+        #   Append: '{RemoteIpAddress}'
+    route2:
+      ClusterId: cluster2
+      Match:
+        Path: '{**catch-all}'
+    route3:
+      ClusterId: cluster2
+      Match:
+        Path: 'file/{**file-all}'
+      Metadata:
+        RateLimiter: Concurrency
+  Clusters:
+    cluster1:
+      HealthCheck:
+        Active:
+          Enabled: true
+          Interval: '00:00:10'
+          Timeout: '00:00:10'
+          Policy: LyxActiveHealth
+          Path: /api/health
+          Query: aa=bb
+      Metadata:
+        # 连续失败两次则标记不健康, 超过次数则清除成功标记, 并标为不健康
+        LyxActiveHealth.Fails: 2
+        # 连续成功两次则标记健康, 超过次数则清除失败标记, 并标为不健康
+        LyxActiveHealth.Passes: 2
+        # 请求方法, 默认GET, 如果为POST将会取LyxActiveHealth.Body做为请求内容
+        LyxActiveHealth.Method: GET
+        # 如果可转化成JSON则自动用JSON格式请求
+        # 如果不行则用application/x-www-form-urlencoded请求
+        LyxActiveHealth.Body: '{"aa": "bb"}'
+        # 用逗号隔开2xx则表示2开头的都行, 可以指定编码
+        LyxActiveHealth.AvalidCode: 2xx,3xx,4xx
+        # 默认包含:Contains, 全部匹配Match, 
+        # JSON验证则为JSON,将会将内容转成JSON进行匹配, 表示包含
+        # JSONM则表示完全匹配
+        LyxActiveHealth.ContentCheck: "Match"
+        LyxActiveHealth.AvalidContent: "WebSocket"
+        LyxActiveHealth.AvalidHeaders: Transfer-Encoding=chunked
+
+      Destinations:
+        destination1:
+          # Address: 'http://127.0.0.1:8080/'
+          Address: 'https://ttw.caishen.ai/'
+    cluster2:
+      Destinations:
+        destination1:
+          # Address: 'http://127.0.0.1:8080/'
+          Address: 'https://ttw.caishen.ai/'

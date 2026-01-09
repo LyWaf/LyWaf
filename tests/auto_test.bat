@@ -1,0 +1,1 @@
+hurl --variables-file hurl.config --test .\attack.hurl

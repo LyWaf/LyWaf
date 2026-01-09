@@ -1,0 +1,244 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // 使用 IntelliSense 找出 C# 调试存在哪些属性
+            // 将悬停用于现有属性的说明
+            // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
+            "name": ".NET Core Launch (web)",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            // 如果已更改目标框架，请确保更新程序路径。
+            "program": "${workspaceFolder}/bin/Debug/net9.0/LyWaf.dll",
+            "args": [
+                "run"
+            ],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            // 启用在启动 ASP.NET Core 时启动 Web 浏览器。有关详细信息: https://aka.ms/VSCode-CS-LaunchJson-WebBrowser
+            // "serverReadyAction": {
+            //     "action": "openExternally",
+            //     "pattern": "\\bNow listening on:\\s+(https?://\\S+)"
+            // },
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development"
+            },
+            "sourceFileMap": {
+                "/Views": "${workspaceFolder}/Views"
+            }
+        },
+        {
+            // 使用 IntelliSense 找出 C# 调试存在哪些属性
+            // 将悬停用于现有属性的说明
+            // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
+            "name": "release .NET Core Launch (web)",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "publish",
+            // 如果已更改目标框架，请确保更新程序路径。
+            "program": "${workspaceFolder}/bin/Release/net9.0/LyWaf.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            // 启用在启动 ASP.NET Core 时启动 Web 浏览器。有关详细信息: https://aka.ms/VSCode-CS-LaunchJson-WebBrowser
+            // "serverReadyAction": {
+            //     "action": "openExternally",
+            //     "pattern": "\\bNow listening on:\\s+(https?://\\S+)"
+            // },
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development"
+            },
+            "sourceFileMap": {
+                "/Views": "${workspaceFolder}/Views"
+            }
+        },
+        {
+            // 使用 IntelliSense 找出 C# 调试存在哪些属性
+            // 将悬停用于现有属性的说明
+            // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
+            "name": "run by command",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            // 如果已更改目标框架，请确保更新程序路径。
+            "program": "${workspaceFolder}/bin/Debug/net9.0/LyWaf.dll",
+            "args": [
+                "file",
+                "-l",
+                "5001",
+                "-r",
+                "E:/caishen/",
+                "--browse",
+                "--precompressed",
+                "--try",
+                "$path",
+                "caishen13.cn/$path",
+            ],
+            // "--browse", 
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development"
+            },
+            "sourceFileMap": {
+                "/Views": "${workspaceFolder}/Views"
+            }
+        },
+        {
+            // 使用 IntelliSense 找出 C# 调试存在哪些属性
+            // 将悬停用于现有属性的说明
+            // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
+            "name": "run by proxy",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            // 如果已更改目标框架，请确保更新程序路径。
+            "program": "${workspaceFolder}/bin/Debug/net9.0/LyWaf.dll",
+            "args": [
+                "proxy",
+                "-t",
+                "http://ttw.caishen.ai",
+                "-d",
+                "aa=bb",
+                "-H",
+                "cc=dd"
+            ],
+            // "--browse", 
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development"
+            },
+            "sourceFileMap": {
+                "/Views": "${workspaceFolder}/Views"
+            }
+        },
+        {
+            // 使用 IntelliSense 找出 C# 调试存在哪些属性
+            // 将悬停用于现有属性的说明
+            // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
+            "name": "run by respond",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            // 如果已更改目标框架，请确保更新程序路径。
+            "program": "${workspaceFolder}/bin/Debug/net9.0/LyWaf.dll",
+            "args": [
+                "respond",
+                "-l",
+                "8081",
+                "-b",
+                "{\"status\":\"ok\"}",
+                "-H",
+                "Content-Type=application/json"
+            ],
+            // "--browse", 
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development"
+            },
+            "sourceFileMap": {
+                "/Views": "${workspaceFolder}/Views"
+            }
+        },
+        {
+            // 使用 IntelliSense 找出 C# 调试存在哪些属性
+            // 将悬停用于现有属性的说明
+            // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
+            "name": "run by start",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            // 如果已更改目标框架，请确保更新程序路径。
+            "program": "${workspaceFolder}/bin/Debug/net9.0/LyWaf.dll",
+            "args": [
+                "start"
+            ],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development"
+            },
+            "sourceFileMap": {
+                "/Views": "${workspaceFolder}/Views"
+            }
+        },
+        {
+            // 使用 IntelliSense 找出 C# 调试存在哪些属性
+            // 将悬停用于现有属性的说明
+            // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
+            "name": "run by validate",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            // 如果已更改目标框架，请确保更新程序路径。
+            "program": "${workspaceFolder}/bin/Debug/net9.0/LyWaf.dll",
+            "args": [
+                "validate"
+            ],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development"
+            },
+            "sourceFileMap": {
+                "/Views": "${workspaceFolder}/Views"
+            }
+        },
+        {
+            // 使用 IntelliSense 找出 C# 调试存在哪些属性
+            // 将悬停用于现有属性的说明
+            // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
+            "name": "run by start Release",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "publish",
+            // 如果已更改目标框架，请确保更新程序路径。
+            "program": "${workspaceFolder}/bin/Release/net9.0/LyWaf.dll",
+            "args": [
+                "start"
+            ],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development"
+            },
+            "sourceFileMap": {
+                "/Views": "${workspaceFolder}/Views"
+            }
+        },
+        {
+            // 使用 IntelliSense 找出 C# 调试存在哪些属性
+            // 将悬停用于现有属性的说明
+            // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
+            "name": "dotnet test",
+            "type": "coreclr",
+            "request": "launch",
+            // 如果已更改目标框架，请确保更新程序路径。
+            "program": "dotnet",
+            "args": [
+                "test"
+            ],
+            "cwd": "${workspaceFolder}",
+            "stopAtEntry": false,
+            // 启用在启动 ASP.NET Core 时启动 Web 浏览器。有关详细信息: https://aka.ms/VSCode-CS-LaunchJson-WebBrowser
+            // "serverReadyAction": {
+            //     "action": "openExternally",
+            //     "pattern": "\\bNow listening on:\\s+(https?://\\S+)"
+            // },
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development"
+            },
+            "sourceFileMap": {
+                "/Views": "${workspaceFolder}/Views"
+            }
+        },
+        {
+            "name": ".NET Core Attach",
+            "type": "coreclr",
+            "request": "attach"
+        }
+    ]
+}

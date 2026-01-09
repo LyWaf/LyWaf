@@ -1,0 +1,106 @@
+# 如果觉得好用，请收藏或则分享本站
+Logging:
+  LogLevel:
+    Default: Debug
+    Microsoft.AspNetCore: Warning
+AllowedHosts: '*'
+SpeedLimit:
+  Limits:
+    # Fixed 固定窗口
+    # Sliding 滑动窗口
+    # Token 令牌桶
+    # Concurrency 并发限定
+    # https://learn.microsoft.com/zh-cn/aspnet/core/performance/rate-limit?view=aspnetcore-9.0
+    Global:
+      Name: Fixed
+      PermitLimit: 20
+      Window: "00:00:05"
+      QueueOrder: 0
+      QueueLimit: 10
+    Fixed:
+      Name: Fixed
+      PermitLimit: 20
+      Window: "00:00:05"
+      QueueOrder: 0
+      QueueLimit: 10
+    Sliding:
+      Name: Sliding
+      PermitLimit: 20
+      Window: "00:00:05"
+      SegmentsPerWindow: 10
+      QueueOrder: 0
+      QueueLimit: 10
+    Token:
+      Name: Token
+      PermitLimit: 20
+      ReplenishmentPeriod: "00:00:05"
+      TokensPerPeriod: 10
+      QueueOrder: 0
+      QueueLimit: 10
+    Concurrency:
+      Name: Concurrency
+      PermitLimit: 1
+      QueueOrder: 0
+      QueueLimit: 0
+  Default: Global
+FileProvider:
+  Everys:
+    127.0.0.1$/file:
+      BasePath: E:/caishen
+      MaxFileSize: 1024 #单位K
+      TryFiles:
+        - $path
+        - $path/
+        - caishen13.cn/$path
+  RemoveExtensions:
+    -
+      ".css1"
+  MimeExtensions:
+    ".png": "application/octet-stream"
+ReverseProxy:
+  Routes:
+    route1:
+      ClusterId: cluster1
+      Match:
+        Path: 'test1/{**catch-all}'
+      Transforms:
+        # Forwarded:proto=http;host="127.0.0.1:5002";for=192.168.1.117;by=_1ecb8ezFf
+        # -
+        #   Forwarded: by,for,host,proto
+        #   ForFormat: ip
+        #   ByFormat: Random
+        #   Action: Append
+        # 自动添加格式
+        # -
+        #   X-Forwarded: Set
+        #   For: Append
+        #   HeaderPrefix: X-Forwarded-
+        # -
+        #   RequestHeader: X-Forwarded-For
+        #   Append: '{RemoteIpAddress}'
+    route2:
+      ClusterId: cluster2
+      Match:
+        Path: '{**catch-all}'
+    route3:
+      ClusterId: cluster2
+      Match:
+        Path: 'file/{**file-all}'
+      Metadata:
+        RateLimiter: Concurrency
+  Clusters:
+    cluster1:
+      HealthCheck:
+        Active:
+          Enabled: true
+          Interval: '00:00:10'
+          Timeout: '00:00:10'
+          Policy: CusActiveHealth
+          Path: /api/health
+      Destinations:
+        destination1:
+          Address: 'http://127.0.0.1:5003/'
+    cluster2:
+      Destinations:
+        destination1:
+          Address: 'https://ttw.caishen.ai/'
