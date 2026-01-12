@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using LyWaf.Backend;
-using LyWaf.Services.SpeedLimit;
+using LyWaf.Services.AccessControl;
 using LyWaf.Services.WafInfo;
 using LyWaf.Shared;
 using YamlDotNet.Serialization;
@@ -86,12 +86,12 @@ public static class ControlApi
             return Results.Json(new { message = "配置重载失败：不支持的配置类型" }, statusCode: 500);
         }).RequireHost($"*:{controlPort}");
 
-        app.MapGet("/api/statistics", (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        app.MapGet("/api/statistics", (HttpContext ctx, IAccessControlService accessControlService) =>
         {
             var queryIp = ctx.Request.Query["ip"].FirstOrDefault();
             var isFilterByIp = !string.IsNullOrEmpty(queryIp);
 
-            var connectionStats = speedLimitService.GetConnectionStats();
+            var connectionStats = accessControlService.GetConnectionStats();
 
             // 如果指定了IP，只返回该IP的连接统计
             if (isFilterByIp)

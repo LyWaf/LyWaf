@@ -76,6 +76,109 @@ Protect:
   # 具体的检测参数正则配置
   RegexPostList:
     - (?:aaa\/\W*passwd)
+
+# =============== 访问控制配置 ===============
+# 整合 IP 访问控制、地理位置访问控制和连接限制
+# 白名单 IP 直接放行，不进行 GeoIp 检查
+# 每个子模块（IpControl、GeoControl、ConnectionLimit）都有独立的 Enabled 开关
+AccessControl:
+  # 拒绝访问时返回的 HTTP 状态码
+  RejectStatusCode: 403
+  # 拒绝访问时返回的消息
+  # 支持占位符: {ClientIp}, {Path}, {Method}, {Host}, {Time}, {Country}, {Region}, {City}, {Isp}
+  RejectMessage: "Access Denied: {ClientIp}"
+
+  # 全局 IP 白名单，支持 CIDR 格式
+  # 白名单中的 IP 直接放行，不受任何访问控制限制（包括 IpControl、GeoControl）
+  Whitelist:
+    # - 127.0.0.1
+    # - 10.0.0.0/8           # 10.x.x.x 内网
+    # - 172.16.0.0/12        # 172.16.x.x - 172.31.x.x 内网
+    # - 192.168.0.0/16       # 192.168.x.x 内网
+
+  # =============== IP 黑名单访问控制配置 ===============
+  IpControl:
+    # 是否启用 IP 黑名单访问控制
+    Enabled: true
+    # IP 黑名单，支持 CIDR 格式
+    # 黑名单中的 IP 将被拒绝访问
+    Blacklist:
+      # - 127.0.0.0/8
+      # - 1.2.3.4            # 单个 IP
+      # - 1.2.3.0/24         # 1.2.3.0 - 1.2.3.255 整个网段
+      # - 203.0.113.0/24     # 示例网段
+    # 基于路径的 IP 访问规则
+    PathRules:
+      # /admin/* 路径只允许内网访问
+      /admin/*:
+        Whitelist:
+          - 127.0.0.1
+          - 192.168.0.0/16
+        Blacklist: []
+      # /api/internal/* 路径拒绝外网访问
+      # /api/internal/*:
+      #   Whitelist:
+      #     - 10.0.0.0/8
+      #   Blacklist: []
+
+  # =============== 地理位置访问控制配置 ===============
+  # 基于 IP2Region 实现高性能 IP 地理位置查询
+  # 数据库下载: https://github.com/lionsoul2014/ip2region/tree/master/data
+  GeoControl:
+    # 是否启用地理位置访问控制
+    Enabled: True
+    # IP2Region 数据库文件路径（xdb 格式）
+    DatabasePath: "datas/ip2region.xdb"
+    # 访问控制模式: Allow(只允许列表中的国家) 或 Deny(禁止列表中的国家)
+    Mode: Deny
+    # 拒绝访问时返回的消息（覆盖全局配置）
+    # 支持占位符: {ClientIp}, {Country}, {Region}, {City}, {Isp}
+    RejectMessage: "Access denied from your region: {Country}"
+    # 允许访问的国家/地区列表（当 Mode 为 Allow 时生效）
+    # 支持: 国家名称、省份、城市
+    AllowCountries:
+      # - 中国
+      # - 美国
+      # - 日本
+    # 禁止访问的国家/地区列表（当 Mode 为 Deny 时生效）
+    DenyCountries:
+      - 中国
+      # - 朝鲜
+      # - 伊朗
+    # 基于路径的地理位置规则
+    PathRules:
+      # 示例: /admin/* 只允许中国访问
+      # /admin/*:
+      #   Whitelist:
+      #     - 中国
+      #   Blacklist: []
+      # 示例: /api/internal/* 禁止海外访问
+      # /api/internal/*:
+      #   Whitelist:
+      #     - 中国
+      #   Blacklist: []
+
+  # =============== 连接限制配置 ===============
+  ConnectionLimit:
+    # 是否启用连接限制
+    Enabled: false
+    # 每个客户端 IP 的最大并发连接数，0 表示不限制
+    MaxConnectionsPerIp: 100
+    # 每个后端服务器的最大并发连接数，0 表示不限制
+    MaxConnectionsPerDestination: 1000
+    # 全局最大并发连接数，0 表示不限制
+    MaxTotalConnections: 10000
+    # 超过连接限制时返回的 HTTP 状态码
+    RejectStatusCode: 503
+    # 超过连接限制时返回的消息
+    # 支持占位符: {ClientIp}, {Path}, {Method}, {Host}, {Time}
+    RejectMessage: "Too Many Connections: {ClientIp}"
+    # 基于路径的连接限制
+    # Key 为路径（支持通配符），Value 为最大连接数
+    PathLimits:
+      /api/heavy/*: 10
+      /download/*: 50
+
 SpeedLimit:
   Limits:
     # Fixed 固定窗口
@@ -124,67 +227,6 @@ SpeedLimit:
     IpEverys:
       127.0.0.1: 300
 
-  # =============== IP访问控制配置 ===============
-  AccessControl:
-    # 是否启用访问控制
-    Enabled: true
-    # 访问控制模式: Whitelist(白名单模式) 或 Blacklist(黑名单模式)
-    # Whitelist: 只允许白名单中的IP访问
-    # Blacklist: 拒绝黑名单中的IP访问
-    Mode: Blacklist
-    # 拒绝访问时返回的HTTP状态码
-    RejectStatusCode: 403
-    # 拒绝访问时返回的消息，支持占位符: {ClientIp}, {Path}, {Method}, {Host}, {Time}
-    RejectMessage: "Access Denied: {ClientIp}"
-    # IP白名单，支持CIDR格式
-    # 白名单模式下，只有在此列表中的IP才能访问
-    # 黑名单模式下，此列表中的IP不受黑名单限制
-    Whitelist:
-      - 127.0.0.1
-      - 10.0.0.0/8           # 10.x.x.x 内网
-      - 172.16.0.0/12        # 172.16.x.x - 172.31.x.x 内网
-      - 192.168.0.0/16       # 192.168.x.x 内网
-    # IP黑名单，支持CIDR格式
-    # 在黑名单模式下，此列表中的IP将被拒绝访问
-    Blacklist:
-      # - 127.0.0.0/8
-      # - 1.2.3.4            # 单个IP
-      # - 1.2.3.0/24         # 1.2.3.0 - 1.2.3.255 整个网段
-      # - 203.0.113.0/24     # 示例网段
-    # 基于路径的访问控制规则
-    PathRules:
-      # /admin/* 路径只允许内网访问
-      /admin/*:
-        Allow:
-          - 127.0.0.1
-          - 192.168.0.0/16
-        Deny: []
-      # /api/internal/* 路径拒绝外网访问
-      # /api/internal/*:
-      #   Allow:
-      #     - 10.0.0.0/8
-      #   Deny: []
-
-  # =============== 连接限制配置 ===============
-  ConnectionLimit:
-    # 是否启用连接限制
-    Enabled: false
-    # 每个客户端IP的最大并发连接数，0表示不限制
-    MaxConnectionsPerIp: 100
-    # 每个后端服务器的最大并发连接数，0表示不限制
-    MaxConnectionsPerDestination: 1000
-    # 全局最大并发连接数，0表示不限制
-    MaxTotalConnections: 10000
-    # 超过连接限制时返回的HTTP状态码
-    RejectStatusCode: 503
-    # 超过连接限制时返回的消息
-    RejectMessage: "Too Many Connections"
-    # 基于路径的连接限制
-    # Key为路径（支持通配符），Value为最大连接数
-    PathLimits:
-      /api/heavy/*: 10
-      /download/*: 50
-
 FileProvider:
   Everys:
     127.0.0.1#/file:
@@ -232,6 +274,19 @@ ReverseProxy:
         RateLimiter: Concurrency
   Clusters:
     cluster1:
+      # =============== HTTP客户端/连接池配置 ===============
+      # YARP 使用 HttpClient 连接池管理后端连接
+      HttpClient:
+        # 每个后端服务器的最大连接数（默认200）
+        # 建议根据后端服务器吞吐能力设置在100-500之间
+        MaxConnectionsPerServer: 200
+        # 请求超时时间（默认100秒，建议30秒）
+        # RequestTimeout: '00:00:30'
+        # SSL协议版本
+        # SslProtocols: 'Tls12, Tls13'
+        # 是否允许不受信任的SSL证书（生产环境应为false）
+        # DangerousAcceptAnyServerCertificate: false
+      
       # =============== 负载均衡策略配置 ===============
       # 支持的负载均衡策略:
       #   RoundRobin        - 轮询 (默认): 按顺序分发请求

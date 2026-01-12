@@ -26,6 +26,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Https;
 using System.Net.Security;
 using LyWaf.Utils;
 using LyWaf.Services.WafInfo;
+using LyWaf.Services.AccessControl;
 
 using System.CommandLine;
 using System.CommandLine.Parsing;
@@ -938,12 +939,14 @@ public class Program
         builder.Services.Configure<SpeedLimitOptions>(builder.Configuration.GetSection("SpeedLimit"));
         builder.Services.Configure<FileProviderOptions>(builder.Configuration.GetSection("FileProvider"));
         builder.Services.Configure<StatisticOptions>(builder.Configuration.GetSection("Statistic"));
+        builder.Services.Configure<AccessControlOptions>(builder.Configuration.GetSection("AccessControl"));
 
         builder.Services.AddMemoryCache();
         builder.Services.AddSingleton<IFileService, FileService>();
         builder.Services.AddSingleton<ISpeedLimitService, SpeedLimitService>();
         builder.Services.AddSingleton<IProtectService, ProtectService>();
         builder.Services.AddSingleton<IStatisticService, StatisticService>();
+        builder.Services.AddSingleton<IAccessControlService, AccessControlService>();
         builder.Services.AddSingleton<IWafInfoService, WafInfoService>();
         builder.Services.AddSingleton<IProbingRequestFactory, LyxProbingRequestFactory>();
         builder.Services.AddSingleton<IActiveHealthCheckPolicy, LyxActiveHealthPolicy>();
@@ -1001,7 +1004,21 @@ public class Program
         var reverse = builder.Services.AddReverseProxy()
             .ConfigureHttpClient((context, handler) =>
             {
+                // SSL/TLS 配置
                 handler.SslOptions.EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
+
+                // 连接池配置
+                // 每个服务器的最大连接数（从配置读取，默认200）
+                handler.MaxConnectionsPerServer = context.NewConfig.MaxConnectionsPerServer ?? 200;
+
+                // 启用 HTTP/2 多路复用（减少连接数）
+                handler.EnableMultipleHttp2Connections = true;
+
+                // 连接池中空闲连接的生存时间（默认2分钟）
+                handler.PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2);
+
+                // 连接的最大生存时间（防止连接过旧，默认无限）
+                handler.PooledConnectionLifetime = TimeSpan.FromMinutes(10);
             }).AddTransforms<WafTrans>();
         if (routes != null && clusters != null)
         {

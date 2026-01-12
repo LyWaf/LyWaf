@@ -10,6 +10,7 @@ LyWaf 是一款基于 .NET 9 和 YARP（Yet Another Reverse Proxy）构建的高
 - ⚖️ **多种负载均衡策略** - 支持 11 种负载均衡算法
 - 🛡️ **WAF 安全防护** - 内置 SQL 注入、XSS 等攻击检测
 - 🔒 **IP 访问控制** - 支持黑白名单，CIDR 网段匹配
+- 🌍 **地理位置限制** - 基于 IP2Region 的国家/地区访问控制
 - 🚦 **流量控制** - 请求限速、连接限制、带宽控制
 - 💚 **健康检查** - 主动健康检查，自动剔除故障节点
 - 📁 **静态文件服务** - 内置文件服务器功能
@@ -136,38 +137,105 @@ Metadata:
   HashKey: "{Cookie.session_id}"     # 按Cookie
 ```
 
-## 🔒 IP 访问控制
+## 🔗 连接池配置
 
-支持基于 IP 的黑白名单访问控制，完整支持 CIDR 格式。
+LyWaf 使用 HttpClient 连接池管理后端连接，优化性能和资源使用：
+
+```yaml
+Clusters:
+  backend:
+    HttpClient:
+      # 每个后端服务器的最大连接数（默认200，建议100-500）
+      MaxConnectionsPerServer: 200
+      # 请求超时时间
+      RequestTimeout: '00:00:30'
+      # SSL协议版本
+      SslProtocols: 'Tls12, Tls13'
+      # 是否允许不受信任的SSL证书（生产环境应为false）
+      DangerousAcceptAnyServerCertificate: false
+```
+
+### 连接池特性
+
+| 配置项 | 默认值 | 说明 |
+|-------|-------|------|
+| `MaxConnectionsPerServer` | 200 | 每个后端服务器的最大并发连接数 |
+| `PooledConnectionIdleTimeout` | 2分钟 | 空闲连接的存活时间 |
+| `PooledConnectionLifetime` | 10分钟 | 连接的最大生存时间 |
+| `EnableMultipleHttp2Connections` | true | 启用HTTP/2多路复用 |
+
+## 🔐 统一访问控制
+
+LyWaf 提供统一的访问控制服务，整合 IP 访问控制和地理位置访问控制。**白名单 IP 直接放行，不进行 GeoIp 检查**，提高性能和灵活性。
 
 ### 配置示例
 
 ```yaml
-SpeedLimit:
-  AccessControl:
+AccessControl:
+  # 拒绝访问时返回的 HTTP 状态码
+  RejectStatusCode: 403
+  # 拒绝访问时返回的消息
+  # 支持占位符: {ClientIp}, {Path}, {Method}, {Host}, {Time}, {Country}, {Region}, {City}, {Isp}
+  RejectMessage: "Access Denied: {ClientIp}"
+
+  # 全局 IP 白名单（支持 CIDR）- 直接放行，不检查 IpControl、GeoControl
+  Whitelist:
+    - 127.0.0.1
+    - 10.0.0.0/8        # 10.x.x.x 内网
+    - 192.168.0.0/16    # 192.168.x.x 内网
+
+  # =============== IP 黑名单访问控制 ===============
+  IpControl:
     Enabled: true
-    Mode: Blacklist  # Whitelist 或 Blacklist
-    RejectStatusCode: 403
-    RejectMessage: "Access Denied: {ClientIp}"
-    
-    # 白名单（支持 CIDR）
-    Whitelist:
-      - 127.0.0.1
-      - 10.0.0.0/8        # 10.x.x.x
-      - 192.168.0.0/16    # 192.168.x.x
-      
-    # 黑名单（支持 CIDR）
+    # IP 黑名单（支持 CIDR）
     Blacklist:
       - 1.2.3.4           # 单个 IP
       - 1.2.3.0/24        # 1.2.3.0 - 1.2.3.255
-      
     # 基于路径的规则
     PathRules:
       /admin/*:
-        Allow:
+        Whitelist:
           - 192.168.0.0/16
-        Deny: []
+        Blacklist: []
+
+  # =============== 地理位置访问控制 ===============
+  GeoControl:
+    Enabled: false
+    DatabasePath: "ip2region.xdb"  # IP2Region 数据库路径
+    Mode: Deny  # Allow 或 Deny
+    RejectMessage: "Access denied from your region: {Country}"
+    # 禁止访问的国家/地区（Deny 模式）
+    DenyCountries:
+      - 朝鲜
+      - 伊朗
+    # 允许访问的国家/地区（Allow 模式）
+    AllowCountries:
+      - 中国
+      - 美国
+    # 基于路径的规则
+    PathRules:
+      /admin/*:
+        Whitelist:
+          - 中国
+        Blacklist: []
+
+  # =============== 连接限制 ===============
+  ConnectionLimit:
+    Enabled: false
+    MaxConnectionsPerIp: 100          # 每个 IP 最大连接数
+    MaxConnectionsPerDestination: 1000 # 每个后端最大连接数
+    MaxTotalConnections: 10000        # 全局最大连接数
+    RejectStatusCode: 503
+    RejectMessage: "Too Many Connections: {ClientIp}"
+    PathLimits:                       # 基于路径的连接限制
+      /api/heavy/*: 10
+      /download/*: 50
 ```
+
+### IP 访问控制
+
+- **白名单**（`Whitelist`）：在 `AccessControl` 顶层配置，白名单中的 IP 直接放行，不受任何访问控制限制
+- **黑名单**（`IpControl.Blacklist`）：黑名单中的 IP 将被拒绝访问
 
 ### CIDR 格式说明
 
@@ -177,6 +245,32 @@ SpeedLimit:
 | `192.168.1.0/24` | /24 网段 | 192.168.1.0 - 192.168.1.255 (256个IP) |
 | `192.168.0.0/16` | /16 网段 | 192.168.0.0 - 192.168.255.255 (65536个IP) |
 | `10.0.0.0/8` | /8 网段 | 10.0.0.0 - 10.255.255.255 |
+
+### 地理位置访问控制
+
+基于 IP2Region 实现高性能 IP 地理位置查询，支持按国家、省份、城市限制访问。
+
+**数据库下载**: 从 [IP2Region GitHub](https://github.com/lionsoul2014/ip2region/tree/master/data) 下载 `ip2region.xdb` 文件。
+
+| 类型 | 示例 |
+|-----|------|
+| 国家 | 中国、美国、日本 |
+| 省份 | 广东省、北京、浙江省 |
+| 城市 | 深圳市、上海市、杭州市 |
+
+### 消息占位符
+
+| 占位符 | 说明 |
+|-------|------|
+| `{ClientIp}` | 客户端 IP 地址 |
+| `{Path}` | 请求路径 |
+| `{Method}` | 请求方法 |
+| `{Host}` | 请求 Host |
+| `{Time}` | 当前时间 |
+| `{Country}` | 国家名称 |
+| `{Region}` | 省份/地区 |
+| `{City}` | 城市 |
+| `{Isp}` | 运营商 |
 
 ## 🚦 流量控制
 
@@ -215,11 +309,13 @@ SpeedLimit:
 
 ### 连接限制
 
+连接限制已整合到 `AccessControl` 配置中，详见上方 [统一访问控制](#-统一访问控制) 部分。
+
 ```yaml
-SpeedLimit:
+AccessControl:
   ConnectionLimit:
     Enabled: true
-    MaxConnectionsPerIp: 100        # 每IP最大连接数
+    MaxConnectionsPerIp: 100        # 每 IP 最大连接数
     MaxConnectionsPerDestination: 1000  # 每后端最大连接数
     MaxTotalConnections: 10000      # 全局最大连接数
     PathLimits:
