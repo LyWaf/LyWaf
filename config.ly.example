@@ -1,0 +1,156 @@
+# ============================================================
+# LyWaf 配置文件示例 (config.ly)
+# 类似 Caddy 的简洁配置格式
+# 格式参考: https://caddyserver.com/docs/caddyfile/concepts
+# ============================================================
+
+# 变量定义
+var domain = "example.com"
+var backend = "127.0.0.1:8080"
+var env = "production"
+
+# ============================================================
+# 全局选项（可选，必须在最前面）
+# ============================================================
+{
+    # ACME 邮箱（用于 Let's Encrypt）
+    email admin@example.com
+    
+    # 使用 staging 环境测试
+    if $env != "production" {
+        acme_staging true
+    }
+    
+    # 调试模式
+    # debug
+}
+
+# ============================================================
+# 代码片段（可重用配置）
+# ============================================================
+(common_headers) {
+    HeaderUps {
+        X-Real-IP = "{ClientIp}"
+        X-Forwarded-For = "{ClientIp}"
+    }
+}
+
+(rate_limit) {
+    SpeedLimit {
+        Limits {
+            Fixed {
+                PermitLimit = 100
+                Window = "00:01:00"
+            }
+        }
+    }
+}
+
+# ============================================================
+# 站点配置（以域名或地址开头）
+# ============================================================
+
+# 主站点 - 支持多个域名
+$domain www.${domain} {
+    # 反向代理到后端
+    reverse_proxy http://${backend}
+    
+    # 负载均衡策略
+    lb_policy RoundRobin
+    
+    # 路径匹配
+    path /{catch_all}
+    
+    # TLS 证书配置
+    tls {
+        cert = "/path/to/cert.pem"
+        key = "/path/to/key.pem"
+    }
+}
+
+# API 站点
+api.${domain} {
+    # 反向代理 - 多个后端
+    reverse_proxy http://127.0.0.1:3001 http://127.0.0.1:3002 http://127.0.0.1:3003
+    
+    # 负载均衡策略
+    lb_policy WeightedRoundRobin
+}
+
+# 管理后台 - HTTPS
+https://admin.${domain} {
+    reverse_proxy http://127.0.0.1:9000
+}
+
+# 端口监听（无域名限制）
+:8080 {
+    reverse_proxy http://127.0.0.1:8081
+}
+
+# HTTPS 端口监听
+https://:443 {
+    # 这将监听所有域名的 443 端口
+    reverse_proxy http://127.0.0.1:8080
+}
+
+# 本地开发
+localhost:3000 {
+    reverse_proxy http://127.0.0.1:3000
+}
+
+# ============================================================
+# 其他全局配置
+# ============================================================
+
+# 访问控制
+AccessControl {
+    RejectStatusCode = 403
+    RejectMessage = "Access Denied: {ClientIp}"
+    
+    Whitelist = ["127.0.0.1", "10.0.0.0/8"]
+    
+    IpControl {
+        Enabled = true
+        Blacklist = ["1.2.3.4"]
+    }
+}
+
+# 响应压缩
+Compress {
+    Enabled = true
+    EnableBrotli = true
+    EnableGzip = true
+    Level = "Fastest"
+    MinSize = 10240
+}
+
+# ACME 配置（Let's Encrypt）
+Acme {
+    Enabled = true
+    AcceptTermsOfService = true
+    Domains = [$domain, "www.${domain}", "api.${domain}"]
+    
+    if $env == "production" {
+        UseStaging = false
+    } else {
+        UseStaging = true
+    }
+}
+
+# ============================================================
+# 条件配置
+# ============================================================
+if $env == "development" {
+    Logging {
+        Level = "Debug"
+    }
+}
+
+if $env == "production" {
+    Logging {
+        Level = "Info"
+    }
+}
+
+# 导入其他配置文件
+# import "sites/*.ly"

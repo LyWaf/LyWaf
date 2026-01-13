@@ -18,6 +18,7 @@ LyWaf 是一款基于 .NET 9 和 YARP（Yet Another Reverse Proxy）构建的高
 - 📁 **静态文件服务** - 内置文件服务器功能
 - 📊 **统计分析** - 访问统计、CC 攻击检测
 - 🔐 **HTTPS 支持** - SNI 多证书、自动 HTTPS 重定向
+- 📝 **简洁配置** - 类 Caddy 的 .ly 配置格式，支持变量和条件逻辑
 
 ## 📦 安装
 
@@ -372,6 +373,173 @@ Compress:
 | `Optimal` | 平衡速度和压缩率 |
 | `SmallestSize` | 最高压缩率，速度较慢 |
 | `NoCompression` | 不压缩（仅用于测试） |
+
+## 📝 LyWaf 配置格式 (.ly)
+
+LyWaf 支持类似 [Caddy](https://caddyserver.com/docs/caddyfile/concepts) 的简洁配置格式，文件扩展名为 `.ly`。
+
+### 使用方法
+
+```bash
+# 使用 .ly 配置文件启动
+LyWaf run -c config.ly
+
+# 或者使用传统 YAML 格式
+LyWaf run -c appsettings.yaml
+```
+
+### 核心概念
+
+#### 站点块
+
+以域名或地址开头，后跟花括号包含站点配置：
+
+```ly
+# 单个域名
+example.com {
+    reverse_proxy http://127.0.0.1:8080
+}
+
+# 多个域名
+example.com www.example.com {
+    reverse_proxy http://127.0.0.1:8080
+}
+
+# 端口监听（无域名限制）
+:8080 {
+    reverse_proxy http://127.0.0.1:9000
+}
+
+# HTTPS 站点
+https://api.example.com {
+    reverse_proxy http://127.0.0.1:3000
+}
+```
+
+#### 地址格式
+
+| 地址 | 说明 |
+|------|------|
+| `example.com` | HTTPS 站点 |
+| `http://example.com` | 强制 HTTP |
+| `https://example.com` | HTTPS 站点 |
+| `:8080` | 监听端口（所有域名） |
+| `localhost` | 本地开发 |
+| `*.example.com` | 通配符域名 |
+
+#### 全局选项块
+
+可选的全局配置，必须放在文件最前面：
+
+```ly
+{
+    email admin@example.com
+    acme_staging true
+    debug
+}
+```
+
+#### 代码片段
+
+可重用的配置块：
+
+```ly
+# 定义片段
+(common_config) {
+    lb_policy RoundRobin
+}
+
+# 使用片段
+example.com {
+    import common_config
+    reverse_proxy http://127.0.0.1:8080
+}
+```
+
+### 站点指令
+
+| 指令 | 说明 | 示例 |
+|------|------|------|
+| `reverse_proxy` | 反向代理 | `reverse_proxy http://127.0.0.1:8080` |
+| `lb_policy` | 负载均衡策略 | `lb_policy WeightedRoundRobin` |
+| `path` | 路径匹配 | `path /api/*` |
+| `tls` | TLS 证书配置 | `tls { cert = "..." key = "..." }` |
+
+### 变量支持
+
+```ly
+# 变量定义
+var domain = "example.com"
+var backend = "127.0.0.1:8080"
+
+# 使用变量
+$domain www.${domain} {
+    reverse_proxy http://${backend}
+}
+```
+
+### 条件语句
+
+```ly
+var env = "production"
+
+if $env == "production" {
+    Logging {
+        Level = "Info"
+    }
+} else {
+    Logging {
+        Level = "Debug"
+    }
+}
+```
+
+### 支持的特性
+
+| 特性 | 语法 | 说明 |
+|------|------|------|
+| 站点块 | `domain { }` | 以域名或地址开头的配置块 |
+| 变量定义 | `var name = value` | 定义配置变量 |
+| 变量引用 | `$name` 或 `${name}` | 引用变量值 |
+| 环境变量 | `$ENV_VAR` | 自动读取环境变量 |
+| 条件语句 | `if condition { }` | 条件配置 |
+| 代码片段 | `(name) { }` | 可重用配置块 |
+| 导入文件 | `import "file.ly"` | 导入其他配置文件 |
+| 块配置 | `Name { key = value }` | 嵌套配置块 |
+| 数组 | `[item1, item2]` | 列表值 |
+| 注释 | `# comment` | 单行注释 |
+
+### 完整示例
+
+```ly
+# 变量
+var domain = "example.com"
+
+# 全局选项
+{
+    email admin@example.com
+}
+
+# 主站点
+$domain www.${domain} {
+    reverse_proxy http://127.0.0.1:8080
+    lb_policy RoundRobin
+}
+
+# API 站点
+api.${domain} {
+    reverse_proxy http://127.0.0.1:3001 http://127.0.0.1:3002
+    lb_policy WeightedRoundRobin
+}
+
+# 其他配置
+Compress {
+    Enabled = true
+    MinSize = 10240
+}
+```
+
+参考 `config.ly.example` 文件查看更多配置示例。
 
 ## 🚦 流量控制
 

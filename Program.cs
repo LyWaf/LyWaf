@@ -29,6 +29,7 @@ using LyWaf.Services.WafInfo;
 using LyWaf.Services.AccessControl;
 using LyWaf.Services.Compress;
 using LyWaf.Services.Acme;
+using LyWaf.Config;
 
 using System.CommandLine;
 using System.CommandLine.Parsing;
@@ -281,7 +282,21 @@ public class Program
     public static void DoStartRun(string[] args, RunCommandOptions run)
     {
         var builder = WebApplication.CreateBuilder(args);
-        builder.Configuration.AddYamlFile(run.Config, optional: false, reloadOnChange: true);
+        
+        // 根据文件扩展名选择加载方式
+        var configPath = run.Config;
+        if (configPath.EndsWith(".ly", StringComparison.OrdinalIgnoreCase))
+        {
+            // 加载 .ly 配置文件
+            builder.Configuration.AddLyConfig(configPath, optional: false);
+            _logger.Info("使用 LyWaf 配置格式: {Path}", configPath);
+        }
+        else
+        {
+            // 加载 YAML 配置文件
+            builder.Configuration.AddYamlFile(configPath, optional: false, reloadOnChange: true);
+        }
+        
         DoStartWaf(builder, run, null, null);
     }
 
