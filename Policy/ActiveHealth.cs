@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using LyWaf.Utils;
 using Newtonsoft.Json.Linq;
+using NLog;
 using Yarp.ReverseProxy.Configuration;
 using Yarp.ReverseProxy.Health;
 using Yarp.ReverseProxy.Model;
@@ -57,6 +58,7 @@ namespace LyWaf.Policy
     {
         public string Name => "LyxActiveHealth";
 
+        private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
         private readonly Dictionary<string, int> FailTimes = [];
         private readonly Dictionary<string, int> PassTimes = [];
         private readonly Dictionary<string, HashSet<int>> CacheStatusCodes = [];
@@ -125,7 +127,17 @@ namespace LyWaf.Policy
                         method = "Contains";
                     }
 
-                    var content = await result.Response!.Content.ReadAsStringAsync();
+                    string content;
+                    try
+                    {
+                        content = await result.Response!.Content.ReadAsStringAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        // 读取响应内容失败（连接中断、超时等）
+                        _logger.Warn(ex, "健康检查读取响应内容失败");
+                        return false;
+                    }
                     switch (method)
                     {
                         case "Contains":

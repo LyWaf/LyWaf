@@ -12,6 +12,7 @@ LyWaf 是一款基于 .NET 9 和 YARP（Yet Another Reverse Proxy）构建的高
 - 🔒 **IP 访问控制** - 支持黑白名单，CIDR 网段匹配
 - 🌍 **地理位置限制** - 基于 IP2Region 的国家/地区访问控制
 - 🚦 **流量控制** - 请求限速、连接限制、带宽控制
+- 📦 **响应压缩** - Gzip/Brotli 压缩，按大小和 MIME 类型智能压缩
 - 💚 **健康检查** - 主动健康检查，自动剔除故障节点
 - 📁 **静态文件服务** - 内置文件服务器功能
 - 📊 **统计分析** - 访问统计、CC 攻击检测
@@ -271,6 +272,64 @@ AccessControl:
 | `{Region}` | 省份/地区 |
 | `{City}` | 城市 |
 | `{Isp}` | 运营商 |
+
+## 📦 响应压缩
+
+LyWaf 支持 **Gzip** 和 **Brotli** 响应压缩，根据响应大小和 MIME 类型智能决定是否压缩。
+
+### 配置示例
+
+```yaml
+Compress:
+  # 是否启用响应压缩
+  Enabled: true
+  # 是否启用 Brotli 压缩（优先于 Gzip，压缩率更高）
+  EnableBrotli: true
+  # 是否启用 Gzip 压缩
+  EnableGzip: true
+  # 压缩级别: Fastest, Optimal, NoCompression, SmallestSize
+  Level: Fastest
+  # 最小响应大小（字节），小于此值不压缩（默认 10KB）
+  MinSize: 10240
+  # 是否启用 HTTPS 压缩
+  EnableForHttps: true
+  # 需要压缩的 MIME 类型
+  MimeTypes:
+    - text/html
+    - text/css
+    - text/javascript
+    - application/json
+    - application/javascript
+    - application/xml
+    - image/svg+xml
+```
+
+### 压缩算法
+
+| 算法 | 编码名称 | 说明 |
+|------|---------|------|
+| Brotli | `br` | 压缩率更高，优先使用 |
+| Gzip | `gzip` | 兼容性更好，Brotli 不可用时使用 |
+
+### 压缩条件
+
+响应需同时满足以下条件才会被压缩：
+
+1. `Enabled` 为 `true`
+2. 客户端请求头包含 `Accept-Encoding: gzip`
+3. 响应大小 >= `MinSize`
+4. 响应 `Content-Type` 在 `MimeTypes` 列表中
+5. 响应状态码为 2xx
+6. 响应尚未被压缩（无 `Content-Encoding` 头）
+
+### 压缩级别
+
+| 级别 | 说明 |
+|------|------|
+| `Fastest` | 最快压缩速度，压缩率较低 |
+| `Optimal` | 平衡速度和压缩率 |
+| `SmallestSize` | 最高压缩率，速度较慢 |
+| `NoCompression` | 不压缩（仅用于测试） |
 
 ## 🚦 流量控制
 

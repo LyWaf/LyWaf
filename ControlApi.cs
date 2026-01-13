@@ -194,7 +194,7 @@ public static class ControlApi
             if (isFilterByIp)
             {
                 ccLimitStatsSnapshot = ccLimitStatsSnapshot
-                    .Where(kv => kv.Key.Contains(queryIp))
+                    .Where(kv => kv.Key.Contains(queryIp ?? ""))
                     .ToDictionary(kv => kv.Key, kv => kv.Value);
             }
 

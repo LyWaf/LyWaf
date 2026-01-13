@@ -77,6 +77,50 @@ Protect:
   RegexPostList:
     - (?:aaa\/\W*passwd)
 
+# =============== 响应压缩配置 ===============
+# 对满足条件的响应进行 Gzip/Brotli 压缩
+Compress:
+  # 是否启用响应压缩
+  Enabled: true
+  # 是否启用 Brotli 压缩（优先于 Gzip，压缩率更高）
+  EnableBrotli: true
+  # 是否启用 Gzip 压缩
+  EnableGzip: true
+  # 压缩级别: Fastest, Optimal, NoCompression, SmallestSize
+  Level: Fastest
+  # 最小响应大小（字节），小于此值不压缩
+  # 默认 10240 (10KB)
+  MinSize: 1
+  # 是否启用 HTTPS 压缩（注意：HTTPS 压缩可能存在 BREACH 攻击风险）
+  EnableForHttps: true
+  # 需要压缩的 MIME 类型列表
+  MimeTypes:
+    # 文本类型
+    - text/plain
+    - text/html
+    - text/css
+    - text/xml
+    - text/javascript
+    - text/octet
+    # 应用类型
+    - application/json
+    - application/javascript
+    - application/xml
+    - application/xhtml+xml
+    - application/rss+xml
+    - application/atom+xml
+    # 字体类型
+    - font/woff
+    - font/woff2
+    - application/font-woff
+    - application/font-woff2
+    # 图像类型（SVG）
+    - image/svg+xml
+    # 其他
+    - application/x-javascript
+    - application/x-font-ttf
+    - application/vnd.ms-fontobject
+
 # =============== 访问控制配置 ===============
 # 整合 IP 访问控制、地理位置访问控制和连接限制
 # 白名单 IP 直接放行，不进行 GeoIp 检查
@@ -354,7 +398,7 @@ ReverseProxy:
             # 虚拟节点数: 用于 ConsistentHash, 默认150
             # VirtualNodes: "150"
         destination2:
-          Address: 'https://ttw.caishen.ai/'
+          Address: 'https://mat1.gtimg.com/'
           Metadata:
             Weight: "1"
     cluster2:
@@ -363,4 +407,4 @@ ReverseProxy:
       Destinations:
         destination1:
           # Address: 'http://127.0.0.1:8080/'
-          Address: 'https://ttw.caishen.ai/'
+          Address: 'https://mat1.gtimg.com/'

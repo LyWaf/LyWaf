@@ -27,6 +27,7 @@ using System.Net.Security;
 using LyWaf.Utils;
 using LyWaf.Services.WafInfo;
 using LyWaf.Services.AccessControl;
+using LyWaf.Services.Compress;
 
 using System.CommandLine;
 using System.CommandLine.Parsing;
@@ -940,6 +941,10 @@ public class Program
         builder.Services.Configure<FileProviderOptions>(builder.Configuration.GetSection("FileProvider"));
         builder.Services.Configure<StatisticOptions>(builder.Configuration.GetSection("Statistic"));
         builder.Services.Configure<AccessControlOptions>(builder.Configuration.GetSection("AccessControl"));
+        builder.Services.Configure<CompressOptions>(builder.Configuration.GetSection("Compress"));
+
+        // 注册自定义响应压缩中间件（支持 MinSize）
+        builder.Services.AddSingleton<ResponseCompressMiddleware>();
 
         builder.Services.AddMemoryCache();
         builder.Services.AddSingleton<IFileService, FileService>();
@@ -1034,11 +1039,13 @@ public class Program
         // 注册控制台 API
         app.MapControlApi(wafInfos);
 
-
         // 反向代理仅处理非 ControlListen 端口的请求
         var proxyPorts = wafInfos.Listens.Select(l => $"*:{l.Port}").ToArray();
         app.MapReverseProxy(proxyApp =>
         {
+            // 启用响应压缩（必须放在其他中间件之前）
+            proxyApp.UseMiddleware<ResponseCompressMiddleware>();
+            
             // IP访问控制和连接限制（应放在较前面位置）
             proxyApp.UseMiddleware<AccessControlMiddleware>();
             // 自动 HTTPS 重定向
