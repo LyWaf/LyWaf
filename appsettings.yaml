@@ -77,6 +77,36 @@ Protect:
   RegexPostList:
     - (?:aaa\/\W*passwd)
 
+# =============== ACME/Let's Encrypt 证书配置 ===============
+# 自动申请和续期 Let's Encrypt 免费 HTTPS 证书
+Acme:
+  # 是否启用 ACME 自动证书管理
+  Enabled: false
+  # 联系邮箱（必填，用于 Let's Encrypt 通知）
+  Email: "admin@example.com"
+  # 是否同意 Let's Encrypt 服务条款（必须为 true 才能使用）
+  AcceptTermsOfService: false
+  # 需要申请证书的域名列表
+  Domains:
+    # - example.com
+    # - www.example.com
+  # 证书存储目录
+  CertificatePath: "certs"
+  # ACME 账户密钥文件路径
+  AccountKeyPath: "certs/account.pem"
+  # 证书有效期剩余天数小于此值时自动续期
+  RenewBeforeDays: 30
+  # 检查证书续期的间隔（小时）
+  CheckIntervalHours: 12
+  # 是否使用测试环境（staging）
+  # 测试时建议开启，避免触发 Let's Encrypt 速率限制
+  # 测试证书不被浏览器信任，仅用于调试
+  UseStaging: false
+  # ACME 服务器地址（可选，默认使用 Let's Encrypt）
+  # 生产环境: https://acme-v02.api.letsencrypt.org/directory
+  # 测试环境: https://acme-staging-v02.api.letsencrypt.org/directory
+  # DirectoryUrl: "https://acme-v02.api.letsencrypt.org/directory"
+
 # =============== 响应压缩配置 ===============
 # 对满足条件的响应进行 Gzip/Brotli 压缩
 Compress:

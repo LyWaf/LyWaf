@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.RateLimiting;
+using LyWaf.Services.Acme;
 using LyWaf.Utils;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
@@ -22,13 +23,16 @@ public class WafInfoService : IWafInfoService
     private WafInfoOptions _options;
     private readonly IMemoryCache _cache;
     private readonly ILogger<WafInfoService> _logger;
+    private readonly IAcmeService? _acmeService;
 
     private readonly Dictionary<string, X509Certificate2> certs = [];
     public WafInfoService(
         IOptionsMonitor<WafInfoOptions> options, IMemoryCache cache,
-        ILogger<WafInfoService> logger)
+        ILogger<WafInfoService> logger,
+        IAcmeService? acmeService = null)
     {
         _options = options.CurrentValue;
+        _acmeService = acmeService;
         // 可以订阅变更，但需注意生命周期和内存泄漏
         options.OnChange(newConfig =>
         {
@@ -57,6 +61,17 @@ public class WafInfoService : IWafInfoService
 
     public X509Certificate2 GetCertByName(string name)
     {
+        // 首先尝试从 ACME 服务获取证书
+        if (_acmeService != null)
+        {
+            var acmeCert = _acmeService.GetCertificate(name);
+            if (acmeCert != null)
+            {
+                return acmeCert;
+            }
+        }
+
+        // 然后从配置的证书中查找
         switch (certs.Count)
         {
             case 0:

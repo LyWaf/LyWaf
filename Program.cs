@@ -28,6 +28,7 @@ using LyWaf.Utils;
 using LyWaf.Services.WafInfo;
 using LyWaf.Services.AccessControl;
 using LyWaf.Services.Compress;
+using LyWaf.Services.Acme;
 
 using System.CommandLine;
 using System.CommandLine.Parsing;
@@ -942,6 +943,7 @@ public class Program
         builder.Services.Configure<StatisticOptions>(builder.Configuration.GetSection("Statistic"));
         builder.Services.Configure<AccessControlOptions>(builder.Configuration.GetSection("AccessControl"));
         builder.Services.Configure<CompressOptions>(builder.Configuration.GetSection("Compress"));
+        builder.Services.Configure<AcmeOptions>(builder.Configuration.GetSection("Acme"));
 
         // 注册自定义响应压缩中间件（支持 MinSize）
         builder.Services.AddSingleton<ResponseCompressMiddleware>();
@@ -953,6 +955,8 @@ public class Program
         builder.Services.AddSingleton<IStatisticService, StatisticService>();
         builder.Services.AddSingleton<IAccessControlService, AccessControlService>();
         builder.Services.AddSingleton<IWafInfoService, WafInfoService>();
+        builder.Services.AddSingleton<IAcmeService, AcmeService>();
+        builder.Services.AddHostedService(sp => (AcmeService)sp.GetRequiredService<IAcmeService>());
         builder.Services.AddSingleton<IProbingRequestFactory, LyxProbingRequestFactory>();
         builder.Services.AddSingleton<IActiveHealthCheckPolicy, LyxActiveHealthPolicy>();
 
@@ -1038,6 +1042,9 @@ public class Program
 
         // 注册控制台 API
         app.MapControlApi(wafInfos);
+
+        // ACME HTTP-01 挑战中间件（必须在 HTTPS 重定向之前）
+        app.UseAcmeChallenge();
 
         // 反向代理仅处理非 ControlListen 端口的请求
         var proxyPorts = wafInfos.Listens.Select(l => $"*:{l.Port}").ToArray();

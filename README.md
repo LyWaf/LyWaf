@@ -13,6 +13,7 @@ LyWaf 是一款基于 .NET 9 和 YARP（Yet Another Reverse Proxy）构建的高
 - 🌍 **地理位置限制** - 基于 IP2Region 的国家/地区访问控制
 - 🚦 **流量控制** - 请求限速、连接限制、带宽控制
 - 📦 **响应压缩** - Gzip/Brotli 压缩，按大小和 MIME 类型智能压缩
+- 🔑 **自动证书** - Let's Encrypt ACME 协议，自动申请和续期 HTTPS 证书
 - 💚 **健康检查** - 主动健康检查，自动剔除故障节点
 - 📁 **静态文件服务** - 内置文件服务器功能
 - 📊 **统计分析** - 访问统计、CC 攻击检测
@@ -272,6 +273,47 @@ AccessControl:
 | `{Region}` | 省份/地区 |
 | `{City}` | 城市 |
 | `{Isp}` | 运营商 |
+
+## 🔑 自动证书管理 (ACME/Let's Encrypt)
+
+LyWaf 内置 ACME 客户端，支持自动申请和续期 Let's Encrypt 免费 HTTPS 证书。
+
+### 配置示例
+
+```yaml
+Acme:
+  # 是否启用 ACME 自动证书管理
+  Enabled: true
+  # 联系邮箱（必填）
+  Email: "admin@example.com"
+  # 是否同意 Let's Encrypt 服务条款（必须为 true）
+  AcceptTermsOfService: true
+  # 需要申请证书的域名列表
+  Domains:
+    - example.com
+    - www.example.com
+  # 证书存储目录
+  CertificatePath: "certs"
+  # 证书有效期剩余天数小于此值时自动续期
+  RenewBeforeDays: 30
+  # 是否使用测试环境（开发时建议开启）
+  UseStaging: false
+```
+
+### 使用步骤
+
+1. **配置域名**：将域名的 DNS A 记录指向服务器 IP
+2. **开启 HTTP 端口**：确保 80 端口可访问（用于 HTTP-01 验证）
+3. **配置 Acme**：设置 `Enabled: true`，填写邮箱和域名
+4. **同意服务条款**：设置 `AcceptTermsOfService: true`
+5. **启动服务**：LyWaf 会自动申请证书
+
+### 注意事项
+
+- **HTTP-01 验证**：Let's Encrypt 需要通过 HTTP 80 端口验证域名所有权
+- **速率限制**：Let's Encrypt 有[速率限制](https://letsencrypt.org/docs/rate-limits/)，测试时请使用 `UseStaging: true`
+- **证书续期**：证书有效期 90 天，会在到期前 30 天自动续期
+- **通配符证书**：目前仅支持单域名证书，不支持通配符
 
 ## 📦 响应压缩
 
