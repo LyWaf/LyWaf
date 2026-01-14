@@ -5,3 +5,4 @@ bin
 .well-known
 *.pid
 datas/*
+wwwroot/*

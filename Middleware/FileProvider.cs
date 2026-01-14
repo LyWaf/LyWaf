@@ -359,7 +359,7 @@ public class FileProviderMiddleware(RequestDelegate next)
             _ = RangeHeaderValue.TryParse(value.ToString(), out rangeHeader);
         }
 
-        var result = await fileService.GetFileAsync(host, prefix, real.Path, rangeHeader);
+        var result = await fileService.GetFileAsync(host, prefix, path, real.Path, rangeHeader);
 
         SetResponseHeaders(context, result, real.PreCompressed);
         context.Response.StatusCode = result.StatusCode;

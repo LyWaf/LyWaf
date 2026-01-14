@@ -136,6 +136,9 @@ public class LyConfigProvider : ConfigurationProvider
             var content = File.ReadAllText(_source.FilePath);
             var config = LyConfigParser.Parse(content, _source.Variables);
             
+            var yaml = LyToAppSettingsConverter.Convert(content, _source.Variables);
+            _logger.Info(yaml);
+            // Console.WriteLine(yaml);
             // 转换为 appsettings 格式（处理 listen -> WafInfos 等）
             var appSettings = LyToAppSettingsConverter.TransformToAppSettings(config);
             

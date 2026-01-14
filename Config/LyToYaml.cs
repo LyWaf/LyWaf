@@ -154,6 +154,68 @@ public static class LyToYamlConverter
 }
 
 /// <summary>
+/// 配置转换上下文，用于在处理过程中共享状态
+/// </summary>
+public class LyConfigContext
+{
+    /// <summary>
+    /// 全局 Clusters 配置
+    /// </summary>
+    public Dictionary<string, object> Clusters { get; } = new();
+    
+    /// <summary>
+    /// Cluster 缓存：key 是 upstream 地址的组合，value 是 clusterId
+    /// 用于复用相同 upstream 的 cluster
+    /// </summary>
+    public Dictionary<string, string> ClusterCache { get; } = new();
+    
+    /// <summary>
+    /// 文件服务配置 (FileProvider.Everys)
+    /// </summary>
+    public Dictionary<string, object> FileProviderEverys { get; } = new();
+    
+    /// <summary>
+    /// 监听配置
+    /// </summary>
+    public List<object> Listens { get; } = new();
+    
+    /// <summary>
+    /// 证书配置
+    /// </summary>
+    public List<object> Certs { get; } = new();
+    
+    /// <summary>
+    /// 路由配置
+    /// </summary>
+    public Dictionary<string, object> Routes { get; } = new();
+    
+    /// <summary>
+    /// 路由索引计数器
+    /// </summary>
+    public int RouteIndex { get; set; } = 1;
+    
+    /// <summary>
+    /// Cluster 索引计数器
+    /// </summary>
+    public int ClusterIndex { get; set; } = 1;
+    
+    /// <summary>
+    /// 是否有文件服务路由（需要确保 cluster1 存在）
+    /// </summary>
+    public bool HasFileServerRoute { get; set; } = false;
+    
+    /// <summary>
+    /// 获取下一个路由 ID
+    /// </summary>
+    public string NextRouteId() => $"route{RouteIndex++}";
+    
+    /// <summary>
+    /// 获取下一个 Cluster ID
+    /// </summary>
+    public string NextClusterId() => $"cluster{ClusterIndex++}";
+}
+
+/// <summary>
 /// LyConfig 到 appsettings 的映射转换器
 /// 将 Caddy 风格的配置转换为 LyWaf 的 appsettings.yaml 格式
 /// 
@@ -181,12 +243,7 @@ public static class LyToAppSettingsConverter
     {
         var result = new Dictionary<string, object>();
         var wafInfos = new Dictionary<string, object>();
-        var listens = new List<object>();
-        var certs = new List<object>();
-        var routes = new Dictionary<string, object>();
-        var clusters = new Dictionary<string, object>();
-        var routeIndex = 1;
-        var clusterIndex = 1;
+        var ctx = new LyConfigContext();
 
         foreach (var kv in config)
         {
@@ -197,17 +254,7 @@ public static class LyToAppSettingsConverter
             if (IsSiteAddress(key))
             {
                 // 站点块 - 解析地址和内容
-                var (routeDict, clusterList, listenList, certList) = ProcessSiteBlock(key, value, ref routeIndex, ref clusterIndex);
-                foreach (var r in routeDict)
-                {
-                    routes[r.Key] = r.Value;
-                }
-                foreach (var c in clusterList)
-                {
-                    clusters[c.Key] = c.Value;
-                }
-                listens.AddRange(listenList);
-                certs.AddRange(certList);
+                ProcessSiteBlock(key, value, ctx);
             }
             else if (key.StartsWith("(") && key.EndsWith(")"))
             {
@@ -217,37 +264,62 @@ public static class LyToAppSettingsConverter
             else
             {
                 // 其他顶级配置（全局选项或直接配置）
-                ProcessGlobalOption(key, value, result, wafInfos, listens, certs);
+                ProcessGlobalOption(key, value, result, wafInfos, ctx);
             }
         }
 
         // 构建 WafInfos
-        if (listens.Count > 0)
+        if (ctx.Listens.Count > 0)
         {
-            wafInfos["Listens"] = listens;
+            wafInfos["Listens"] = ctx.Listens;
         }
-        if (certs.Count > 0)
+        if (ctx.Certs.Count > 0)
         {
-            wafInfos["Certs"] = certs;
+            wafInfos["Certs"] = ctx.Certs;
         }
         if (wafInfos.Count > 0)
         {
             result["WafInfos"] = wafInfos;
         }
 
+        // 如果有文件服务路由，确保 cluster1 存在
+        if (ctx.HasFileServerRoute && !ctx.Clusters.ContainsKey("cluster1"))
+        {
+            // 创建一个假的 cluster1，YARP 底层需要有效的 ClusterId
+            ctx.Clusters["cluster1"] = new Dictionary<string, object>
+            {
+                ["Destinations"] = new Dictionary<string, object>
+                {
+                    ["dest1"] = new Dictionary<string, object>
+                    {
+                        ["Address"] = "http://example.com"
+                    }
+                }
+            };
+        }
+
         // 构建 ReverseProxy
-        if (routes.Count > 0 || clusters.Count > 0)
+        if (ctx.Routes.Count > 0 || ctx.Clusters.Count > 0)
         {
             var reverseProxy = new Dictionary<string, object>();
-            if (routes.Count > 0)
+            if (ctx.Routes.Count > 0)
             {
-                reverseProxy["Routes"] = routes;
+                reverseProxy["Routes"] = ctx.Routes;
             }
-            if (clusters.Count > 0)
+            if (ctx.Clusters.Count > 0)
             {
-                reverseProxy["Clusters"] = clusters;
+                reverseProxy["Clusters"] = ctx.Clusters;
             }
             result["ReverseProxy"] = reverseProxy;
+        }
+
+        // 构建 FileProvider
+        if (ctx.FileProviderEverys.Count > 0)
+        {
+            result["FileProvider"] = new Dictionary<string, object>
+            {
+                ["Everys"] = ctx.FileProviderEverys
+            };
         }
 
         return result;
@@ -284,15 +356,14 @@ public static class LyToAppSettingsConverter
 
     /// <summary>
     /// 处理站点块
+    /// 支持多路由配置：
+    ///   - handle /path { reverse_proxy ... }
+    ///   - route /path { reverse_proxy ... }
+    ///   - reverse_proxy（默认路由）
+    ///   - file_server（文件服务）
     /// </summary>
-    private static (Dictionary<string, object> routes, Dictionary<string, object> clusters, List<object> listens, List<object> certs)
-        ProcessSiteBlock(string address, object content, ref int routeIndex, ref int clusterIndex)
+    private static void ProcessSiteBlock(string address, object content, LyConfigContext ctx)
     {
-        var routes = new Dictionary<string, object>();
-        var clusters = new Dictionary<string, object>();
-        var listens = new List<object>();
-        var certs = new List<object>();
-
         // 解析地址 - 可能包含多个域名/地址
         var addresses = address.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var hosts = new List<string>();
@@ -319,7 +390,7 @@ public static class LyToAppSettingsConverter
         // 添加监听端口（如果是端口格式的站点）
         if (listenPort > 0 && hosts.Count == 0)
         {
-            listens.Add(new Dictionary<string, object>
+            ctx.Listens.Add(new Dictionary<string, object>
             {
                 ["Host"] = "0.0.0.0",
                 ["Port"] = listenPort,
@@ -330,113 +401,488 @@ public static class LyToAppSettingsConverter
         // 处理站点内容
         if (content is Dictionary<string, object> siteContent)
         {
-            var routeId = $"route{routeIndex++}";
-            var clusterId = $"cluster{clusterIndex++}";
-
-            // 路由配置 - 以 routeId 为 key
-            var routeConfig = new Dictionary<string, object>
-            {
-                ["ClusterId"] = clusterId,
-                
-            };
-
-            var match = new Dictionary<string, object>();
-
-            // 设置主机匹配
-            if (hosts.Count > 0)
-            {
-                match["Hosts"] = hosts;
-            }
-
-            // 处理站点指令
-            var destinations = new Dictionary<string, object>();
-            var clusterConfig = new Dictionary<string, object>();
+            // 收集 handle/route 块和默认配置
+            var handleBlocks = new List<(string path, Dictionary<string, object> config)>();
+            var defaultUpstreams = new List<string>();
+            var defaultClusterConfig = new Dictionary<string, object>();
+            var hasFileServer = false;
+            var defaultFileServerConfig = new Dictionary<string, object>();
 
             foreach (var directive in siteContent)
             {
-                switch (directive.Key.ToLower())
+                var key = directive.Key.ToLower();
+                
+                // 处理 handle 或 route 块（带路径的子路由）
+                if ((key == "handle" || key == "route") && directive.Value is Dictionary<string, object> handleConfig)
                 {
-                    case "reverse_proxy":
-                        // 反向代理指令
-                        var upstreams = ParseUpstreams(directive.Value);
-                        var destIndex = 1;
-                        foreach (var upstream in upstreams)
-                        {
-                            destinations[$"dest{destIndex++}"] = new Dictionary<string, object>
-                            {
-                                ["Address"] = upstream
-                            };
-                        }
-                        break;
+                    // handle 块内的配置
+                    ProcessHandleBlock(handleConfig, handleBlocks);
+                }
+                // 检查是否是路径格式的 key（如 /api/*）
+                else if (key.StartsWith('/') && directive.Value is Dictionary<string, object> pathConfig)
+                {
+                    var path = directive.Key;
+                    handleBlocks.Add((path, pathConfig));
+                }
+                else
+                {
+                    switch (key)
+                    {
+                        case "reverse_proxy":
+                            defaultUpstreams.AddRange(ParseUpstreams(directive.Value));
+                            break;
 
-                    case "root":
-                        // 根目录（文件服务）
-                        // 暂不支持
-                        break;
-
-                    case "tls":
-                        // TLS 配置
-                        if (directive.Value is Dictionary<string, object> tlsConfig)
-                        {
-                            if (tlsConfig.TryGetValue("cert", out var cert) && 
-                                tlsConfig.TryGetValue("key", out var key))
+                        case "file_server":
+                            hasFileServer = true;
+                            if (directive.Value is Dictionary<string, object> fsConfig)
                             {
-                                var certInfo = new Dictionary<string, object>
-                                {
-                                    ["PemFile"] = cert.ToString()!,
-                                    ["KeyFile"] = key.ToString()!
-                                };
-                                if (hosts.Count > 0)
-                                {
-                                    certInfo["Host"] = hosts[0];
-                                }
-                                certs.Add(certInfo);
+                                defaultFileServerConfig = fsConfig;
                             }
-                        }
-                        break;
+                            break;
 
-                    case "lb_policy":
-                    case "load_balancing_policy":
-                        clusterConfig["LoadBalancingPolicy"] = directive.Value.ToString()!;
-                        break;
+                        case "lb_policy":
+                        case "load_balancing_policy":
+                            defaultClusterConfig["LoadBalancingPolicy"] = directive.Value.ToString()!;
+                            break;
 
-                    case "health_check":
-                        if (directive.Value is Dictionary<string, object> hcConfig)
-                        {
-                            clusterConfig["HealthCheck"] = hcConfig;
-                        }
-                        break;
-
-                    case "path":
-                    case "path_prefix":
-                        match["Path"] = directive.Value.ToString()!;
-                        break;
-
-                    default:
-                        // 其他指令作为元数据或忽略
-                        break;
+                        case "health_check":
+                            if (directive.Value is Dictionary<string, object> hcConfig)
+                            {
+                                defaultClusterConfig["HealthCheck"] = hcConfig;
+                            }
+                            break;
+                    }
                 }
             }
 
-            if (match.Count > 0)
+            // 处理 handle 块生成的路由
+            foreach (var (path, config) in handleBlocks)
             {
-                routeConfig["Match"] = match;
-            } else {
-                routeConfig["Match"] = new Dictionary<string, string> {
-                    ["Path"] = "/{**catch-all}"
-                };
+                var upstreams = new List<string>();
+                var clusterConfig = new Dictionary<string, object>(defaultClusterConfig);
+                var blockHasFileServer = false;
+                var blockFileServerConfig = new Dictionary<string, object>();
+
+                // 解析 handle 块内的配置
+                foreach (var kv in config)
+                {
+                    switch (kv.Key.ToLower())
+                    {
+                        case "reverse_proxy":
+                            upstreams.AddRange(ParseUpstreams(kv.Value));
+                            break;
+                        case "file_server":
+                            blockHasFileServer = true;
+                            if (kv.Value is Dictionary<string, object> fsConfig)
+                            {
+                                blockFileServerConfig = fsConfig;
+                            }
+                            break;
+                        case "lb_policy":
+                        case "load_balancing_policy":
+                            clusterConfig["LoadBalancingPolicy"] = kv.Value.ToString()!;
+                            break;
+                    }
+                }
+
+                if (upstreams.Count > 0)
+                {
+                    // 获取或创建 cluster
+                    var clusterId = GetOrCreateCluster(upstreams, clusterConfig, ctx);
+
+                    // 创建路由
+                    var routeId = ctx.NextRouteId();
+                    var match = new Dictionary<string, object>
+                    {
+                        ["Path"] = NormalizePath(path)
+                    };
+                    if (hosts.Count > 0)
+                    {
+                        match["Hosts"] = hosts;
+                    }
+
+                    var routeConfig = new Dictionary<string, object>
+                    {
+                        ["ClusterId"] = clusterId,
+                        ["Match"] = match
+                    };
+
+                    ctx.Routes[routeId] = routeConfig;
+                }
+                else if (blockHasFileServer)
+                {
+                    // 文件服务路由
+                    ctx.HasFileServerRoute = true;
+                    var routeId = ctx.NextRouteId();
+                    var fileEveryConfig = BuildFileEveryConfig(blockFileServerConfig);
+                    
+                    // 将路径转换为 FileProviderEverys 的键（简单路径用前缀，复杂路径用正则）
+                    var fileEveryKeyPath = PathToFileEveryKey(path);
+                    var fileEveryKey = hosts.Count > 0 
+                        ? $"{hosts[0]}#{fileEveryKeyPath}"
+                        : fileEveryKeyPath;
+                    ctx.FileProviderEverys[fileEveryKey] = fileEveryConfig;
+
+                    // 创建文件服务路由，将 * 替换为 {**file-all}
+                    var matchPath = NormalizeFileServerPath(path);
+                    var match = new Dictionary<string, object>
+                    {
+                        ["Path"] = matchPath
+                    };
+                    if (hosts.Count > 0)
+                    {
+                        match["Hosts"] = hosts;
+                    }
+
+                    // 使用 cluster1，如果不存在会在后面创建假的
+                    var routeConfig = new Dictionary<string, object>
+                    {
+                        ["ClusterId"] = "cluster1",
+                        ["Match"] = match
+                    };
+
+                    ctx.Routes[routeId] = routeConfig;
+                }
             }
 
-            if (destinations.Count > 0)
+            // 检测冲突：同一域名下同时配置了默认的 file_server 和 reverse_proxy
+            if (defaultUpstreams.Count > 0 && hasFileServer)
             {
-                // 以 routeId 为 key 添加路由
-                routes[routeId] = routeConfig;
-                clusterConfig["Destinations"] = destinations;
-                clusters[clusterId] = clusterConfig;
+                var hostInfo = hosts.Count > 0 ? $"域名 {string.Join(", ", hosts)}" : "默认站点";
+                throw new LyConfigException($"配置错误：{hostInfo} 同时配置了根路径的 file_server 和 reverse_proxy，请将其中一个配置到具体路径下（如 /api/* 或 /static/*）");
+            }
+
+            // 处理默认路由（没有指定路径的 reverse_proxy）
+            if (defaultUpstreams.Count > 0)
+            {
+                // 获取或创建 cluster
+                var clusterId = GetOrCreateCluster(defaultUpstreams, defaultClusterConfig, ctx);
+
+                // 创建路由
+                var routeId = ctx.NextRouteId();
+                var match = new Dictionary<string, object>
+                {
+                    ["Path"] = "/{**catch-all}"
+                };
+                if (hosts.Count > 0)
+                {
+                    match["Hosts"] = hosts;
+                }
+
+                var routeConfig = new Dictionary<string, object>
+                {
+                    ["ClusterId"] = clusterId,
+                    ["Match"] = match
+                };
+
+                ctx.Routes[routeId] = routeConfig;
+            }
+            else if (hasFileServer)
+            {
+                // 默认文件服务
+                ctx.HasFileServerRoute = true;
+                var routeId = ctx.NextRouteId();
+                var fileEveryConfig = BuildFileEveryConfig(defaultFileServerConfig);
+                // 默认路由使用 / 前缀匹配所有路径
+                var fileEveryKey = hosts.Count > 0 ? $"{hosts[0]}#/" : "/";
+                ctx.FileProviderEverys[fileEveryKey] = fileEveryConfig;
+
+                // 创建文件服务路由
+                var match = new Dictionary<string, object>
+                {
+                    ["Path"] = "/{**file-all}"
+                };
+                if (hosts.Count > 0)
+                {
+                    match["Hosts"] = hosts;
+                }
+
+                // 使用 cluster1，如果不存在会在后面创建假的
+                var routeConfig = new Dictionary<string, object>
+                {
+                    ["ClusterId"] = "cluster1",
+                    ["Match"] = match
+                };
+
+                ctx.Routes[routeId] = routeConfig;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 构建 FileEveryConfig
+    /// </summary>
+    private static Dictionary<string, object> BuildFileEveryConfig(Dictionary<string, object> config)
+    {
+        var result = new Dictionary<string, object>();
+
+        // 默认使用当前目录
+        var basePath = Environment.CurrentDirectory;
+
+        foreach (var kv in config)
+        {
+            var key = kv.Key.ToLower();
+            switch (key)
+            {
+                case "root":
+                case "basepath":
+                case "base_path":
+                    basePath = kv.Value?.ToString() ?? basePath;
+                    break;
+                case "browse":
+                    result["Browse"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "default":
+                case "index":
+                    if (kv.Value is List<object> defaultList)
+                    {
+                        result["Default"] = defaultList.Select(x => x?.ToString() ?? "").ToList();
+                    }
+                    else if (kv.Value is string defaultStr)
+                    {
+                        result["Default"] = defaultStr.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+                    }
+                    break;
+                case "try_files":
+                case "tryfiles":
+                    if (kv.Value is List<object> tryList)
+                    {
+                        result["TryFiles"] = tryList.Select(x => x?.ToString() ?? "").ToArray();
+                    }
+                    else if (kv.Value is string tryStr)
+                    {
+                        result["TryFiles"] = tryStr.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    }
+                    break;
+                case "precompressed":
+                case "pre_compressed":
+                    result["PreCompressed"] = kv.Value is bool pb ? pb : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "max_file_size":
+                case "maxfilesize":
+                    if (long.TryParse(kv.Value?.ToString(), out var maxSize))
+                    {
+                        result["MaxFileSize"] = maxSize;
+                    }
+                    break;
             }
         }
 
-        return (routes, clusters, listens, certs);
+        result["BasePath"] = basePath;
+        return result;
+    }
+
+    /// <summary>
+    /// 获取或创建 Cluster
+    /// 如果相同 upstream 配置已存在，则复用；否则创建新的
+    /// </summary>
+    private static string GetOrCreateCluster(
+        List<string> upstreams,
+        Dictionary<string, object> clusterConfig,
+        LyConfigContext ctx)
+    {
+        // 生成缓存 key：排序后的 upstream 地址 + 配置 hash
+        var sortedUpstreams = upstreams.OrderBy(u => u).ToList();
+        var cacheKey = string.Join("|", sortedUpstreams);
+        
+        // 添加 lb_policy 到缓存 key（不同策略需要不同 cluster）
+        if (clusterConfig.TryGetValue("LoadBalancingPolicy", out var lbPolicy))
+        {
+            cacheKey += $"@lb={lbPolicy}";
+        }
+
+        // 检查缓存
+        if (ctx.ClusterCache.TryGetValue(cacheKey, out var existingClusterId))
+        {
+            return existingClusterId;
+        }
+
+        // 创建新的 cluster
+        var clusterId = ctx.NextClusterId();
+        
+        var destinations = new Dictionary<string, object>();
+        var destIndex = 1;
+        foreach (var upstream in upstreams)
+        {
+            destinations[$"dest{destIndex++}"] = new Dictionary<string, object>
+            {
+                ["Address"] = upstream
+            };
+        }
+        
+        var newClusterConfig = new Dictionary<string, object>(clusterConfig)
+        {
+            ["Destinations"] = destinations
+        };
+        
+        ctx.Clusters[clusterId] = newClusterConfig;
+        ctx.ClusterCache[cacheKey] = clusterId;
+
+        return clusterId;
+    }
+
+    /// <summary>
+    /// 处理 handle 块
+    /// </summary>
+    private static void ProcessHandleBlock(Dictionary<string, object> config, List<(string path, Dictionary<string, object> config)> handleBlocks)
+    {
+        // handle 块可能有 path 属性，或者直接是配置
+        string path = "/{**catch-all}";
+        var innerConfig = new Dictionary<string, object>();
+
+        foreach (var kv in config)
+        {
+            var key = kv.Key.ToLower();
+            if (key == "path" || key == "path_prefix")
+            {
+                path = kv.Value.ToString()!;
+            }
+            else if (key.StartsWith('/'))
+            {
+                // 嵌套的路径配置
+                if (kv.Value is Dictionary<string, object> nestedConfig)
+                {
+                    handleBlocks.Add((kv.Key, nestedConfig));
+                }
+            }
+            else
+            {
+                innerConfig[kv.Key] = kv.Value;
+            }
+        }
+
+        if (innerConfig.Count > 0)
+        {
+            handleBlocks.Add((path, innerConfig));
+        }
+    }
+
+    /// <summary>
+    /// 规范化路径格式
+    /// </summary>
+    private static string NormalizePath(string path)
+    {
+        // 确保路径以 / 开头
+        if (!path.StartsWith('/'))
+        {
+            path = "/" + path;
+        }
+
+        // 处理通配符
+        // /api/* -> /api/{**remainder}
+        // /api/** -> /api/{**remainder}
+        if (path.EndsWith("/*") || path.EndsWith("/**"))
+        {
+            var basePath = path.TrimEnd('*', '/');
+            return $"{basePath}/{{**remainder}}";
+        }
+
+        return path;
+    }
+
+    /// <summary>
+    /// 将路径转换为文件服务的 Match.Path 格式
+    /// 将 * 替换为 {**file-all}
+    /// 例如: /static/* -> /static/{**file-all}
+    /// 例如: /show/*(.png|.jpg) -> /show/{**file-all}
+    /// </summary>
+    private static string NormalizeFileServerPath(string path)
+    {
+        // 确保路径以 / 开头
+        if (!path.StartsWith('/'))
+        {
+            path = "/" + path;
+        }
+
+        // 移除括号内的扩展名过滤（如 (.png|.jpg)），YARP 不支持这种模式
+        // 过滤逻辑由 FileService 通过正则匹配处理
+        var parenIndex = path.IndexOf('(');
+        if (parenIndex > 0)
+        {
+            path = path[..parenIndex];
+        }
+
+        // 处理通配符：将末尾的 /* 或 /** 替换为 /{**file-all}
+        if (path.EndsWith("/*") || path.EndsWith("/**") || path.EndsWith("*"))
+        {
+            var basePath = path.TrimEnd('*', '/');
+            return $"{basePath}/{{**file-all}}";
+        }
+
+        // 如果路径中没有通配符，追加 {**file-all}
+        if (!path.Contains('*'))
+        {
+            return path.TrimEnd('/') + "/{**file-all}";
+        }
+
+        // 处理路径中间的 * 
+        return path.Replace("**", "{**file-all}").Replace("*", "{**file-all}");
+    }
+
+    /// <summary>
+    /// 将路径转换为 FileProviderEverys 的键
+    /// 简单通配符使用前缀匹配，带括号的扩展名过滤才使用正则表达式
+    /// 例如: /static/* -> /static/（前缀匹配）
+    /// 例如: /show/*(.png|.jpg) -> ^/show/.*(.png|.jpg)$（正则匹配）
+    /// </summary>
+    private static string PathToFileEveryKey(string path)
+    {
+        // 确保路径以 / 开头
+        if (!path.StartsWith('/'))
+        {
+            path = "/" + path;
+        }
+
+        if (path.Contains('(') || path.Contains('['))
+        {
+            // 将 * 替换成 .*，但跳过 )* ]* }* 这些正则量词
+            var reg = ReplaceWildcardToRegex(path);
+            return $"^{reg}$";
+        }
+
+        // 简单通配符：只需要前缀匹配
+        // /static/* -> /static/
+        // /static/** -> /static/
+        // /static -> /static/
+        var prefix = path.TrimEnd('*', '/');
+        if (!prefix.EndsWith('/'))
+        {
+            prefix += "/";
+        }
+        return prefix;
+    }
+
+    /// <summary>
+    /// 将路径中的通配符 * 替换为正则表达式 .*
+    /// 但跳过 )* ]* }* 这些正则量词（它们的 * 是重复零次或多次的含义）
+    /// </summary>
+    private static string ReplaceWildcardToRegex(string path)
+    {
+        var sb = new StringBuilder();
+        for (var i = 0; i < path.Length; i++)
+        {
+            var c = path[i];
+            if (c == '*')
+            {
+                // 检查前一个字符是否是 ) ] }，如果是则保留 * 作为正则量词
+                if (i > 0)
+                {
+                    var prev = path[i - 1];
+                    if (prev == ')' || prev == ']' || prev == '}')
+                    {
+                        sb.Append(c);
+                        continue;
+                    }
+                }
+                // 替换为 .*
+                sb.Append(".*");
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+        return sb.ToString();
     }
 
     /// <summary>
@@ -557,8 +1003,7 @@ public static class LyToAppSettingsConverter
         object value,
         Dictionary<string, object> result,
         Dictionary<string, object> wafInfos,
-        List<object> listens,
-        List<object> certs)
+        LyConfigContext ctx)
     {
         var lowerKey = key.ToLower();
 
@@ -579,7 +1024,7 @@ public static class LyToAppSettingsConverter
                 break;
 
             case "http_port":
-                listens.Add(new Dictionary<string, object>
+                ctx.Listens.Add(new Dictionary<string, object>
                 {
                     ["Host"] = "0.0.0.0",
                     ["Port"] = int.Parse(value.ToString()!),
@@ -588,7 +1033,7 @@ public static class LyToAppSettingsConverter
                 break;
 
             case "https_port":
-                listens.Add(new Dictionary<string, object>
+                ctx.Listens.Add(new Dictionary<string, object>
                 {
                     ["Host"] = "0.0.0.0",
                     ["Port"] = int.Parse(value.ToString()!),
@@ -601,20 +1046,12 @@ public static class LyToAppSettingsConverter
                 EnsureDict(result, "Logging")["Level"] = "Debug";
                 break;
 
-            case "tls":
-                // 全局 TLS 配置
-                if (value is Dictionary<string, object> tlsConfig)
-                {
-                    if (tlsConfig.TryGetValue("cert", out var cert) && 
-                        tlsConfig.TryGetValue("key", out var keyVal))
-                    {
-                        certs.Add(new Dictionary<string, object>
-                        {
-                            ["PemFile"] = cert.ToString()!,
-                            ["KeyFile"] = keyVal.ToString()!
-                        });
-                    }
-                }
+            case "certs":
+                // 证书配置
+                // 支持格式：
+                // Certs { PemFile = "xxx"; KeyFile = "xxx" }  - 默认证书
+                // Certs { example.com { PemFile = "xxx"; KeyFile = "xxx" } }  - 域名特定证书
+                ProcessCertsConfig(value, ctx.Certs);
                 break;
 
             default:
@@ -633,5 +1070,84 @@ public static class LyToAppSettingsConverter
             parent[key] = dict;
         }
         return (Dictionary<string, object>)dict;
+    }
+
+    /// <summary>
+    /// 处理证书配置
+    /// 支持格式：
+    /// 1. 默认证书：Certs { PemFile = "xxx"; KeyFile = "xxx" }
+    /// 2. 域名证书：Certs { example.com { PemFile = "xxx"; KeyFile = "xxx" } }
+    /// </summary>
+    private static void ProcessCertsConfig(object value, List<object> certs)
+    {
+        if (value is not Dictionary<string, object> certsConfig)
+            return;
+
+        // 检查是否有 PemFile 和 KeyFile（默认证书）
+        string? defaultPemFile = null;
+        string? defaultKeyFile = null;
+
+        foreach (var kv in certsConfig)
+        {
+            var key = kv.Key.ToLower();
+
+            if (key == "pemfile" || key == "pem_file" || key == "cert")
+            {
+                defaultPemFile = kv.Value?.ToString();
+            }
+            else if (key == "keyfile" || key == "key_file" || key == "key")
+            {
+                defaultKeyFile = kv.Value?.ToString();
+            }
+            else if (kv.Value is Dictionary<string, object> domainCertConfig)
+            {
+                // 域名特定证书：example.com { PemFile = "xxx"; KeyFile = "xxx" }
+                var host = kv.Key;
+                string? pemFile = null;
+                string? keyFile = null;
+
+                foreach (var certKv in domainCertConfig)
+                {
+                    var certKey = certKv.Key.ToLower();
+                    if (certKey == "pemfile" || certKey == "pem_file" || certKey == "cert")
+                    {
+                        pemFile = certKv.Value?.ToString();
+                    }
+                    else if (certKey == "keyfile" || certKey == "key_file" || certKey == "key")
+                    {
+                        keyFile = certKv.Value?.ToString();
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(pemFile))
+                {
+                    var certInfo = new Dictionary<string, object>
+                    {
+                        ["Host"] = host,
+                        ["PemFile"] = pemFile
+                    };
+                    if (!string.IsNullOrEmpty(keyFile))
+                    {
+                        certInfo["KeyFile"] = keyFile;
+                    }
+                    certs.Add(certInfo);
+                }
+            }
+        }
+
+        // 添加默认证书（Host = "*"）
+        if (!string.IsNullOrEmpty(defaultPemFile))
+        {
+            var certInfo = new Dictionary<string, object>
+            {
+                ["Host"] = "*",
+                ["PemFile"] = defaultPemFile
+            };
+            if (!string.IsNullOrEmpty(defaultKeyFile))
+            {
+                certInfo["KeyFile"] = defaultKeyFile;
+            }
+            certs.Add(certInfo);
+        }
     }
 }

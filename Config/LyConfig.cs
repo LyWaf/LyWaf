@@ -281,9 +281,67 @@ public class LyConfigParser
     {
         var sb = new StringBuilder();
         var i = start;
+        var parenDepth = 0;   // 圆括号深度计数 ()
+        var bracketDepth = 0; // 方括号深度计数 []
+        
         while (i < line.Length)
         {
             var c = line[i];
+            var inRegex = parenDepth > 0 || bracketDepth > 0; // 是否在正则表达式内
+            
+            // 处理圆括号 - 当括号成对出现时作为字符串的一部分
+            if (c == '(')
+            {
+                parenDepth++;
+                sb.Append(c);
+                i++;
+                continue;
+            }
+            
+            if (c == ')')
+            {
+                if (parenDepth > 0)
+                {
+                    parenDepth--;
+                    sb.Append(c);
+                    i++;
+                    continue;
+                }
+                // 未匹配的右括号，停止解析
+                break;
+            }
+            
+            // 处理方括号 - 当括号成对出现时作为字符串的一部分
+            if (c == '[')
+            {
+                bracketDepth++;
+                sb.Append(c);
+                i++;
+                continue;
+            }
+            
+            if (c == ']')
+            {
+                if (bracketDepth > 0)
+                {
+                    bracketDepth--;
+                    sb.Append(c);
+                    i++;
+                    continue;
+                }
+                // 未匹配的右方括号，停止解析
+                break;
+            }
+            
+            // 正则表达式内的特殊字符允许：| ^ $ + ? { }
+            if (inRegex && (c == '|' || c == '^' || c == '$' || c == '+' || c == '?' || c == '{' || c == '}'))
+            {
+                sb.Append(c);
+                i++;
+                continue;
+            }
+            
+            // 常规允许的字符
             if (char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.' || c == '/' || c == '*' || c == ':')
             {
                 sb.Append(c);

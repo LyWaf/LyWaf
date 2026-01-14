@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
@@ -11,7 +12,7 @@ namespace LyWaf.Services.Files;
 public interface IFileService
 {
     Task<FileGetInfo?> GetFileRealAsync(HttpRequest request, string host, string prefix, string path);
-    Task<FileServiceResult> GetFileAsync(string host, string prefix, string path, RangeHeaderValue? range = null);
+    Task<FileServiceResult> GetFileAsync(string host, string prefix, string requestPath, string realPath, RangeHeaderValue? range = null);
     Task<FileMetadata> GetFileMetadataAsync(string path);
 }
 public class FileService : IFileService
@@ -36,9 +37,9 @@ public class FileService : IFileService
         _logger = logger;
     }
 
-    private string? TryGetConfig(string host, string prefix, [MaybeNullWhen(false)] out FileEveryConfig? config)
+    private string? TryGetConfig(string host, string prefix, string? path, [MaybeNullWhen(false)] out FileEveryConfig? config)
     {
-
+        // 先尝试精确匹配
         string key = $"{host}#{prefix}";
         if (_options.Everys.TryGetValue(key, out config))
         {
@@ -48,12 +49,109 @@ public class FileService : IFileService
         {
             return prefix;
         }
+
+        var normalizedPrefix = prefix.TrimEnd('/');
+        if (!normalizedPrefix.StartsWith('/'))
+        {
+            normalizedPrefix = "/" + normalizedPrefix;
+        }
+
+        // 完整路径用于正则匹配（正则需要匹配完整路径包括文件名）
+        var fullPath = normalizedPrefix;
+        if (!string.IsNullOrEmpty(path))
+        {
+            fullPath = normalizedPrefix.TrimEnd('/') + "/" + path.TrimStart('/');
+        }
+
+        // 使用缓存来存储匹配结果，避免重复的正则匹配
+        var cacheKey = $"file_config_{host}#{fullPath}";
+        var matchedKey = _cache.GetOrCreate(cacheKey, entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = _options.CacheDuration;
+            
+            // 尝试前缀匹配和正则匹配
+            // 优先匹配带 host 的键
+            foreach (var kv in _options.Everys)
+            {
+                var everyKey = kv.Key;
+                if (!everyKey.Contains('#'))
+                    continue;
+                    
+                var parts = everyKey.Split('#', 2);
+                if (parts[0] != host)
+                    continue;
+                    
+                var pattern = parts[1];
+                if (MatchPattern(normalizedPrefix, fullPath, pattern))
+                {
+                    return everyKey;
+                }
+            }
+            
+            // 匹配不带 host 的键
+            foreach (var kv in _options.Everys)
+            {
+                var everyKey = kv.Key;
+                if (everyKey.Contains('#'))
+                    continue;
+                    
+                if (MatchPattern(normalizedPrefix, fullPath, everyKey))
+                {
+                    return everyKey;
+                }
+            }
+
+            // 返回空字符串表示未匹配
+            return string.Empty;
+        });
+
+        // 空字符串表示未匹配
+        if (string.IsNullOrEmpty(matchedKey))
+        {
+            config = null;
+            return null;
+        }
+
+        // 根据缓存的键获取配置
+        if (_options.Everys.TryGetValue(matchedKey, out config))
+        {
+            return matchedKey;
+        }
+
+        config = null;
         return null;
+    }
+
+    /// <summary>
+    /// 匹配路径模式
+    /// 支持前缀匹配（如 /static/）和正则匹配（如 ^/show/[^/]*(\.png|\.jpg)$）
+    /// </summary>
+    /// <param name="prefix">前缀路径，用于前缀匹配</param>
+    /// <param name="fullPath">完整路径（包含文件名），用于正则匹配</param>
+    /// <param name="pattern">匹配模式</param>
+    private static bool MatchPattern(string prefix, string fullPath, string pattern)
+    {
+        // 正则表达式匹配（以 ^ 开头）- 使用完整路径
+        if (pattern.StartsWith('^'))
+        {
+            try
+            {
+                return Regex.IsMatch(fullPath, pattern);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        
+        // 前缀匹配（如 /static/）- 使用前缀
+        // prefix: /static, pattern: /static/ -> true
+        return prefix.StartsWith(pattern) || prefix + "/" == pattern;
     }
 
     public async Task<FileGetInfo?> GetFileRealAsync(HttpRequest request, string host, string prefix, string path)
     {
-        var key = TryGetConfig(host, prefix, out var val);
+        var key = TryGetConfig(host, prefix, path, out var val);
         if (key == null)
         {
             return null;
@@ -92,18 +190,18 @@ public class FileService : IFileService
         });
     }
 
-    public async Task<FileServiceResult> GetFileAsync(string host, string prefix, string real, RangeHeaderValue? range = null)
+    public async Task<FileServiceResult> GetFileAsync(string host, string prefix, string requestPath, string realPath, RangeHeaderValue? range = null)
     {
-        if (!File.Exists(real))
+        if (!File.Exists(realPath))
             return FileServiceResult.NotFound();
 
-        var fileInfo = new FileInfo(real);
-        var metadata = await GetFileMetadataAsync(real);
+        var fileInfo = new FileInfo(realPath);
+        var metadata = await GetFileMetadataAsync(realPath);
         if (metadata.IsNotSupport())
         {
             return FileServiceResult.NoSupportContentType();
         }
-        var key = TryGetConfig(host, prefix, out var val);
+        var key = TryGetConfig(host, prefix, requestPath, out var val);
         if (key == null)
         {
             return FileServiceResult.NotFound();

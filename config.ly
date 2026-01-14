@@ -7,8 +7,29 @@
 var domain = "example.com"
 var backend = "127.0.0.1:8080"
 
-# 端口监听
+# 端口监听 - 多路由配置示例
 :5002 {
+    # API 路由 - 转发到 API 服务器
+    /api/* {
+        reverse_proxy http://127.0.0.1:3000
+    }
+    
+    # 静态文件服务
+    /static/ {
+        file_server {
+            root = "./wwwroot"
+            browse = true
+        }
+    }
+
+        # 静态文件服务
+    /show/*(.png|.jpg){
+        file_server {
+            root = "./wwwroot"
+            browse = true
+        }
+    }
+    
+    # 默认路由（其他所有请求）
     reverse_proxy http://www.baidu.com
-    path "/{**catch-all}"
 }

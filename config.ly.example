@@ -50,30 +50,79 @@ var env = "production"
 # 站点配置（以域名或地址开头）
 # ============================================================
 
-# 主站点 - 支持多个域名
-$domain www.${domain} {
-    # 反向代理到后端
-    reverse_proxy http://${backend}
+# 证书配置（根目录下）
+Certs {
+    # 默认证书
+    PemFile = "/path/to/default-cert.pem"
+    KeyFile = "/path/to/default-key.pem"
     
-    # 负载均衡策略
-    lb_policy RoundRobin
+    # 域名特定证书
+    $domain {
+        PemFile = "/path/to/${domain}-cert.pem"
+        KeyFile = "/path/to/${domain}-key.pem"
+    }
     
-    # 路径匹配
-    path /{catch_all}
-    
-    # TLS 证书配置
-    tls {
-        cert = "/path/to/cert.pem"
-        key = "/path/to/key.pem"
+    api.${domain} {
+        PemFile = "/path/to/api-cert.pem"
+        KeyFile = "/path/to/api-key.pem"
     }
 }
 
-# API 站点
-api.${domain} {
-    # 反向代理 - 多个后端
-    reverse_proxy http://127.0.0.1:3001 http://127.0.0.1:3002 http://127.0.0.1:3003
+# 主站点 - 支持多路由配置
+$domain www.${domain} {
+    # 不同路径转发到不同后端
+    /api/* {
+        reverse_proxy http://127.0.0.1:3000
+        lb_policy RoundRobin
+    }
     
-    # 负载均衡策略
+    /file/* {
+        reverse_proxy http://127.0.0.1:4000
+    }
+    
+    # 静态文件服务
+    /static/* {
+        file_server {
+            root = "./wwwroot/static"
+            browse = true
+            index = "index.html index.htm"
+        }
+    }
+    
+    # 默认路由（其他所有请求）
+    reverse_proxy http://${backend}
+}
+
+# 纯文件服务站点
+files.${domain} {
+    # 简单的文件服务（使用当前目录）
+    file_server
+}
+
+# 带配置的文件服务
+static.${domain} {
+    file_server {
+        root = "./public"
+        browse = true
+        index = "index.html default.html"
+        try_files = "index.html /404.html"
+        precompressed = true
+    }
+}
+
+# API 站点 - 使用 handle 块
+api.${domain} {
+    handle {
+        /v1/* {
+            reverse_proxy http://127.0.0.1:3001
+        }
+        /v2/* {
+            reverse_proxy http://127.0.0.1:3002
+        }
+    }
+    
+    # 默认后端
+    reverse_proxy http://127.0.0.1:3000
     lb_policy WeightedRoundRobin
 }
 
