@@ -340,11 +340,30 @@ ReverseProxy:
       ClusterId: cluster2
       Match:
         Path: '{**catch-all}'
+        Hosts:
+          - localhost
+      Metadata:
+        Port: 5002
+        Type: HTTP
     route3:
       ClusterId: cluster2
       Match:
         Path: 'file/{**file-all}'
+        Hosts:
+          - localhost
       Metadata:
+        Port: 5002
+        Type: HTTP
+        RateLimiter: Concurrency
+    route4:
+      ClusterId: cluster2
+      Match:
+        Path: 'file/{**file-all}'
+        Hosts:
+          - localhost1
+      Metadata:
+        Port: 5003
+        Type: HTTP
         RateLimiter: Concurrency
   Clusters:
     cluster1:

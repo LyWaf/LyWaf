@@ -144,7 +144,24 @@ public class LyConfigParser
                     _tokens.Add(new Token(TokenType.Comma, ",", lineNum));
                     i++;
                     continue;
+                case '!':
+                    // != 不等于运算符
+                    if (i + 1 < line.Length && line[i + 1] == '=')
+                    {
+                        _tokens.Add(new Token(TokenType.NotEquals, "!=", lineNum));
+                        i += 2;
+                        continue;
+                    }
+                    // 单独的 ! 作为标识符的一部分（在正则表达式中会处理）
+                    throw new LyConfigException($"未知字符 '{c}' 在第 {lineNum} 行，您是否想使用 '!=' ?");
                 case '=':
+                    // == 等于运算符
+                    if (i + 1 < line.Length && line[i + 1] == '=')
+                    {
+                        _tokens.Add(new Token(TokenType.EqualsEquals, "==", lineNum));
+                        i += 2;
+                        continue;
+                    }
                     _tokens.Add(new Token(TokenType.Equals, "=", lineNum));
                     i++;
                     continue;
@@ -333,8 +350,11 @@ public class LyConfigParser
                 break;
             }
             
-            // 正则表达式内的特殊字符允许：| ^ $ + ? { }
-            if (inRegex && (c == '|' || c == '^' || c == '$' || c == '+' || c == '?' || c == '{' || c == '}'))
+            // 正则表达式内的特殊字符允许：| ^ $ + ? { } ! < > =
+            // ! 用于否定前瞻 (?!...) 等
+            // < > = 用于命名捕获组 (?<name>...) 和断言 (?<=...) (?<!...)
+            if (inRegex && (c == '|' || c == '^' || c == '$' || c == '+' || c == '?' || 
+                c == '{' || c == '}' || c == '!' || c == '<' || c == '>' || c == '='))
             {
                 sb.Append(c);
                 i++;
@@ -628,17 +648,29 @@ public class LyConfigParser
         // 简单条件: 变量存在性检查或比较
         var left = ParseValue()?.ToString() ?? "";
 
-        // 比较操作符
-        if (Current.Type == TokenType.Identifier)
+        // 比较操作符 - 支持 == != 以及 eq ne
+        if (Current.Type == TokenType.EqualsEquals)
+        {
+            Consume();
+            var right = ParseValue()?.ToString() ?? "";
+            return left == right;
+        }
+        else if (Current.Type == TokenType.NotEquals)
+        {
+            Consume();
+            var right = ParseValue()?.ToString() ?? "";
+            return left != right;
+        }
+        else if (Current.Type == TokenType.Identifier)
         {
             var op = Current.Value.ToLower();
-            if (op == "==" || op == "eq")
+            if (op == "eq")
             {
                 Consume();
                 var right = ParseValue()?.ToString() ?? "";
                 return left == right;
             }
-            else if (op == "!=" || op == "ne")
+            else if (op == "ne")
             {
                 Consume();
                 var right = ParseValue()?.ToString() ?? "";
@@ -664,10 +696,16 @@ public class LyConfigParser
         }
 
         // 带参数的块: name arg1 arg2 { ... }
+        // 注意：以 / 开头的 Identifier 是路径块，不是参数
         var args = new List<string>();
         while (Current.Type == TokenType.Identifier || Current.Type == TokenType.String || 
                Current.Type == TokenType.Number || Current.Type == TokenType.Variable)
         {
+            // 如果是以 / 开头的标识符，它是路径块而不是参数，停止收集参数
+            if (Current.Type == TokenType.Identifier && Current.Value.StartsWith('/'))
+            {
+                break;
+            }
             args.Add(ParseStringValue());
         }
 
@@ -684,6 +722,17 @@ public class LyConfigParser
             return (name, ProcessBlock(name, args, content));
         }
 
+        // 非嵌套站点配置：站点地址后面没有 {}，收集后续指令
+        // 支持格式：
+        // localhost
+        // file_server
+        // root = "./wwwroot"
+        if (IsSiteAddress(name) && args.Count == 0)
+        {
+            var siteContent = ParseNonNestedSiteContent();
+            return (name, siteContent);
+        }
+
         // 单行块
         if (args.Count == 1)
         {
@@ -695,6 +744,125 @@ public class LyConfigParser
         }
 
         return (name, new Dictionary<string, object>());
+    }
+
+    /// <summary>
+    /// 解析非嵌套的站点内容
+    /// 收集后续指令直到遇到另一个站点地址或文件结束
+    /// </summary>
+    private Dictionary<string, object> ParseNonNestedSiteContent()
+    {
+        var result = new Dictionary<string, object>();
+
+        while (Current.Type != TokenType.EOF)
+        {
+            SkipNewLines();
+
+            if (Current.Type == TokenType.EOF)
+                break;
+
+            // 检查是否是另一个站点地址（表示当前站点配置结束）
+            if (Current.Type == TokenType.Identifier && IsSiteAddress(Current.Value))
+            {
+                // 预查看下一个 token，如果不是 = 或 :，则是新站点
+                var nextPos = _position + 1;
+                while (nextPos < _tokens.Count && _tokens[nextPos].Type == TokenType.NewLine)
+                    nextPos++;
+                
+                if (nextPos < _tokens.Count)
+                {
+                    var nextType = _tokens[nextPos].Type;
+                    if (nextType != TokenType.Equals && nextType != TokenType.Colon)
+                    {
+                        // 是新的站点地址，停止解析当前站点
+                        break;
+                    }
+                }
+            }
+
+            // 变量声明
+            if (Current.Type == TokenType.VarDecl)
+            {
+                ParseVariableDeclaration();
+                SkipNewLines();
+                continue;
+            }
+
+            // 条件语句
+            if (Current.Type == TokenType.If)
+            {
+                var conditionalBlock = ParseConditional();
+                MergeDict(result, conditionalBlock);
+                SkipNewLines();
+                continue;
+            }
+
+            // 块定义或赋值
+            if (Current.Type == TokenType.Identifier)
+            {
+                var (key, value) = ParseBlock();
+                
+                if (result.ContainsKey(key))
+                {
+                    if (result[key] is List<object> list)
+                    {
+                        list.Add(value);
+                    }
+                    else
+                    {
+                        result[key] = new List<object> { result[key], value };
+                    }
+                }
+                else
+                {
+                    result[key] = value;
+                }
+                
+                SkipNewLines();
+                continue;
+            }
+
+            // 其他情况跳过
+            if (Current.Type == TokenType.NewLine)
+            {
+                Consume();
+                continue;
+            }
+
+            break;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 判断是否是站点地址格式
+    /// 支持: example.com, :8080, https://example.com, localhost, *.example.com, 127.0.0.1
+    /// </summary>
+    private static bool IsSiteAddress(string key)
+    {
+        // 端口格式 :port
+        if (key.StartsWith(':') && key.Length > 1 && int.TryParse(key[1..], out _))
+            return true;
+
+        // URL 格式
+        if (key.StartsWith("http://") || key.StartsWith("https://"))
+            return true;
+
+        // 域名格式 (包含 . 或 *)
+        if (key.Contains('.') || key.StartsWith('*'))
+            return true;
+
+        // localhost
+        if (key.ToLower() == "localhost")
+            return true;
+
+        // IP 地址格式
+        var hostPart = key.Split(':')[0];
+        if (System.Net.IPAddress.TryParse(hostPart, out _))
+            return true;
+
+        return false;
     }
 
     private Dictionary<string, object> ParseBlockContent()
@@ -1015,6 +1183,8 @@ public enum TokenType
     Colon,          // :
     Comma,          // ,
     Equals,         // =
+    EqualsEquals,   // ==
+    NotEquals,      // !=
     NewLine,
 
     // 关键字

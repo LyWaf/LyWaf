@@ -22,6 +22,106 @@ public class FileService : IFileService
     private readonly ILogger<FileService> _logger;
 
     private readonly static HashSet<string> PreCompressExtension = [".gz", ".zst", ".br"];
+    
+    // localhost, 127.0.0.1, [::1] 互相等价
+    private static readonly HashSet<string> LocalhostAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "localhost",
+        "127.0.0.1",
+        "[::1]",
+        "::1"
+    };
+
+    /// <summary>
+    /// 从 host:port 格式中提取主机名部分
+    /// </summary>
+    private static string ExtractHostname(string hostWithPort)
+    {
+        if (string.IsNullOrEmpty(hostWithPort))
+            return hostWithPort;
+        
+        // 处理 IPv6 地址格式 [::1]:port
+        if (hostWithPort.StartsWith('['))
+        {
+            var bracketEnd = hostWithPort.IndexOf(']');
+            if (bracketEnd > 0)
+            {
+                return hostWithPort[..(bracketEnd + 1)];
+            }
+        }
+        
+        // 处理普通的 host:port 格式
+        var colonIndex = hostWithPort.LastIndexOf(':');
+        if (colonIndex > 0 && int.TryParse(hostWithPort[(colonIndex + 1)..], out _))
+        {
+            return hostWithPort[..colonIndex];
+        }
+        
+        return hostWithPort;
+    }
+    
+    /// <summary>
+    /// 从 host:port 格式中提取端口部分
+    /// </summary>
+    private static int? ExtractPort(string hostWithPort)
+    {
+        if (string.IsNullOrEmpty(hostWithPort))
+            return null;
+        
+        // 处理 IPv6 地址格式 [::1]:port
+        if (hostWithPort.StartsWith('['))
+        {
+            var bracketEnd = hostWithPort.IndexOf(']');
+            if (bracketEnd > 0 && bracketEnd + 1 < hostWithPort.Length && hostWithPort[bracketEnd + 1] == ':')
+            {
+                if (int.TryParse(hostWithPort[(bracketEnd + 2)..], out var port))
+                {
+                    return port;
+                }
+            }
+            return null;
+        }
+        
+        // 处理普通的 host:port 格式
+        var colonIndex = hostWithPort.LastIndexOf(':');
+        if (colonIndex > 0 && int.TryParse(hostWithPort[(colonIndex + 1)..], out var p))
+        {
+            return p;
+        }
+        
+        return null;
+    }
+
+    /// <summary>
+    /// 判断是否为本地主机地址（不含端口）
+    /// </summary>
+    private static bool IsLocalhost(string hostname) => LocalhostAliases.Contains(hostname);
+    
+    /// <summary>
+    /// 判断两个主机是否匹配（考虑本地回环地址等价，支持带端口格式）
+    /// </summary>
+    private static bool HostEquals(string host1, string host2)
+    {
+        if (host1.Equals(host2, StringComparison.OrdinalIgnoreCase))
+            return true;
+        
+        // 提取主机名和端口
+        var hostname1 = ExtractHostname(host1);
+        var hostname2 = ExtractHostname(host2);
+        var port1 = ExtractPort(host1);
+        var port2 = ExtractPort(host2);
+        
+        // 端口必须匹配（如果都有端口的话）
+        if (port1.HasValue && port2.HasValue && port1.Value != port2.Value)
+            return false;
+        
+        // 主机名精确匹配
+        if (hostname1.Equals(hostname2, StringComparison.OrdinalIgnoreCase))
+            return true;
+        
+        // localhost, 127.0.0.1, [::1] 互相匹配
+        return IsLocalhost(hostname1) && IsLocalhost(hostname2);
+    }
 
     public FileService(
         IOptionsMonitor<FileProviderOptions> options, IMemoryCache cache,
@@ -45,6 +145,32 @@ public class FileService : IFileService
         {
             return key;
         }
+        
+        // 尝试本地回环地址的等价匹配（带端口）
+        var hostname = ExtractHostname(host);
+        var port = ExtractPort(host);
+        if (IsLocalhost(hostname))
+        {
+            foreach (var alias in LocalhostAliases)
+            {
+                // 带端口的别名
+                if (port.HasValue)
+                {
+                    var aliasKeyWithPort = $"{alias}:{port}#{prefix}";
+                    if (_options.Everys.TryGetValue(aliasKeyWithPort, out config))
+                    {
+                        return aliasKeyWithPort;
+                    }
+                }
+                // 不带端口的别名
+                var aliasKey = $"{alias}#{prefix}";
+                if (_options.Everys.TryGetValue(aliasKey, out config))
+                {
+                    return aliasKey;
+                }
+            }
+        }
+        
         if (_options.Everys.TryGetValue(prefix, out config))
         {
             return prefix;
@@ -78,7 +204,8 @@ public class FileService : IFileService
                     continue;
                     
                 var parts = everyKey.Split('#', 2);
-                if (parts[0] != host)
+                // 使用 HostEquals 判断，支持本地回环地址等价
+                if (!HostEquals(parts[0], host))
                     continue;
                     
                 var pattern = parts[1];

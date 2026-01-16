@@ -30,37 +30,40 @@ public static class LyToYamlConverter
     {
         var prefix = new string(' ', indent * 2);
 
-        switch (value)
+        // 先检查是否是列表类型（非字符串、非字典的 IEnumerable）
+        if (value is System.Collections.IEnumerable enumerable && value is not string && value is not Dictionary<string, object>)
         {
-            case List<object> list:
-                sb.AppendLine($"{prefix}{key}:");
-                foreach (var item in list)
+            sb.AppendLine($"{prefix}{key}:");
+            foreach (var item in enumerable)
+            {
+                if (item is Dictionary<string, object> itemDict)
                 {
-                    if (item is Dictionary<string, object> itemDict)
+                    sb.Append($"{prefix}  - ");
+                    var first = true;
+                    foreach (var kv in itemDict)
                     {
-                        sb.Append($"{prefix}  - ");
-                        var first = true;
-                        foreach (var kv in itemDict)
+                        if (first)
                         {
-                            if (first)
-                            {
-                                WriteInlineValue(sb, kv.Key, kv.Value);
-                                sb.AppendLine();
-                                first = false;
-                            }
-                            else
-                            {
-                                WriteYamlValue(sb, kv.Key, kv.Value, indent + 2);
-                            }
+                            WriteInlineValue(sb, kv.Key, kv.Value);
+                            sb.AppendLine();
+                            first = false;
+                        }
+                        else
+                        {
+                            WriteYamlValue(sb, kv.Key, kv.Value, indent + 2);
                         }
                     }
-                    else
-                    {
-                        sb.AppendLine($"{prefix}  - {FormatValue(item)}");
-                    }
                 }
-                break;
+                else
+                {
+                    sb.AppendLine($"{prefix}  - {FormatValue(item)}");
+                }
+            }
+            return;
+        }
 
+        switch (value)
+        {
             case null:
                 sb.AppendLine($"{prefix}{key}: ~");
                 break;
@@ -205,9 +208,46 @@ public class LyConfigContext
     public bool HasFileServerRoute { get; set; } = false;
     
     /// <summary>
+    /// Order 计数器，确保全局唯一
+    /// </summary>
+    private int _orderCounter = 0;
+    
+    /// <summary>
     /// 获取下一个路由 ID
     /// </summary>
     public string NextRouteId() => $"route{RouteIndex++}";
+    
+    /// <summary>
+    /// 计算路由的 Order 值（全局唯一）
+    /// 更具体的路径 Order 更小（优先级更高）
+    /// </summary>
+    public int NextRouteOrder(string path, bool hasHosts)
+    {
+        var baseOrder = 0;
+        
+        // 有 Hosts 的路由优先级更高
+        if (!hasHosts)
+        {
+            baseOrder += 100000;
+        }
+        
+        // 通配符路由优先级最低
+        if (path.Contains("{**catch-all}") || path.Contains("{**file-all}") || path == "/{**catch-all}" || path == "/{**file-all}")
+        {
+            baseOrder += 10000;
+        }
+        else if (path.Contains("{**"))
+        {
+            baseOrder += 5000;
+        }
+        
+        // 路径越短，优先级越低（更通用）
+        baseOrder += (10 - Math.Min(10, path.Split('/').Length)) * 100;
+        
+        // 加上递增计数器确保唯一性
+        // return baseOrder + (++_orderCounter);
+        return 1;
+    }
     
     /// <summary>
     /// 获取下一个 Cluster ID
@@ -343,14 +383,21 @@ public static class LyToAppSettingsConverter
         if (key.Contains('.') || key.StartsWith('*'))
             return true;
 
+        var val = key.Split(':');
         // localhost
-        if (key.ToLower() == "localhost")
-            return true;
-
+        if (val[0].Equals("localhost", StringComparison.CurrentCultureIgnoreCase)) {
+            if(val.Length == 1 || int.TryParse(val[1], out _)) {
+                return true;
+            }
+            return false;
+        }
         // IP 地址格式
-        if (System.Net.IPAddress.TryParse(key.Split(':')[0], out _))
-            return true;
-
+        if (System.Net.IPAddress.TryParse(val[0], out _)) {
+            if(val.Length == 1 || int.TryParse(val[1], out _)) {
+                return true;
+            }
+            return false;
+        }
         return false;
     }
 
@@ -375,7 +422,15 @@ public static class LyToAppSettingsConverter
             var parsed = ParseSiteAddress(addr);
             if (parsed.Host != null)
             {
-                hosts.Add(parsed.Host);
+                // Hosts 中包含端口信息：host:port
+                if (parsed.Port > 0)
+                {
+                    hosts.Add($"{parsed.Host}:{parsed.Port}");
+                }
+                else
+                {
+                    hosts.Add(parsed.Host);
+                }
             }
             if (parsed.Port > 0)
             {
@@ -387,18 +442,108 @@ public static class LyToAppSettingsConverter
             }
         }
 
-        // 添加监听端口（如果是端口格式的站点）
-        if (listenPort > 0 && hosts.Count == 0)
+        // 添加监听配置
+        if (listenPort > 0)
         {
-            ctx.Listens.Add(new Dictionary<string, object>
+            if (hosts.Count == 0)
             {
-                ["Host"] = "0.0.0.0",
-                ["Port"] = listenPort,
-                ["IsHttps"] = isHttps
-            });
+                // 仅端口格式（如 :5002），监听所有地址
+                ctx.Listens.Add(new Dictionary<string, object>
+                {
+                    ["Host"] = "0.0.0.0",
+                    ["Port"] = listenPort,
+                    ["IsHttps"] = isHttps
+                });
+                
+                // 对于仅端口的站点，添加多种常见主机名匹配
+                // 这样可以匹配 localhost:port, 127.0.0.1:port, 或不带端口的请求
+                hosts.Add($"localhost:{listenPort}");
+                hosts.Add($"127.0.0.1:{listenPort}");
+            }
+            else
+            {
+                // 带 host 的格式（如 127.0.0.1:5003, localhost:5003）
+                // 从 hosts 中提取原始 host（去掉端口部分）用于监听
+                var firstHost = hosts[0];
+                var listenHost = firstHost.Contains(':') 
+                    ? firstHost.Split(':')[0] 
+                    : firstHost;
+                
+                // localhost 转换为 127.0.0.1
+                if (listenHost.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+                {
+                    listenHost = "127.0.0.1";
+                }
+                
+                ctx.Listens.Add(new Dictionary<string, object>
+                {
+                    ["Host"] = listenHost,
+                    ["Port"] = listenPort,
+                    ["IsHttps"] = isHttps
+                });
+            }
         }
 
         // 处理站点内容
+        // 支持简化配置：localhost file_server 或 localhost reverse_proxy http://...
+        if (content is string simpleContent)
+        {
+            var parts = simpleContent.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length > 0)
+            {
+                var directive = parts[0].ToLower();
+                if (directive == "file_server")
+                {
+                    // 简化的文件服务配置
+                    ctx.HasFileServerRoute = true;
+                    var routeId = ctx.NextRouteId();
+                    var fileEveryConfig = BuildFileEveryConfig(new Dictionary<string, object>());
+                    var fileEveryKey = hosts.Count > 0 ? $"{hosts[0]}#/" : "/";
+                    ctx.FileProviderEverys[fileEveryKey] = fileEveryConfig;
+
+                    var match = new Dictionary<string, object>
+                    {
+                        ["Path"] = "/{**file-all}"
+                    };
+                    if (hosts.Count > 0)
+                    {
+                        match["Hosts"] = hosts;
+                    }
+
+                    ctx.Routes[routeId] = new Dictionary<string, object>
+                    {
+                        ["ClusterId"] = "cluster1",
+                        ["Match"] = match,
+                        ["Order"] = ctx.NextRouteOrder("/{**file-all}", hosts.Count > 0)
+                    };
+                }
+                else if (directive == "reverse_proxy" && parts.Length > 1)
+                {
+                    // 简化的反向代理配置
+                    var upstreams = parts.Skip(1).Select(NormalizeUpstream).ToList();
+                    var clusterId = GetOrCreateCluster(upstreams, new Dictionary<string, object>(), ctx);
+
+                    var routeId = ctx.NextRouteId();
+                    var match = new Dictionary<string, object>
+                    {
+                        ["Path"] = "/{**catch-all}"
+                    };
+                    if (hosts.Count > 0)
+                    {
+                        match["Hosts"] = hosts;
+                    }
+
+                    ctx.Routes[routeId] = new Dictionary<string, object>
+                    {
+                        ["ClusterId"] = clusterId,
+                        ["Match"] = match,
+                        ["Order"] = ctx.NextRouteOrder("/{**catch-all}", hosts.Count > 0)
+                    };
+                }
+            }
+            return;
+        }
+
         if (content is Dictionary<string, object> siteContent)
         {
             // 收集 handle/route 块和默认配置
@@ -451,6 +596,23 @@ public static class LyToAppSettingsConverter
                                 defaultClusterConfig["HealthCheck"] = hcConfig;
                             }
                             break;
+
+                        // file_server 的相关配置属性（非嵌套配置时这些是平级的）
+                        case "root":
+                        case "basepath":
+                        case "base_path":
+                        case "browse":
+                        case "default":
+                        case "index":
+                        case "try_files":
+                        case "tryfiles":
+                        case "precompressed":
+                        case "pre_compressed":
+                        case "max_file_size":
+                        case "maxfilesize":
+                            // 将这些属性收集到 file_server 配置中
+                            defaultFileServerConfig[directive.Key] = directive.Value;
+                            break;
                     }
                 }
             }
@@ -492,9 +654,10 @@ public static class LyToAppSettingsConverter
 
                     // 创建路由
                     var routeId = ctx.NextRouteId();
+                    var normalizedPath = NormalizePath(path);
                     var match = new Dictionary<string, object>
                     {
-                        ["Path"] = NormalizePath(path)
+                        ["Path"] = normalizedPath
                     };
                     if (hosts.Count > 0)
                     {
@@ -504,7 +667,8 @@ public static class LyToAppSettingsConverter
                     var routeConfig = new Dictionary<string, object>
                     {
                         ["ClusterId"] = clusterId,
-                        ["Match"] = match
+                        ["Match"] = match,
+                        ["Order"] = ctx.NextRouteOrder(normalizedPath, hosts.Count > 0)
                     };
 
                     ctx.Routes[routeId] = routeConfig;
@@ -538,7 +702,8 @@ public static class LyToAppSettingsConverter
                     var routeConfig = new Dictionary<string, object>
                     {
                         ["ClusterId"] = "cluster1",
-                        ["Match"] = match
+                        ["Match"] = match,
+                        ["Order"] = ctx.NextRouteOrder(matchPath, hosts.Count > 0)
                     };
 
                     ctx.Routes[routeId] = routeConfig;
@@ -572,7 +737,8 @@ public static class LyToAppSettingsConverter
                 var routeConfig = new Dictionary<string, object>
                 {
                     ["ClusterId"] = clusterId,
-                    ["Match"] = match
+                    ["Match"] = match,
+                    ["Order"] = ctx.NextRouteOrder("/{**catch-all}", hosts.Count > 0)
                 };
 
                 ctx.Routes[routeId] = routeConfig;
@@ -601,7 +767,8 @@ public static class LyToAppSettingsConverter
                 var routeConfig = new Dictionary<string, object>
                 {
                     ["ClusterId"] = "cluster1",
-                    ["Match"] = match
+                    ["Match"] = match,
+                    ["Order"] = ctx.NextRouteOrder("/{**file-all}", hosts.Count > 0)
                 };
 
                 ctx.Routes[routeId] = routeConfig;

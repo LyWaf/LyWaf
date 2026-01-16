@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using LyWaf.Policy;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Routing.Matching;
 using NLog;
 using NLog.Extensions.Logging;
 using System.Net;
@@ -1025,6 +1026,9 @@ public class Program
             }
         });
 
+        // 注册端口匹配策略，解决多端口路由的 AmbiguousMatchException
+        builder.Services.AddSingleton<MatcherPolicy, PortMatcherPolicy>();
+        
         var reverse = builder.Services.AddReverseProxy()
             .ConfigureHttpClient((context, handler) =>
             {
@@ -1063,6 +1067,7 @@ public class Program
 
         // 反向代理仅处理非 ControlListen 端口的请求
         var proxyPorts = wafInfos.Listens.Select(l => $"*:{l.Port}").ToArray();
+        
         app.MapReverseProxy(proxyApp =>
         {
             // 启用响应压缩（必须放在其他中间件之前）

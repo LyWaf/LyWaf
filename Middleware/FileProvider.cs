@@ -288,7 +288,8 @@ public class FileProviderMiddleware(RequestDelegate next)
             await _next(context);
             return;
         }
-        var host = context.Request.Host.Host;
+        // 使用完整的 Host（包含端口），与 LyToYaml 生成的 FileProviderEverys 键格式一致
+        var host = context.Request.Host.ToString();
         var path = context.Request.RouteValues["file-all"]?.ToString() ?? "";
         var prefix = context.Request.Path.ToString();
 
