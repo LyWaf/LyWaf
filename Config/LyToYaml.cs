@@ -682,9 +682,21 @@ public static class LyToAppSettingsConverter
                     
                     // 将路径转换为 FileProviderEverys 的键（简单路径用前缀，复杂路径用正则）
                     var fileEveryKeyPath = PathToFileEveryKey(path);
-                    var fileEveryKey = hosts.Count > 0 
-                        ? $"{hosts[0]}#{fileEveryKeyPath}"
-                        : fileEveryKeyPath;
+                    string fileEveryKey;
+                    if (hosts.Count > 0)
+                    {
+                        // 如果 host 包含端口（如 localhost:5002），只取主机名部分
+                        var hostForKey = hosts[0];
+                        if (hostForKey.Contains(':'))
+                        {
+                            hostForKey = hostForKey.Split(':')[0];
+                        }
+                        fileEveryKey = $"{hostForKey}#{fileEveryKeyPath}";
+                    }
+                    else
+                    {
+                        fileEveryKey = fileEveryKeyPath;
+                    }
                     ctx.FileProviderEverys[fileEveryKey] = fileEveryConfig;
 
                     // 创建文件服务路由，将 * 替换为 {**file-all}

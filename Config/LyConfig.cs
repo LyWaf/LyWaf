@@ -748,17 +748,17 @@ public class LyConfigParser
 
     /// <summary>
     /// 解析非嵌套的站点内容
-    /// 收集后续指令直到遇到另一个站点地址或文件结束
+    /// 收集后续指令直到遇到另一个站点地址、右花括号或文件结束
     /// </summary>
     private Dictionary<string, object> ParseNonNestedSiteContent()
     {
         var result = new Dictionary<string, object>();
 
-        while (Current.Type != TokenType.EOF)
+        while (Current.Type != TokenType.EOF && Current.Type != TokenType.RightBrace)
         {
             SkipNewLines();
 
-            if (Current.Type == TokenType.EOF)
+            if (Current.Type == TokenType.EOF || Current.Type == TokenType.RightBrace)
                 break;
 
             // 检查是否是另一个站点地址（表示当前站点配置结束）
@@ -842,7 +842,7 @@ public class LyConfigParser
     private static bool IsSiteAddress(string key)
     {
         // 端口格式 :port
-        if (key.StartsWith(':') && key.Length > 1 && int.TryParse(key[1..], out _))
+        if (key.StartsWith(':') && int.TryParse(key[1..], out _))
             return true;
 
         // URL 格式
@@ -853,15 +853,21 @@ public class LyConfigParser
         if (key.Contains('.') || key.StartsWith('*'))
             return true;
 
+        var val = key.Split(':');
         // localhost
-        if (key.ToLower() == "localhost")
-            return true;
-
+        if (val[0].Equals("localhost", StringComparison.CurrentCultureIgnoreCase)) {
+            if(val.Length == 1 || int.TryParse(val[1], out _)) {
+                return true;
+            }
+            return false;
+        }
         // IP 地址格式
-        var hostPart = key.Split(':')[0];
-        if (System.Net.IPAddress.TryParse(hostPart, out _))
-            return true;
-
+        if (System.Net.IPAddress.TryParse(val[0], out _)) {
+            if(val.Length == 1 || int.TryParse(val[1], out _)) {
+                return true;
+            }
+            return false;
+        }
         return false;
     }
 
