@@ -16,13 +16,13 @@ localhost:5003
     }
 }
 
-respond "hello world"
+respond "hello world {HOST}:{PORT}"
 status=201
 content-type="text/plain"
 show-req=true
 
 localhost:5002
-respond "hello world1"
-status=201
+respond "Hello from {HOST}:{PORT}\nPath: {PATH}\nMethod: {METHOD}\nClient IP: {ClientIp}\nTime: {TIME}\nURL: {URL}"
+status=200
 content-type="text/plain"
 show-req=true

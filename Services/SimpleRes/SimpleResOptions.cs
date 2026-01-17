@@ -22,6 +22,19 @@ public class SimpleResItem
 {
     /// <summary>
     /// 响应体内容
+    /// 支持以下占位符（不区分大小写）：
+    /// - {PORT} - 请求端口
+    /// - {HOST} - 请求主机名
+    /// - {PATH} - 请求路径
+    /// - {METHOD} - 请求方法 (GET/POST等)
+    /// - {QUERY} - 查询字符串
+    /// - {SCHEME} - 协议 (http/https)
+    /// - {CLIENT_IP} / {IP} - 客户端IP
+    /// - {TIME} - 当前时间 (yyyy-MM-dd HH:mm:ss)
+    /// - {DATE} - 当前日期 (yyyy-MM-dd)
+    /// - {URL} - 完整URL
+    /// - {USER_AGENT} - User-Agent
+    /// - {ROUTE_ID} - 路由ID
     /// </summary>
     public string Body { get; set; } = "";
 
