@@ -173,11 +173,6 @@ public class LyConfigContext
     public Dictionary<string, string> ClusterCache { get; } = new();
     
     /// <summary>
-    /// 文件服务配置 (FileProvider.Everys)
-    /// </summary>
-    public Dictionary<string, object> FileProviderEverys { get; } = new();
-    
-    /// <summary>
     /// 监听配置
     /// </summary>
     public List<object> Listens { get; } = new();
@@ -218,14 +213,29 @@ public class LyConfigContext
     public int SimpleResIndex { get; set; } = 1;
     
     /// <summary>
-    /// Order 计数器，确保全局唯一
+    /// FileServer 文件服务配置
     /// </summary>
-    private int _orderCounter = 0;
+    public Dictionary<string, object> FileServerItems { get; } = new();
+    
+    /// <summary>
+    /// FileServer 索引计数器
+    /// </summary>
+    public int FileServerIndex { get; set; } = 1;
     
     /// <summary>
     /// 获取下一个路由 ID
     /// </summary>
     public string NextRouteId() => $"route{RouteIndex++}";
+    
+    /// <summary>
+    /// 获取下一个 SimpleRes ID
+    /// </summary>
+    public string NextSimpleResId() => $"simpleres_{SimpleResIndex++}";
+    
+    /// <summary>
+    /// 获取下一个 FileServer ID
+    /// </summary>
+    public string NextFileServerId() => $"fileserver_{FileServerIndex++}";
     
     /// <summary>
     /// 计算路由的 Order 值（全局唯一）
@@ -254,20 +264,13 @@ public class LyConfigContext
         // 路径越短，优先级越低（更通用）
         baseOrder += (10 - Math.Min(10, path.Split('/').Length)) * 100;
         
-        // 加上递增计数器确保唯一性
-        // return baseOrder + (++_orderCounter);
-        return 1;
+        return baseOrder;
     }
     
     /// <summary>
     /// 获取下一个 Cluster ID
     /// </summary>
     public string NextClusterId() => $"cluster{ClusterIndex++}";
-    
-    /// <summary>
-    /// 获取下一个 SimpleRes Key
-    /// </summary>
-    public string NextSimpleResKey() => $"simpleres_{SimpleResIndex++}";
 }
 
 /// <summary>
@@ -368,12 +371,12 @@ public static class LyToAppSettingsConverter
             result["ReverseProxy"] = reverseProxy;
         }
 
-        // 构建 FileProvider
-        if (ctx.FileProviderEverys.Count > 0)
+        // 构建 FileServer（文件服务配置，按路由 ID 映射）
+        if (ctx.FileServerItems.Count > 0)
         {
-            result["FileProvider"] = new Dictionary<string, object>
+            result["FileServer"] = new Dictionary<string, object>
             {
-                ["Everys"] = ctx.FileProviderEverys
+                ["Items"] = ctx.FileServerItems
             };
         }
 
@@ -520,10 +523,7 @@ public static class LyToAppSettingsConverter
                 {
                     // 简化的文件服务配置
                     ctx.HasFileServerRoute = true;
-                    var routeId = ctx.NextRouteId();
-                    var fileEveryConfig = BuildFileEveryConfig(new Dictionary<string, object>());
-                    var fileEveryKey = hosts.Count > 0 ? $"{hosts[0]}#/" : "/";
-                    ctx.FileProviderEverys[fileEveryKey] = fileEveryConfig;
+                    var fileServerId = BuildFileServerConfig(new Dictionary<string, object>(), "/", hosts, ctx);
 
                     var match = new Dictionary<string, object>
                     {
@@ -534,7 +534,7 @@ public static class LyToAppSettingsConverter
                         match["Hosts"] = hosts;
                     }
 
-                    ctx.Routes[routeId] = new Dictionary<string, object>
+                    ctx.Routes[fileServerId] = new Dictionary<string, object>
                     {
                         ["ClusterId"] = "cluster1",
                         ["Match"] = match,
@@ -798,29 +798,12 @@ public static class LyToAppSettingsConverter
                 }
                 else if (blockHasFileServer)
                 {
-                    // 文件服务路由
+                    // 文件服务路由 - 使用 fileserver_xxx 作为路由 ID
                     ctx.HasFileServerRoute = true;
-                    var routeId = ctx.NextRouteId();
-                    var fileEveryConfig = BuildFileEveryConfig(blockFileServerConfig);
                     
-                    // 将路径转换为 FileProviderEverys 的键（简单路径用前缀，复杂路径用正则）
-                    var fileEveryKeyPath = PathToFileEveryKey(path);
-                    string fileEveryKey;
-                    if (hosts.Count > 0)
-                    {
-                        // 如果 host 包含端口（如 localhost:5002），只取主机名部分
-                        var hostForKey = hosts[0];
-                        if (hostForKey.Contains(':'))
-                        {
-                            hostForKey = hostForKey.Split(':')[0];
-                        }
-                        fileEveryKey = $"{hostForKey}#{fileEveryKeyPath}";
-                    }
-                    else
-                    {
-                        fileEveryKey = fileEveryKeyPath;
-                    }
-                    ctx.FileProviderEverys[fileEveryKey] = fileEveryConfig;
+                    // 将路径转换为 prefix（用于 FileServerItem）
+                    var prefix = PathToFileServerPrefix(path);
+                    var fileServerId = BuildFileServerConfig(blockFileServerConfig, prefix, hosts, ctx);
 
                     // 创建文件服务路由，将 * 替换为 {**file-all}
                     var matchPath = NormalizeFileServerPath(path);
@@ -841,7 +824,7 @@ public static class LyToAppSettingsConverter
                         ["Order"] = ctx.NextRouteOrder(matchPath, hosts.Count > 0)
                     };
 
-                    ctx.Routes[routeId] = routeConfig;
+                    ctx.Routes[fileServerId] = routeConfig;
                 }
                 else if (blockHasRespond)
                 {
@@ -928,13 +911,9 @@ public static class LyToAppSettingsConverter
             }
             else if (hasFileServer)
             {
-                // 默认文件服务
+                // 默认文件服务 - 使用 fileserver_xxx 作为路由 ID
                 ctx.HasFileServerRoute = true;
-                var routeId = ctx.NextRouteId();
-                var fileEveryConfig = BuildFileEveryConfig(defaultFileServerConfig);
-                // 默认路由使用 / 前缀匹配所有路径
-                var fileEveryKey = hosts.Count > 0 ? $"{hosts[0]}#/" : "/";
-                ctx.FileProviderEverys[fileEveryKey] = fileEveryConfig;
+                var fileServerId = BuildFileServerConfig(defaultFileServerConfig, "/", hosts, ctx);
 
                 // 创建文件服务路由
                 var match = new Dictionary<string, object>
@@ -954,72 +933,9 @@ public static class LyToAppSettingsConverter
                     ["Order"] = ctx.NextRouteOrder("/{**file-all}", hosts.Count > 0)
                 };
 
-                ctx.Routes[routeId] = routeConfig;
+                ctx.Routes[fileServerId] = routeConfig;
             }
         }
-    }
-
-    /// <summary>
-    /// 构建 FileEveryConfig
-    /// </summary>
-    private static Dictionary<string, object> BuildFileEveryConfig(Dictionary<string, object> config)
-    {
-        var result = new Dictionary<string, object>();
-
-        // 默认使用当前目录
-        var basePath = Environment.CurrentDirectory;
-
-        foreach (var kv in config)
-        {
-            var key = kv.Key.ToLower();
-            switch (key)
-            {
-                case "root":
-                case "basepath":
-                case "base_path":
-                    basePath = kv.Value?.ToString() ?? basePath;
-                    break;
-                case "browse":
-                    result["Browse"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
-                    break;
-                case "default":
-                case "index":
-                    if (kv.Value is List<object> defaultList)
-                    {
-                        result["Default"] = defaultList.Select(x => x?.ToString() ?? "").ToList();
-                    }
-                    else if (kv.Value is string defaultStr)
-                    {
-                        result["Default"] = defaultStr.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
-                    }
-                    break;
-                case "try_files":
-                case "tryfiles":
-                    if (kv.Value is List<object> tryList)
-                    {
-                        result["TryFiles"] = tryList.Select(x => x?.ToString() ?? "").ToArray();
-                    }
-                    else if (kv.Value is string tryStr)
-                    {
-                        result["TryFiles"] = tryStr.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                    }
-                    break;
-                case "precompressed":
-                case "pre_compressed":
-                    result["PreCompressed"] = kv.Value is bool pb ? pb : kv.Value?.ToString()?.ToLower() == "true";
-                    break;
-                case "max_file_size":
-                case "maxfilesize":
-                    if (long.TryParse(kv.Value?.ToString(), out var maxSize))
-                    {
-                        result["MaxFileSize"] = maxSize;
-                    }
-                    break;
-            }
-        }
-
-        result["BasePath"] = basePath;
-        return result;
     }
 
     /// <summary>
@@ -1033,8 +949,8 @@ public static class LyToAppSettingsConverter
     /// </summary>
     private static string BuildSimpleResConfig(Dictionary<string, object> config, LyConfigContext ctx)
     {
-        // 生成唯一的 SimpleRes Key（同时作为路由 ID）
-        var key = ctx.NextSimpleResKey();
+        // 生成唯一的 SimpleRes ID（同时作为路由 ID）
+        var key = ctx.NextSimpleResId();
         
         // 构建 SimpleRes Item
         var item = new Dictionary<string, object>();
@@ -1091,6 +1007,91 @@ public static class LyToAppSettingsConverter
 
         // 返回 key 作为路由 ID
         return key;
+    }
+
+    /// <summary>
+    /// 构建 file_server 指令的 FileServer 配置
+    /// 创建 FileServer 条目并返回路由 ID（格式: fileserver_xxx）
+    /// </summary>
+    private static string BuildFileServerConfig(
+        Dictionary<string, object> config,
+        string prefix,
+        List<string> hosts,
+        LyConfigContext ctx)
+    {
+        // 生成唯一的 FileServer ID（同时作为路由 ID）
+        var fileServerId = ctx.NextFileServerId();
+        
+        // 构建 FileServer Item
+        var item = new Dictionary<string, object>
+        {
+            ["Prefix"] = prefix
+        };
+
+        // 默认使用当前目录
+        var basePath = Environment.CurrentDirectory;
+
+        foreach (var kv in config)
+        {
+            var key = kv.Key.ToLower();
+            switch (key)
+            {
+                case "root":
+                case "basepath":
+                case "base_path":
+                    basePath = kv.Value?.ToString() ?? basePath;
+                    break;
+                case "browse":
+                    item["Browse"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "default":
+                case "index":
+                    if (kv.Value is List<object> defaultList)
+                    {
+                        item["Default"] = defaultList.Select(x => x?.ToString() ?? "").ToHashSet();
+                    }
+                    else if (kv.Value is string defaultStr)
+                    {
+                        item["Default"] = defaultStr.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+                    }
+                    break;
+                case "try_files":
+                case "tryfiles":
+                    if (kv.Value is List<object> tryList)
+                    {
+                        item["TryFiles"] = tryList.Select(x => x?.ToString() ?? "").ToArray();
+                    }
+                    else if (kv.Value is string tryStr)
+                    {
+                        item["TryFiles"] = tryStr.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    }
+                    break;
+                case "precompressed":
+                case "pre_compressed":
+                    item["PreCompressed"] = kv.Value is bool pb ? pb : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "max_file_size":
+                case "maxfilesize":
+                    if (kv.Value is long lfs)
+                    {
+                        item["MaxFileSize"] = lfs;
+                    }
+                    else if (long.TryParse(kv.Value?.ToString(), out var parsedSize))
+                    {
+                        item["MaxFileSize"] = parsedSize;
+                    }
+                    break;
+            }
+        }
+
+        // 设置 BasePath
+        item["BasePath"] = basePath;
+
+        // 添加到 FileServer Items
+        ctx.FileServerItems[fileServerId] = item;
+
+        // 返回 fileServerId 作为路由 ID
+        return fileServerId;
     }
 
     /// <summary>
@@ -1241,12 +1242,12 @@ public static class LyToAppSettingsConverter
     }
 
     /// <summary>
-    /// 将路径转换为 FileProviderEverys 的键
+    /// 将路径转换为 FileServer 的 Prefix
     /// 简单通配符使用前缀匹配，带括号的扩展名过滤才使用正则表达式
     /// 例如: /static/* -> /static/（前缀匹配）
     /// 例如: /show/*(.png|.jpg) -> ^/show/.*(.png|.jpg)$（正则匹配）
     /// </summary>
-    private static string PathToFileEveryKey(string path)
+    private static string PathToFileServerPrefix(string path)
     {
         // 确保路径以 / 开头
         if (!path.StartsWith('/'))

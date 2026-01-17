@@ -230,27 +230,31 @@ public class Program
             });
         }
         builder.Configuration.AddJsonStream(CommonUtil.ObjectToStream("WafInfos", waf));
-        var fileProvider = new FileProviderOptions { };
+        
+        // 构建 FileServerOptions（新配置）
+        var routeId = "fileserver_1";
         var indexFiles = file.IndexFiles.ToArray();
-        var fileEvery = new FileEveryConfig
+        var fileServerItem = new FileServerItem
         {
             BasePath = file.Root ?? Directory.GetCurrentDirectory(),
             TryFiles = file.TryFiles.ToArray(),
             Browse = file.Browse,
             PreCompressed = file.PreCompressed,
+            Prefix = "/"
         };
         if (indexFiles.Length > 0)
         {
-            fileEvery.Default = [.. indexFiles];
+            fileServerItem.Default = [.. indexFiles];
         }
-        fileProvider.Everys.Add("/", fileEvery);
-        builder.Configuration.AddJsonStream(CommonUtil.ObjectToStream("FileProvider", fileProvider));
+        var fileServer = new LyWaf.Services.Files.FileServerOptions();
+        fileServer.Items[routeId] = fileServerItem;
+        builder.Configuration.AddJsonStream(CommonUtil.ObjectToStream("FileServer", fileServer));
 
         var routes = new[]
         {
             new RouteConfig
             {
-                RouteId = "file-route",
+                RouteId = routeId,
                 ClusterId = "file-cluster",
                 Match = new RouteMatch
                 {
@@ -599,12 +603,12 @@ public class Program
                 warnings.Add("ReverseProxy 配置不存在");
             }
 
-            // 验证 FileProvider 配置
-            var fileProviderSection = config.GetSection("FileProvider");
-            if (fileProviderSection.Exists())
+            // 验证 FileServer 配置
+            var fileServerSection = config.GetSection("FileServer");
+            if (fileServerSection.Exists())
             {
-                var everys = fileProviderSection.GetSection("Everys").GetChildren().ToList();
-                _logger.Info("✓ FileProvider.Everys 配置了 {Count} 个路径映射", everys.Count);
+                var items = fileServerSection.GetSection("Items").GetChildren().ToList();
+                _logger.Info("✓ FileServer.Items 配置了 {Count} 个文件服务", items.Count);
             }
 
             _logger.Info("");
@@ -997,7 +1001,8 @@ public class Program
         builder.Services.Configure<WafInfoOptions>(builder.Configuration.GetSection("WafInfos"));
         builder.Services.Configure<ProtectOptions>(builder.Configuration.GetSection("Protect"));
         builder.Services.Configure<SpeedLimitOptions>(builder.Configuration.GetSection("SpeedLimit"));
-        builder.Services.Configure<FileProviderOptions>(builder.Configuration.GetSection("FileProvider"));
+        builder.Services.Configure<FileProviderOptions>(builder.Configuration.GetSection("FileGlobal"));
+        builder.Services.Configure<LyWaf.Services.Files.FileServerOptions>(builder.Configuration.GetSection("FileServer"));
         builder.Services.Configure<StatisticOptions>(builder.Configuration.GetSection("Statistic"));
         builder.Services.Configure<AccessControlOptions>(builder.Configuration.GetSection("AccessControl"));
         builder.Services.Configure<CompressOptions>(builder.Configuration.GetSection("Compress"));

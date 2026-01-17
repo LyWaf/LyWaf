@@ -1,17 +1,41 @@
 
 using Microsoft.Net.Http.Headers;
+using Microsoft.Extensions.Options;
 using LyWaf.Services.Files;
 using NLog;
 using System.Text.Unicode;
 using System.Text;
 using LyWaf.Utils;
+using Yarp.ReverseProxy.Model;
 
 namespace LyWaf.Middleware;
 
-public class FileProviderMiddleware(RequestDelegate next)
+public class FileProviderMiddleware : IDisposable
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
-    private readonly RequestDelegate _next = next;
+    private readonly RequestDelegate _next;
+    private readonly IOptionsMonitor<Services.Files.FileServerOptions> _optionsMonitor;
+    private readonly IDisposable? _optionsChangeToken;
+    private Services.Files.FileServerOptions _currentOptions;
+
+    public FileProviderMiddleware(RequestDelegate next, IOptionsMonitor<Services.Files.FileServerOptions> options)
+    {
+        _next = next;
+        _optionsMonitor = options;
+        _currentOptions = options.CurrentValue;
+        _optionsChangeToken = _optionsMonitor.OnChange(OnOptionsChanged);
+    }
+
+    private void OnOptionsChanged(Services.Files.FileServerOptions newOptions)
+    {
+        _logger.Info("FileServer 配置已更新，共 {Count} 个文件服务项", newOptions.Items.Count);
+        _currentOptions = newOptions;
+    }
+
+    public void Dispose()
+    {
+        _optionsChangeToken?.Dispose();
+    }
     private const string BROWSE_HEADER = """
 <head>
     <meta charset="utf-8">
@@ -281,17 +305,46 @@ public class FileProviderMiddleware(RequestDelegate next)
 
     public async Task InvokeAsync(HttpContext context)
     {
-        var fileService = context.RequestServices.GetRequiredService<IFileService>();
-        var exists = context.Request.RouteValues.ContainsKey("file-all");
-        if (!exists)
+        // 检查路由 ID 是否为 fileserver_xxx 格式
+        var endpoint = context.GetEndpoint();
+        var routeModel = endpoint?.Metadata.GetMetadata<RouteModel>();
+        var routeId = routeModel?.Config?.RouteId;
+
+        FileServerItem? fileServerItem = null;
+        string? prefix = null;
+
+        // 如果路由 ID 是 fileserver_xxx 格式，从 FileServerOptions 获取配置
+        if (!string.IsNullOrEmpty(routeId) && routeId.StartsWith("fileserver_"))
+        {
+            var options = _currentOptions;
+            if (options.Items.TryGetValue(routeId, out fileServerItem))
+            {
+                prefix = fileServerItem.Prefix;
+                _logger.Debug("FileServer matched: RouteId={RouteId}, Prefix={Prefix}", routeId, prefix);
+            }
+            else
+            {
+                _logger.Warn("FileServer config not found for route: {RouteId}", routeId);
+            }
+        }
+
+        // 如果没有匹配到 fileserver_ 路由，跳过
+        if (fileServerItem == null)
         {
             await _next(context);
             return;
         }
-        // 使用完整的 Host（包含端口），与 LyToYaml 生成的 FileProviderEverys 键格式一致
-        var host = context.Request.Host.ToString();
+
+        var fileService = context.RequestServices.GetRequiredService<IFileService>();
         var path = context.Request.RouteValues["file-all"]?.ToString() ?? "";
-        var prefix = context.Request.Path.ToString();
+        
+        // 从 FileServerOptions 获取到 prefix 时，需要计算完整的请求路径
+        var requestPath = context.Request.Path.ToString();
+        // 如果请求路径比 prefix 长，提取 path 部分
+        if (requestPath.Length > prefix!.Length)
+        {
+            path = requestPath[prefix.Length..].TrimStart('/');
+        }
 
         if (!prefix.EndsWith('/') && path.Length == 0)
         {
@@ -303,7 +356,10 @@ public class FileProviderMiddleware(RequestDelegate next)
         {
             prefix = prefix.Remove(prefix.Length - remove.Length);
         }
-        var real = await fileService.GetFileRealAsync(context.Request, host, prefix, path);
+        
+        // 使用 FileServerItem 的配置直接获取文件
+        var fileConfig = fileServerItem.ToFileEveryConfig();
+        var real = await fileService.GetFileRealAsync(context.Request, fileConfig, requestPath,  path);
         _logger.Debug("请求本地的文件服务:'{}':'{}', 实际映射:{}", prefix, path, real);
         if (real == null)
         {
@@ -312,14 +368,25 @@ public class FileProviderMiddleware(RequestDelegate next)
             return;
         }
 
-        // 目录, 返回目录结构
+        // 目录处理
         if (real.IsDirectory)
         {
-            var fullPath = context.Request.Path.ToString();
-            if(!fullPath.EndsWith('/')) {
-                context.Response.Redirect(fullPath + "/");
+            // 如果目录路径不以 / 结尾，重定向到带 / 的路径
+            if (!requestPath.EndsWith('/'))
+            {
+                context.Response.Redirect(requestPath + "/");
                 return;
             }
+            
+            // 如果未启用 Browse，返回 403
+            if (!fileConfig.Browse)
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsync("Directory listing not allowed");
+                return;
+            }
+            
+            // 返回目录结构
             StringBuilder sb = new("<!doctype html>\n<html>");
             sb.Append(BROWSE_HEADER);
             sb.Append("<body>");
@@ -360,7 +427,7 @@ public class FileProviderMiddleware(RequestDelegate next)
             _ = RangeHeaderValue.TryParse(value.ToString(), out rangeHeader);
         }
 
-        var result = await fileService.GetFileAsync(host, prefix, path, real.Path, rangeHeader);
+        var result = await fileService.GetFileAsync(fileConfig, path, real.Path, rangeHeader);
 
         SetResponseHeaders(context, result, real.PreCompressed);
         context.Response.StatusCode = result.StatusCode;

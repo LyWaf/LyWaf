@@ -1,6 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
 using System.Text;
-using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
@@ -11,8 +9,8 @@ namespace LyWaf.Services.Files;
 
 public interface IFileService
 {
-    Task<FileGetInfo?> GetFileRealAsync(HttpRequest request, string host, string prefix, string path);
-    Task<FileServiceResult> GetFileAsync(string host, string prefix, string requestPath, string realPath, RangeHeaderValue? range = null);
+    Task<FileGetInfo?> GetFileRealAsync(HttpRequest request, FileEveryConfig config, string requestPath, string path);
+    Task<FileServiceResult> GetFileAsync(FileEveryConfig config, string requestPath, string realPath, RangeHeaderValue? range = null);
     Task<FileMetadata> GetFileMetadataAsync(string path);
 }
 public class FileService : IFileService
@@ -22,271 +20,26 @@ public class FileService : IFileService
     private readonly ILogger<FileService> _logger;
 
     private readonly static HashSet<string> PreCompressExtension = [".gz", ".zst", ".br"];
-    
-    // localhost, 127.0.0.1, [::1] 互相等价
-    private static readonly HashSet<string> LocalhostAliases = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "localhost",
-        "127.0.0.1",
-        "[::1]",
-        "::1"
-    };
-
-    /// <summary>
-    /// 从 host:port 格式中提取主机名部分
-    /// </summary>
-    private static string ExtractHostname(string hostWithPort)
-    {
-        if (string.IsNullOrEmpty(hostWithPort))
-            return hostWithPort;
-        
-        // 处理 IPv6 地址格式 [::1]:port
-        if (hostWithPort.StartsWith('['))
-        {
-            var bracketEnd = hostWithPort.IndexOf(']');
-            if (bracketEnd > 0)
-            {
-                return hostWithPort[..(bracketEnd + 1)];
-            }
-        }
-        
-        // 处理普通的 host:port 格式
-        var colonIndex = hostWithPort.LastIndexOf(':');
-        if (colonIndex > 0 && int.TryParse(hostWithPort[(colonIndex + 1)..], out _))
-        {
-            return hostWithPort[..colonIndex];
-        }
-        
-        return hostWithPort;
-    }
-    
-    /// <summary>
-    /// 从 host:port 格式中提取端口部分
-    /// </summary>
-    private static int? ExtractPort(string hostWithPort)
-    {
-        if (string.IsNullOrEmpty(hostWithPort))
-            return null;
-        
-        // 处理 IPv6 地址格式 [::1]:port
-        if (hostWithPort.StartsWith('['))
-        {
-            var bracketEnd = hostWithPort.IndexOf(']');
-            if (bracketEnd > 0 && bracketEnd + 1 < hostWithPort.Length && hostWithPort[bracketEnd + 1] == ':')
-            {
-                if (int.TryParse(hostWithPort[(bracketEnd + 2)..], out var port))
-                {
-                    return port;
-                }
-            }
-            return null;
-        }
-        
-        // 处理普通的 host:port 格式
-        var colonIndex = hostWithPort.LastIndexOf(':');
-        if (colonIndex > 0 && int.TryParse(hostWithPort[(colonIndex + 1)..], out var p))
-        {
-            return p;
-        }
-        
-        return null;
-    }
-
-    /// <summary>
-    /// 判断是否为本地主机地址（不含端口）
-    /// </summary>
-    private static bool IsLocalhost(string hostname) => LocalhostAliases.Contains(hostname);
-    
-    /// <summary>
-    /// 判断两个主机是否匹配（考虑本地回环地址等价，支持带端口格式）
-    /// </summary>
-    private static bool HostEquals(string host1, string host2)
-    {
-        if (host1.Equals(host2, StringComparison.OrdinalIgnoreCase))
-            return true;
-        
-        // 提取主机名和端口
-        var hostname1 = ExtractHostname(host1);
-        var hostname2 = ExtractHostname(host2);
-        var port1 = ExtractPort(host1);
-        var port2 = ExtractPort(host2);
-        
-        // 端口必须匹配（如果都有端口的话）
-        if (port1.HasValue && port2.HasValue && port1.Value != port2.Value)
-            return false;
-        
-        // 主机名精确匹配
-        if (hostname1.Equals(hostname2, StringComparison.OrdinalIgnoreCase))
-            return true;
-        
-        // localhost, 127.0.0.1, [::1] 互相匹配
-        return IsLocalhost(hostname1) && IsLocalhost(hostname2);
-    }
 
     public FileService(
         IOptionsMonitor<FileProviderOptions> options, IMemoryCache cache,
         ILogger<FileService> logger)
     {
-        _options = options.CurrentValue.PreDeal();
-        // 可以订阅变更，但需注意生命周期和内存泄漏
+        _options = options.CurrentValue;
         options.OnChange(newConfig =>
         {
-            _options = newConfig.PreDeal();
+            _options = newConfig;
         });
         _cache = cache;
         _logger = logger;
     }
 
-    private string? TryGetConfig(string host, string prefix, string? path, [MaybeNullWhen(false)] out FileEveryConfig? config)
+    public async Task<FileGetInfo?> GetFileRealAsync(HttpRequest request, FileEveryConfig config,  string requestPath, string path)
     {
-        // 先尝试精确匹配
-        string key = $"{host}#{prefix}";
-        if (_options.Everys.TryGetValue(key, out config))
-        {
-            return key;
-        }
-        
-        // 尝试本地回环地址的等价匹配（带端口）
-        var hostname = ExtractHostname(host);
-        var port = ExtractPort(host);
-        if (IsLocalhost(hostname))
-        {
-            foreach (var alias in LocalhostAliases)
-            {
-                // 带端口的别名
-                if (port.HasValue)
-                {
-                    var aliasKeyWithPort = $"{alias}:{port}#{prefix}";
-                    if (_options.Everys.TryGetValue(aliasKeyWithPort, out config))
-                    {
-                        return aliasKeyWithPort;
-                    }
-                }
-                // 不带端口的别名
-                var aliasKey = $"{alias}#{prefix}";
-                if (_options.Everys.TryGetValue(aliasKey, out config))
-                {
-                    return aliasKey;
-                }
-            }
-        }
-        
-        if (_options.Everys.TryGetValue(prefix, out config))
-        {
-            return prefix;
-        }
-
-        var normalizedPrefix = prefix.TrimEnd('/');
-        if (!normalizedPrefix.StartsWith('/'))
-        {
-            normalizedPrefix = "/" + normalizedPrefix;
-        }
-
-        // 完整路径用于正则匹配（正则需要匹配完整路径包括文件名）
-        var fullPath = normalizedPrefix;
-        if (!string.IsNullOrEmpty(path))
-        {
-            fullPath = normalizedPrefix.TrimEnd('/') + "/" + path.TrimStart('/');
-        }
-
-        // 使用缓存来存储匹配结果，避免重复的正则匹配
-        var cacheKey = $"file_config_{host}#{fullPath}";
-        var matchedKey = _cache.GetOrCreate(cacheKey, entry =>
-        {
-            entry.AbsoluteExpirationRelativeToNow = _options.CacheDuration;
-            
-            // 尝试前缀匹配和正则匹配
-            // 优先匹配带 host 的键
-            foreach (var kv in _options.Everys)
-            {
-                var everyKey = kv.Key;
-                if (!everyKey.Contains('#'))
-                    continue;
-                    
-                var parts = everyKey.Split('#', 2);
-                // 使用 HostEquals 判断，支持本地回环地址等价
-                if (!HostEquals(parts[0], host))
-                    continue;
-                    
-                var pattern = parts[1];
-                if (MatchPattern(normalizedPrefix, fullPath, pattern))
-                {
-                    return everyKey;
-                }
-            }
-            
-            // 匹配不带 host 的键
-            foreach (var kv in _options.Everys)
-            {
-                var everyKey = kv.Key;
-                if (everyKey.Contains('#'))
-                    continue;
-                    
-                if (MatchPattern(normalizedPrefix, fullPath, everyKey))
-                {
-                    return everyKey;
-                }
-            }
-
-            // 返回空字符串表示未匹配
-            return string.Empty;
-        });
-
-        // 空字符串表示未匹配
-        if (string.IsNullOrEmpty(matchedKey))
-        {
-            config = null;
-            return null;
-        }
-
-        // 根据缓存的键获取配置
-        if (_options.Everys.TryGetValue(matchedKey, out config))
-        {
-            return matchedKey;
-        }
-
-        config = null;
-        return null;
-    }
-
-    /// <summary>
-    /// 匹配路径模式
-    /// 支持前缀匹配（如 /static/）和正则匹配（如 ^/show/[^/]*(\.png|\.jpg)$）
-    /// </summary>
-    /// <param name="prefix">前缀路径，用于前缀匹配</param>
-    /// <param name="fullPath">完整路径（包含文件名），用于正则匹配</param>
-    /// <param name="pattern">匹配模式</param>
-    private static bool MatchPattern(string prefix, string fullPath, string pattern)
-    {
-        // 正则表达式匹配（以 ^ 开头）- 使用完整路径
-        if (pattern.StartsWith('^'))
-        {
-            try
-            {
-                return Regex.IsMatch(fullPath, pattern);
-            }
-            catch
-            {
-                return false;
-            }
-        }
-        
-        // 前缀匹配（如 /static/）- 使用前缀
-        // prefix: /static, pattern: /static/ -> true
-        return prefix.StartsWith(pattern) || prefix + "/" == pattern;
-    }
-
-    public async Task<FileGetInfo?> GetFileRealAsync(HttpRequest request, string host, string prefix, string path)
-    {
-        var key = TryGetConfig(host, prefix, path, out var val);
-        if (key == null)
-        {
-            return null;
-        }
         var accepts = request.Headers.AcceptEncoding.ToString().Split(",").Select(item => item.Trim()).ToArray();
-        var safePath = GetSafePath(val!.BasePath, path);
-        var cacheKey = $"exists_{key}_{safePath}";
-        if (val!.PreCompressed)
+        var safePath = GetSafePath(config.BasePath, path);
+        var cacheKey = $"exists_direct_{config.BasePath}_{requestPath}_{safePath}";
+        if (config.PreCompressed)
         {
             cacheKey += "_" + accepts.ToString();
         }
@@ -294,14 +47,14 @@ public class FileService : IFileService
         return await _cache.GetOrCreateAsync(cacheKey, async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = _options.CacheDuration;
-            if (val.TryFiles != null)
+            if (config.TryFiles != null)
             {
-                foreach (var f in val.TryFiles)
+                foreach (var f in config.TryFiles)
                 {
                     var v = f.Replace("$path", path);
-                    var safePath = GetSafePath(val.BasePath, v);
+                    var tryPath = GetSafePath(config.BasePath, v);
 
-                    var real = GetRealPath(safePath, val, accepts);
+                    var real = GetRealPath(tryPath, false, config, accepts);
                     if (real != null)
                     {
                         return real;
@@ -311,13 +64,13 @@ public class FileService : IFileService
             }
             else
             {
-                var safePath = GetSafePath(val.BasePath, path);
-                return GetRealPath(safePath, val, accepts);
+                var tryPath = GetSafePath(config.BasePath, path);
+                return GetRealPath(tryPath, requestPath.EndsWith('/'),  config, accepts);
             }
         });
     }
 
-    public async Task<FileServiceResult> GetFileAsync(string host, string prefix, string requestPath, string realPath, RangeHeaderValue? range = null)
+    public async Task<FileServiceResult> GetFileAsync(FileEveryConfig config, string requestPath, string realPath, RangeHeaderValue? range = null)
     {
         if (!File.Exists(realPath))
             return FileServiceResult.NotFound();
@@ -328,13 +81,8 @@ public class FileService : IFileService
         {
             return FileServiceResult.NoSupportContentType();
         }
-        var key = TryGetConfig(host, prefix, requestPath, out var val);
-        if (key == null)
-        {
-            return FileServiceResult.NotFound();
-        }
 
-        if (val!.MaxFileSize * 1024 < metadata.Size)
+        if (config.MaxFileSize * 1024 < metadata.Size)
         {
             return FileServiceResult.FileToBigger();
         }
@@ -440,7 +188,7 @@ public class FileService : IFileService
         return fullPath;
     }
 
-    private static FileGetInfo? GetRealPath(string path, FileEveryConfig fileEveryConfig, string[] accepts)
+    private static FileGetInfo? GetRealPath(string path, bool tryFiles, FileEveryConfig fileEveryConfig, string[] accepts)
     {
         if (fileEveryConfig.PreCompressed)
         {
@@ -472,18 +220,18 @@ public class FileService : IFileService
 
         if (Directory.Exists(path))
         {
-            foreach (var def in fileEveryConfig.Default)
-            {
-                var subPath = GetSafePath(path, def);
-                if (File.Exists(subPath))
+            if(tryFiles) {
+                foreach (var def in fileEveryConfig.Default)
                 {
-                    return new FileGetInfo(subPath);
+                    var subPath = GetSafePath(path, def);
+                    if (File.Exists(subPath))
+                    {
+                        return new FileGetInfo(subPath);
+                    }
                 }
             }
-            if (fileEveryConfig.Browse)
-            {
-                return new FileGetInfo(path, true);
-            }
+            // 目录存在，返回目录信息（用于重定向或浏览）
+            return new FileGetInfo(path, true);
         }
         return null;
     }

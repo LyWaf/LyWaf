@@ -1,8 +1,10 @@
 namespace LyWaf.Services.Files;
 
+/// <summary>
+/// 文件服务全局选项（缓存时间、MIME 类型映射等）
+/// </summary>
 public class FileProviderOptions
 {
-    public Dictionary<string, FileEveryConfig> Everys { get; set; } = [];
     public TimeSpan CacheDuration { get; set; } = TimeSpan.FromMinutes(1);
     public HashSet<string> AllowedExtensions { get; set; } = [".txt", ".pdf", ".jpg", ".png", ".gif", ".mp4", ".mp3", ".zip"];
     public Dictionary<string, string> MimeExtensions { get; set; } = new Dictionary<string, string> {
@@ -12,17 +14,6 @@ public class FileProviderOptions
     public HashSet<string> RemoveExtensions { get; set; } = [];
     public bool EnableRangeProcessing { get; set; } = true;
     public bool EnableCaching { get; set; } = true;
-
-    public FileProviderOptions PreDeal()
-    {
-        var newEverys = new Dictionary<string, FileEveryConfig>();
-        foreach (var (k, v) in Everys)
-        {
-            newEverys.Add(k.TrimEnd('/'), v);
-        }
-        Everys = newEverys;
-        return this;
-    }
 }
 
 public class FileEveryConfig
