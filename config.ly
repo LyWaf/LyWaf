@@ -7,6 +7,7 @@
 var domain = "example.com"
 var backend = "127.0.0.1:8080"
 var env = "production"
+
 localhost:5003
 /static/ {
     file_server {
@@ -15,4 +16,7 @@ localhost:5003
     }
 }
 
-reverse_proxy http://www.qq.com
+respond "hello world"
+status=201
+content-type="text/plain"
+show-req=true

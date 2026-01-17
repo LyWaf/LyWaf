@@ -317,54 +317,56 @@ FileProvider:
     ".png": "application/octet-stream"
 ReverseProxy:
   Routes:
-    route1:
-      ClusterId: cluster1
+    routetest:
+      ClusterId: cluster3
       Match:
-        Path: 'test1/{**catch-all}'
-      Transforms:
-        # Forwarded:proto=http;host="127.0.0.1:5002";for=192.168.1.117;by=_1ecb8ezFf
-        # -
-        #   Forwarded: by,for,host,proto
-        #   ForFormat: ip
-        #   ByFormat: Random
-        #   Action: Append
-        # 自动添加格式
-        # -
-        #   X-Forwarded: Set
-        #   For: Append
-        #   HeaderPrefix: X-Forwarded-
-        # -
-        #   RequestHeader: X-Forwarded-For
-        #   Append: '{RemoteIpAddress}'
-    route2:
-      ClusterId: cluster2
-      Match:
-        Path: '{**catch-all}'
-        Hosts:
-          - localhost
-      Metadata:
-        Port: 5002
-        Type: HTTP
-    route3:
-      ClusterId: cluster2
-      Match:
-        Path: 'file/{**file-all}'
-        Hosts:
-          - localhost
-      Metadata:
-        Port: 5002
-        Type: HTTP
-        RateLimiter: Concurrency
-    route4:
-      ClusterId: cluster2
-      Match:
-        Path: 'file/{**file-all}'
-        Hosts:
-          - localhost1
-      Metadata:
-        Port: 5003
-        Type: HTTP
-        RateLimiter: Concurrency
+        Path: /respond/{**catch-all}
+      DirectResponse:
+        StatusCode: 200
+        Content: "hello world"
+        ContentType: "text/plain"
+    # route1:
+    #   ClusterId: cluster1
+    #   Match:
+    #     Path: 'test1/{**catch-all}'
+    #   Transforms:
+    #     # Forwarded:proto=http;host="127.0.0.1:5002";for=192.168.1.117;by=_1ecb8ezFf
+    #     # -
+    #     #   Forwarded: by,for,host,proto
+    #     #   ForFormat: ip
+    #     #   ByFormat: Random
+    #     #   Action: Append
+    #     # 自动添加格式
+    #     # -
+    #     #   X-Forwarded: Set
+    #     #   For: Append
+    #     #   HeaderPrefix: X-Forwarded-
+    #     # -
+    #     #   RequestHeader: X-Forwarded-For
+    #     #   Append: '{RemoteIpAddress}'
+    # route2:
+    #   ClusterId: cluster2
+    #   Match:
+    #     Path: '/aaa/{**catch-all}'
+    #   Metadata:
+    #     Port: 5002
+    #     Type: HTTP
+    # route3:
+    #   ClusterId: cluster2
+    #   Match:
+    #     Path: 'file/{**file-all}'
+    #   Metadata:
+    #     Port: 5002
+    #     Type: HTTP
+    #     RateLimiter: Concurrency
+    # route4:
+    #   ClusterId: cluster2
+    #   Match:
+    #     Path: 'file/{**file-all}'
+    #   Metadata:
+    #     Port: 5003
+    #     Type: HTTP
+    #     RateLimiter: Concurrency
   Clusters:
     cluster1:
       # =============== HTTP客户端/连接池配置 ===============
@@ -457,3 +459,10 @@ ReverseProxy:
         destination1:
           # Address: 'http://127.0.0.1:8080/'
           Address: 'https://mat1.gtimg.com/'
+    cluster3:
+      # 使用 IP 哈希策略
+      LoadBalancingPolicy: IpHash
+      Destinations:
+        destination1:
+          # Address: 'http://127.0.0.1:8080/'
+          Address: 'https://0.0.0.0'

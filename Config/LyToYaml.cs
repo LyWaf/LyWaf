@@ -208,6 +208,16 @@ public class LyConfigContext
     public bool HasFileServerRoute { get; set; } = false;
     
     /// <summary>
+    /// SimpleRes 简单响应配置
+    /// </summary>
+    public Dictionary<string, object> SimpleResItems { get; } = new();
+    
+    /// <summary>
+    /// SimpleRes 索引计数器
+    /// </summary>
+    public int SimpleResIndex { get; set; } = 1;
+    
+    /// <summary>
     /// Order 计数器，确保全局唯一
     /// </summary>
     private int _orderCounter = 0;
@@ -253,6 +263,11 @@ public class LyConfigContext
     /// 获取下一个 Cluster ID
     /// </summary>
     public string NextClusterId() => $"cluster{ClusterIndex++}";
+    
+    /// <summary>
+    /// 获取下一个 SimpleRes Key
+    /// </summary>
+    public string NextSimpleResKey() => $"simpleres_{SimpleResIndex++}";
 }
 
 /// <summary>
@@ -359,6 +374,15 @@ public static class LyToAppSettingsConverter
             result["FileProvider"] = new Dictionary<string, object>
             {
                 ["Everys"] = ctx.FileProviderEverys
+            };
+        }
+
+        // 构建 SimpleRes
+        if (ctx.SimpleResItems.Count > 0)
+        {
+            result["SimpleRes"] = new Dictionary<string, object>
+            {
+                ["Items"] = ctx.SimpleResItems
             };
         }
 
@@ -540,6 +564,33 @@ public static class LyToAppSettingsConverter
                         ["Order"] = ctx.NextRouteOrder("/{**catch-all}", hosts.Count > 0)
                     };
                 }
+                else if (directive == "respond" && parts.Length > 1)
+                {
+                    // 简化的 respond 配置: respond "body"
+                    var respondConfig = new Dictionary<string, object>
+                    {
+                        ["body"] = string.Join(" ", parts.Skip(1))
+                    };
+                    
+                    // 使用 simpleres_xxx 作为路由 ID
+                    var routeId = BuildSimpleResConfig(respondConfig, ctx);
+                    var match = new Dictionary<string, object>
+                    {
+                        ["Path"] = "/{**catch-all}"
+                    };
+                    if (hosts.Count > 0)
+                    {
+                        match["Hosts"] = hosts;
+                    }
+
+                    ctx.Routes[routeId] = new Dictionary<string, object>
+                    {
+                        ["ClusterId"] = "cluster1",
+                        ["Match"] = match,
+                        ["Order"] = ctx.NextRouteOrder("/{**catch-all}", hosts.Count > 0)
+                    };
+                    ctx.HasFileServerRoute = true; // 确保 cluster1 存在
+                }
             }
             return;
         }
@@ -552,6 +603,8 @@ public static class LyToAppSettingsConverter
             var defaultClusterConfig = new Dictionary<string, object>();
             var hasFileServer = false;
             var defaultFileServerConfig = new Dictionary<string, object>();
+            var hasRespond = false;
+            var defaultRespondConfig = new Dictionary<string, object>();
 
             foreach (var directive in siteContent)
             {
@@ -597,6 +650,44 @@ public static class LyToAppSettingsConverter
                             }
                             break;
 
+                        case "respond":
+                            hasRespond = true;
+                            if (directive.Value is Dictionary<string, object> respondConfig)
+                            {
+                                foreach (var kv in respondConfig)
+                                {
+                                    defaultRespondConfig[kv.Key] = kv.Value;
+                                }
+                            }
+                            else if (directive.Value is string respondBody)
+                            {
+                                defaultRespondConfig["body"] = respondBody;
+                            }
+                            break;
+
+                        case "status":
+                            // respond 的状态码配置
+                            defaultRespondConfig["status"] = directive.Value;
+                            break;
+
+                        case "content-type":
+                        case "content_type":
+                            // respond 的 Content-Type 配置
+                            defaultRespondConfig["content-type"] = directive.Value;
+                            break;
+
+                        case "charset":
+                            // respond 的编码配置
+                            defaultRespondConfig["charset"] = directive.Value;
+                            break;
+
+                        case "show-req":
+                        case "show_req":
+                        case "showreq":
+                            // respond 的显示请求头配置
+                            defaultRespondConfig["show_req"] = directive.Value;
+                            break;
+
                         // file_server 的相关配置属性（非嵌套配置时这些是平级的）
                         case "root":
                         case "basepath":
@@ -625,6 +716,9 @@ public static class LyToAppSettingsConverter
                 var blockHasFileServer = false;
                 var blockFileServerConfig = new Dictionary<string, object>();
 
+                var blockHasRespond = false;
+                var blockRespondConfig = new Dictionary<string, object>();
+
                 // 解析 handle 块内的配置
                 foreach (var kv in config)
                 {
@@ -643,6 +737,35 @@ public static class LyToAppSettingsConverter
                         case "lb_policy":
                         case "load_balancing_policy":
                             clusterConfig["LoadBalancingPolicy"] = kv.Value.ToString()!;
+                            break;
+                        case "respond":
+                            blockHasRespond = true;
+                            if (kv.Value is Dictionary<string, object> respondConfig)
+                            {
+                                foreach (var rkv in respondConfig)
+                                {
+                                    blockRespondConfig[rkv.Key] = rkv.Value;
+                                }
+                            }
+                            else if (kv.Value is string respondBody)
+                            {
+                                blockRespondConfig["body"] = respondBody;
+                            }
+                            break;
+                        case "status":
+                            blockRespondConfig["status"] = kv.Value;
+                            break;
+                        case "content-type":
+                        case "content_type":
+                            blockRespondConfig["content-type"] = kv.Value;
+                            break;
+                        case "charset":
+                            blockRespondConfig["charset"] = kv.Value;
+                            break;
+                        case "show-req":
+                        case "show_req":
+                        case "showreq":
+                            blockRespondConfig["show_req"] = kv.Value;
                             break;
                     }
                 }
@@ -720,13 +843,38 @@ public static class LyToAppSettingsConverter
 
                     ctx.Routes[routeId] = routeConfig;
                 }
+                else if (blockHasRespond)
+                {
+                    // respond 路由 - 使用 simpleres_xxx 作为路由 ID
+                    var routeId = BuildSimpleResConfig(blockRespondConfig, ctx);
+                    var normalizedPath = NormalizePath(path);
+                    var match = new Dictionary<string, object>
+                    {
+                        ["Path"] = normalizedPath
+                    };
+                    if (hosts.Count > 0)
+                    {
+                        match["Hosts"] = hosts;
+                    }
+
+                    var routeConfig = new Dictionary<string, object>
+                    {
+                        ["ClusterId"] = "cluster1",
+                        ["Match"] = match,
+                        ["Order"] = ctx.NextRouteOrder(normalizedPath, hosts.Count > 0)
+                    };
+
+                    ctx.Routes[routeId] = routeConfig;
+                    ctx.HasFileServerRoute = true; // 确保 cluster1 存在
+                }
             }
 
-            // 检测冲突：同一域名下同时配置了默认的 file_server 和 reverse_proxy
-            if (defaultUpstreams.Count > 0 && hasFileServer)
+            // 检测冲突：同一域名下同时配置了默认的 respond 和 reverse_proxy/file_server
+            var conflictCount = (defaultUpstreams.Count > 0 ? 1 : 0) + (hasFileServer ? 1 : 0) + (hasRespond ? 1 : 0);
+            if (conflictCount > 1)
             {
                 var hostInfo = hosts.Count > 0 ? $"域名 {string.Join(", ", hosts)}" : "默认站点";
-                throw new LyConfigException($"配置错误：{hostInfo} 同时配置了根路径的 file_server 和 reverse_proxy，请将其中一个配置到具体路径下（如 /api/* 或 /static/*）");
+                throw new LyConfigException($"配置错误：{hostInfo} 同时配置了多个根路径处理器（respond/file_server/reverse_proxy），请将其中一些配置到具体路径下");
             }
 
             // 处理默认路由（没有指定路径的 reverse_proxy）
@@ -754,6 +902,29 @@ public static class LyToAppSettingsConverter
                 };
 
                 ctx.Routes[routeId] = routeConfig;
+            }
+            else if (hasRespond)
+            {
+                // respond 默认路由 - 使用 simpleres_xxx 作为路由 ID
+                var routeId = BuildSimpleResConfig(defaultRespondConfig, ctx);
+                var match = new Dictionary<string, object>
+                {
+                    ["Path"] = "/{**catch-all}"
+                };
+                if (hosts.Count > 0)
+                {
+                    match["Hosts"] = hosts;
+                }
+
+                var routeConfig = new Dictionary<string, object>
+                {
+                    ["ClusterId"] = "cluster1",
+                    ["Match"] = match,
+                    ["Order"] = ctx.NextRouteOrder("/{**catch-all}", hosts.Count > 0)
+                };
+
+                ctx.Routes[routeId] = routeConfig;
+                ctx.HasFileServerRoute = true; // 确保 cluster1 存在
             }
             else if (hasFileServer)
             {
@@ -849,6 +1020,77 @@ public static class LyToAppSettingsConverter
 
         result["BasePath"] = basePath;
         return result;
+    }
+
+    /// <summary>
+    /// 构建 respond 指令的 SimpleRes 配置
+    /// 创建 SimpleRes 条目并返回路由 ID（格式: simpleres_xxx）
+    /// 支持:
+    ///   - respond "body" - 设置响应体
+    ///   - status 201 - 设置状态码
+    ///   - content-type text/plain - 设置 Content-Type
+    ///   - charset utf-8 - 设置编码
+    /// </summary>
+    private static string BuildSimpleResConfig(Dictionary<string, object> config, LyConfigContext ctx)
+    {
+        // 生成唯一的 SimpleRes Key（同时作为路由 ID）
+        var key = ctx.NextSimpleResKey();
+        
+        // 构建 SimpleRes Item
+        var item = new Dictionary<string, object>();
+
+        // 获取响应体
+        if (config.TryGetValue("body", out var body))
+        {
+            item["Body"] = body?.ToString() ?? "";
+        }
+
+        // 获取 Content-Type，默认 text/plain
+        var contentType = "text/plain";
+        if (config.TryGetValue("content-type", out var ct))
+        {
+            contentType = ct?.ToString() ?? "text/plain";
+        }
+        item["ContentType"] = contentType;
+
+        // 获取状态码，默认 200
+        var statusCode = 200;
+        if (config.TryGetValue("status", out var status))
+        {
+            if (status is int intStatus)
+            {
+                statusCode = intStatus;
+            }
+            else if (int.TryParse(status?.ToString(), out var parsedStatus))
+            {
+                statusCode = parsedStatus;
+            }
+        }
+        item["StatusCode"] = statusCode;
+
+        // 获取编码，默认 utf-8
+        var charset = "utf-8";
+        if (config.TryGetValue("charset", out var cs))
+        {
+            charset = cs?.ToString() ?? "utf-8";
+        }
+        item["Charset"] = charset;
+
+        // 获取是否显示请求头
+        if (config.TryGetValue("show-req", out var showReq) || config.TryGetValue("show_req", out showReq) || config.TryGetValue("showreq", out showReq))
+        {
+            var showReqValue = showReq is bool b ? b : showReq?.ToString()?.ToLower() == "true";
+            if (showReqValue)
+            {
+                item["ShowReq"] = true;
+            }
+        }
+
+        // 添加到 SimpleRes Items
+        ctx.SimpleResItems[key] = item;
+
+        // 返回 key 作为路由 ID
+        return key;
     }
 
     /// <summary>

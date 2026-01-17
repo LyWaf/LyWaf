@@ -30,6 +30,7 @@ using LyWaf.Services.WafInfo;
 using LyWaf.Services.AccessControl;
 using LyWaf.Services.Compress;
 using LyWaf.Services.Acme;
+using LyWaf.Services.SimpleRes;
 using LyWaf.Config;
 
 using System.CommandLine;
@@ -643,6 +644,63 @@ public class Program
         }
     }
 
+    /// <summary>
+    /// 从命令行参数构建 SimpleResItem
+    /// </summary>
+    private static SimpleResItem BuildSimpleResItem(RespondCommandOptions respond, string host, int port)
+    {
+        // 解析 Headers
+        var headers = new Dictionary<string, string>();
+        foreach (var header in respond.Headers)
+        {
+            var parts = header.Split('=', 2);
+            if (parts.Length == 2 && !string.IsNullOrWhiteSpace(parts[0]))
+            {
+                var key = parts[0].Trim();
+                var value = parts[1].Trim();
+                headers[key] = value;
+            }
+            else
+            {
+                _logger.Warn("⚠ 忽略无效的 Header 格式: {Header}", header);
+            }
+        }
+
+        // 替换变量
+        var responseBody = respond.Body
+            .Replace("{Port}", port.ToString())
+            .Replace("{Address}", host);
+
+        // 从 headers 中提取 Content-Type 和 charset
+        var contentType = "text/plain";
+        var charset = "utf-8";
+        if (headers.TryGetValue("Content-Type", out var ctValue))
+        {
+            // 解析 Content-Type: text/html; charset=utf-8
+            var ctParts = ctValue.Split(';');
+            contentType = ctParts[0].Trim();
+            foreach (var part in ctParts.Skip(1))
+            {
+                var kv = part.Trim().Split('=', 2);
+                if (kv.Length == 2 && kv[0].Trim().Equals("charset", StringComparison.OrdinalIgnoreCase))
+                {
+                    charset = kv[1].Trim();
+                }
+            }
+            headers.Remove("Content-Type");
+        }
+
+        return new SimpleResItem
+        {
+            Body = responseBody,
+            StatusCode = respond.Status,
+            ContentType = contentType,
+            Charset = charset,
+            Headers = headers.Count > 0 ? headers : null,
+            ShowReq = respond.ShowReq
+        };
+    }
+
     public static void DoRespond(string[] args, RespondCommandOptions respond)
     {
         // 解析监听地址
@@ -681,94 +739,78 @@ public class Program
             return;
         }
 
-        // 解析 Headers
-        var headers = new Dictionary<string, string>();
-        foreach (var header in respond.Headers)
-        {
-            var parts = header.Split('=', 2);
-            if (parts.Length == 2 && !string.IsNullOrWhiteSpace(parts[0]))
-            {
-                var key = parts[0].Trim();
-                var value = parts[1].Trim();
-                headers[key] = value;
-            }
-            else
-            {
-                _logger.Warn("⚠ 忽略无效的 Header 格式: {Header}", header);
-            }
-        }
-
-        var responseBody = respond.Body
-            .Replace("{Port}", port.ToString())
-            .Replace("{Address}", host);
-        var statusCode = respond.Status;
-        if (!IPAddress.TryParse(host, out var ipAddress))
-        {
-            _logger.Error("不合法的Host格式{Host}", host);
-            Environment.Exit(1);
-        }
-
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.ConfigureKestrel(options =>
-        {
-            options.Listen(ipAddress, port);
-        });
+        // 构建 SimpleResItem
+        var resItem = BuildSimpleResItem(respond, host, port);
+        var routeId = "simpleres_1";
 
         _logger.Info("启动简单 HTTP 响应服务...");
         _logger.Info("  监听地址: http://{Host}:{Port}/", host, port);
-        _logger.Info("  状态码: {StatusCode}", statusCode);
-        _logger.Info("  返回内容: {ResponseBody}", responseBody);
-        _logger.Info("  响应体长度: {Length} 字节", responseBody.Length);
-        if (headers.Count > 0)
+        _logger.Info("  状态码: {StatusCode}", resItem.StatusCode);
+        _logger.Info("  Content-Type: {ContentType}", resItem.GetFullContentType());
+        _logger.Info("  返回内容: {ResponseBody}", resItem.Body);
+        _logger.Info("  响应体长度: {Length} 字节", resItem.Body.Length);
+        if (resItem.Headers != null && resItem.Headers.Count > 0)
         {
-            _logger.Info("  自定义 Headers: {Count} 个", headers.Count);
+            _logger.Info("  自定义 Headers: {Count} 个", resItem.Headers.Count);
+        }
+        if (resItem.ShowReq)
+        {
+            _logger.Info("  显示请求头: 是");
         }
         _logger.Info("");
-        // 禁用默认日志输出
-        builder.Logging.ClearProviders();
 
-        var app = builder.Build();
+        var builder = WebApplication.CreateBuilder(args);
 
-        app.Run(async context =>
+        // 构建 WafInfoOptions
+        var waf = new WafInfoOptions();
+        waf.Listens.Add(new OneLinstenInfo
         {
-            context.Response.StatusCode = statusCode;
-
-            // 设置自定义 Headers
-            foreach (var header in headers)
-            {
-                context.Response.Headers[header.Key] = header.Value;
-            }
-
-            // 如果没有设置 Content-Type，根据内容自动设置
-            if (!headers.ContainsKey("Content-Type"))
-            {
-                context.Response.ContentType = "text/plain; charset=utf-8";
-            }
-
-            _logger.Info("[{Time}] {Method} {Path} -> {StatusCode}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), context.Request.Method, context.Request.Path, statusCode);
-
-            var finalBody = responseBody;
-            
-            // 如果启用了显示请求头，则在响应体中追加请求头信息
-            if (respond.ShowReq)
-            {
-                var headersText = new StringBuilder();
-                headersText.AppendLine("\n--- 请求头信息 ---");
-                foreach (var header in context.Request.Headers)
-                {
-                    headersText.AppendLine($"{header.Key}: {string.Join(", ", header.Value.ToArray())}");
-                }
-                headersText.AppendLine("--- 请求头信息结束 ---");
-                finalBody = responseBody + headersText.ToString();
-            }
-
-            await context.Response.WriteAsync(finalBody);
+            Host = host,
+            Port = port,
+            IsHttps = false,
         });
 
-        _logger.Info("✓ 服务已启动，按 Ctrl+C 停止");
-        _logger.Info("");
+        // 构建 SimpleResOptions
+        var simpleRes = new SimpleResOptions();
+        simpleRes.Items[routeId] = resItem;
 
-        app.Run();
+        // 注入配置
+        builder.Configuration.AddJsonStream(CommonUtil.ObjectToStream("WafInfos", waf));
+        builder.Configuration.AddJsonStream(CommonUtil.ObjectToStream("SimpleRes", simpleRes));
+
+        // 构建 YARP 路由配置（使用 simpleres_xxx 作为路由 ID）
+        var routes = new[]
+        {
+            new RouteConfig
+            {
+                RouteId = routeId,
+                ClusterId = "cluster1",
+                Match = new RouteMatch
+                {
+                    Path = "{**catch-all}"
+                },
+            }
+        };
+
+        // 构建虚拟 Cluster（SimpleRes 不需要真正的后端，但 YARP 需要有 Cluster）
+        var clusters = new[]
+        {
+            new ClusterConfig
+            {
+                ClusterId = "cluster1",
+                Destinations = new Dictionary<string, DestinationConfig>
+                {
+                    {
+                        "dest1", new DestinationConfig
+                        {
+                            Address = "http://127.0.0.1"
+                        }
+                    }
+                }
+            }
+        };
+
+        DoStartWaf(builder, respond, routes, clusters);
     }
 
     public static void DoStart(string[] args, StartCommandOptions start)
@@ -960,6 +1002,7 @@ public class Program
         builder.Services.Configure<AccessControlOptions>(builder.Configuration.GetSection("AccessControl"));
         builder.Services.Configure<CompressOptions>(builder.Configuration.GetSection("Compress"));
         builder.Services.Configure<AcmeOptions>(builder.Configuration.GetSection("Acme"));
+        builder.Services.Configure<SimpleResOptions>(builder.Configuration.GetSection("SimpleRes"));
 
         // 注册自定义响应压缩中间件（支持 MinSize）
         builder.Services.AddSingleton<ResponseCompressMiddleware>();
@@ -1081,6 +1124,8 @@ public class Program
             proxyApp.UseMiddleware<StatisticLogMiddleware>();
             proxyApp.UseMiddleware<ThrottledMiddleware>();
             proxyApp.UseMiddleware<SpeedLimitMiddleware>();
+            // SimpleRes 简单响应处理中间件
+            proxyApp.UseMiddleware<SimpleResMiddleware>();
             proxyApp.UseMiddleware<FileProviderMiddleware>();
         }).RequireHost(proxyPorts);
         app.Run();
