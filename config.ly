@@ -8,7 +8,7 @@ var domain = "example.com"
 var backend = "127.0.0.1:8080"
 var env = "production"
 
-localhost:5003, localhost:5004, 0.0.0.0:5005
+localhost:5003, localhost:5004, 0.0.0.0:5005, example.com:5006
 /static/ {
     file_server {
         root = "./wwwroot"
@@ -23,6 +23,12 @@ show-req=true
 
 localhost:5002
 respond "Hello from {HOST}:{PORT}\nPath: {PATH}\nMethod: {METHOD}\nClient IP: {ClientIp}\nTime: {TIME}\nURL: {URL}"
+status=200
+content-type="text/plain"
+show-req=true
+
+example1.com:5006
+respond "aaa Hello from {HOST}:{PORT}\nPath: {PATH}\nMethod: {METHOD}\nClient IP: {ClientIp}\nTime: {TIME}\nURL: {URL}"
 status=200
 content-type="text/plain"
 show-req=true

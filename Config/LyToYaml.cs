@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using NLog;
 
@@ -176,6 +177,51 @@ public class LyConfigContext
     /// 监听配置
     /// </summary>
     public List<object> Listens { get; } = new();
+    
+    /// <summary>
+    /// 监听配置缓存：key 是 "host:port"，value 是 isHttps
+    /// 用于去重和冲突检测
+    /// </summary>
+    private readonly Dictionary<string, bool> _listenCache = new();
+    
+    /// <summary>
+    /// 添加监听配置（自动去重和冲突检测）
+    /// </summary>
+    /// <param name="host">监听地址</param>
+    /// <param name="port">监听端口</param>
+    /// <param name="isHttps">是否 HTTPS</param>
+    /// <exception cref="LyConfigException">当相同端口存在 HTTP/HTTPS 冲突时抛出</exception>
+    public void AddListen(string host, int port, bool isHttps)
+    {
+        var key = $"{host}:{port}";
+        
+        if (_listenCache.TryGetValue(key, out var existingIsHttps))
+        {
+            // 已存在相同的 host:port
+            if (existingIsHttps == isHttps)
+            {
+                // 完全相同，忽略（去重）
+                return;
+            }
+            else
+            {
+                // HTTP/HTTPS 冲突
+                var existingProtocol = existingIsHttps ? "HTTPS" : "HTTP";
+                var newProtocol = isHttps ? "HTTPS" : "HTTP";
+                throw new LyConfigException(
+                    $"监听配置冲突: {host}:{port} 已配置为 {existingProtocol}，无法再配置为 {newProtocol}");
+            }
+        }
+        
+        // 添加新的监听配置
+        _listenCache[key] = isHttps;
+        Listens.Add(new Dictionary<string, object>
+        {
+            ["Host"] = host,
+            ["Port"] = port,
+            ["IsHttps"] = isHttps
+        });
+    }
     
     /// <summary>
     /// 证书配置
@@ -455,9 +501,6 @@ public static class LyToAppSettingsConverter
         var hosts = new List<string>();
         var isHttps = false;
         
-        // 用于去重端口监听
-        var addedListens = new HashSet<string>();
-
         foreach (var addr in addresses)
         {
             var parsed = ParseSiteAddress(addr);
@@ -478,7 +521,7 @@ public static class LyToAppSettingsConverter
                 isHttps = true;
             }
             
-            // 为每个地址创建监听配置（去重）
+            // 为每个地址创建监听配置（通过 AddListen 自动去重和冲突检测）
             if (parsed.Port > 0)
             {
                 var listenHost = parsed.Host ?? "0.0.0.0";
@@ -487,27 +530,22 @@ public static class LyToAppSettingsConverter
                 if (listenHost.Equals("localhost", StringComparison.OrdinalIgnoreCase))
                 {
                     listenHost = "127.0.0.1";
+                } 
+                else if (!IPAddress.TryParse(listenHost, out _)) 
+                {
+                    listenHost = "0.0.0.0";
                 }
                 
-                var listenKey = $"{listenHost}:{parsed.Port}:{parsed.IsHttps}";
-                if (!addedListens.Contains(listenKey))
+                // 使用 AddListen 添加（自动去重和冲突检测）
+                ctx.AddListen(listenHost, parsed.Port, parsed.IsHttps || isHttps);
+                
+                // 如果没有 host，添加默认的 localhost 和 127.0.0.1 到 hosts
+                if (parsed.Host == null)
                 {
-                    addedListens.Add(listenKey);
-                    ctx.Listens.Add(new Dictionary<string, object>
-                    {
-                        ["Host"] = listenHost,
-                        ["Port"] = parsed.Port,
-                        ["IsHttps"] = parsed.IsHttps || isHttps
-                    });
-                    
-                    // 如果没有 host，添加默认的 localhost 和 127.0.0.1 到 hosts
-                    if (parsed.Host == null)
-                    {
-                        if (!hosts.Contains($"localhost:{parsed.Port}"))
-                            hosts.Add($"localhost:{parsed.Port}");
-                        if (!hosts.Contains($"127.0.0.1:{parsed.Port}"))
-                            hosts.Add($"127.0.0.1:{parsed.Port}");
-                    }
+                    if (!hosts.Contains($"localhost:{parsed.Port}"))
+                        hosts.Add($"localhost:{parsed.Port}");
+                    if (!hosts.Contains($"127.0.0.1:{parsed.Port}"))
+                        hosts.Add($"127.0.0.1:{parsed.Port}");
                 }
             }
         }
@@ -1447,21 +1485,11 @@ public static class LyToAppSettingsConverter
                 break;
 
             case "http_port":
-                ctx.Listens.Add(new Dictionary<string, object>
-                {
-                    ["Host"] = "0.0.0.0",
-                    ["Port"] = int.Parse(value.ToString()!),
-                    ["IsHttps"] = false
-                });
+                ctx.AddListen("0.0.0.0", int.Parse(value.ToString()!), false);
                 break;
 
             case "https_port":
-                ctx.Listens.Add(new Dictionary<string, object>
-                {
-                    ["Host"] = "0.0.0.0",
-                    ["Port"] = int.Parse(value.ToString()!),
-                    ["IsHttps"] = true
-                });
+                ctx.AddListen("0.0.0.0", int.Parse(value.ToString()!), true);
                 break;
 
             case "debug":
