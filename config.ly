@@ -8,7 +8,7 @@ var domain = "example.com"
 var backend = "127.0.0.1:8080"
 var env = "production"
 
-localhost:5003
+localhost:5003, localhost:5004, 0.0.0.0:5005
 /static/ {
     file_server {
         root = "./wwwroot"

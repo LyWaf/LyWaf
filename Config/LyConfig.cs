@@ -710,10 +710,29 @@ public class LyConfigParser
             return (name, value ?? "");
         }
 
-        // 如果当前 name 是站点地址，且下一个 token 是已知的站点指令或路径
-        // 则直接进入站点内容解析，不收集参数
+        // 如果当前 name 是站点地址
         if (IsSiteAddress(name))
         {
+            // 收集逗号分隔的多个地址（如 localhost:5003, localhost:5004）
+            var addresses = new List<string> { name };
+            while (Current.Type == TokenType.Comma)
+            {
+                Consume(); // 消费逗号
+                SkipNewLines();
+                if (Current.Type == TokenType.Identifier && IsSiteAddress(Current.Value))
+                {
+                    addresses.Add(Consume(TokenType.Identifier).Value);
+                    SkipNewLines();
+                }
+                else
+                {
+                    break;
+                }
+            }
+            
+            // 合并所有地址为一个空格分隔的字符串（Caddy 风格）
+            var combinedAddress = string.Join(" ", addresses);
+
             // 检查下一个 token 是否是站点指令或路径块
             if (Current.Type == TokenType.Identifier)
             {
@@ -722,7 +741,7 @@ public class LyConfigParser
                 {
                     // 是站点内的指令或路径，进入非嵌套站点内容解析
                     var siteContent = ParseNonNestedSiteContent();
-                    return (name, siteContent);
+                    return (combinedAddress, siteContent);
                 }
             }
             // 如果是 { 则进入嵌套块
@@ -732,13 +751,13 @@ public class LyConfigParser
                 SkipNewLines();
                 var content = ParseBlockContent();
                 Consume(TokenType.RightBrace);
-                return (name, content);
+                return (combinedAddress, content);
             }
             // 如果没有后续内容，返回空字典
             if (Current.Type == TokenType.NewLine || Current.Type == TokenType.EOF)
             {
                 var siteContent = ParseNonNestedSiteContent();
-                return (name, siteContent);
+                return (combinedAddress, siteContent);
             }
         }
 

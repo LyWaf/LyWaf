@@ -204,7 +204,7 @@ public class PortMatcherPolicy : MatcherPolicy, IEndpointSelectorPolicy
         bool hostMatches;
         bool isWildcard = false;
 
-        if (patternHost == "*")
+        if (patternHost == "*" || patternHost == "0.0.0.0")
         {
             hostMatches = true;
             isWildcard = true;

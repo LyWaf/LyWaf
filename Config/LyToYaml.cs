@@ -395,8 +395,19 @@ public static class LyToAppSettingsConverter
     /// <summary>
     /// 判断是否是站点地址格式
     /// 支持: example.com, :8080, https://example.com, http://example.com, *.example.com
+    /// 支持空格分隔的多地址: localhost:5003 localhost:5004
     /// </summary>
     private static bool IsSiteAddress(string key)
+    {
+        // 支持空格分隔的多地址，只要第一个是站点地址即可
+        var firstAddr = key.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? key;
+        return IsSingleSiteAddress(firstAddr);
+    }
+
+    /// <summary>
+    /// 判断单个地址是否是站点地址格式
+    /// </summary>
+    private static bool IsSingleSiteAddress(string key)
     {
         // 端口格式 :port
         if (key.StartsWith(':') && int.TryParse(key[1..], out _))
@@ -435,14 +446,17 @@ public static class LyToAppSettingsConverter
     ///   - route /path { reverse_proxy ... }
     ///   - reverse_proxy（默认路由）
     ///   - file_server（文件服务）
+    /// 支持多地址配置：localhost:5003, localhost:5004 共享相同配置
     /// </summary>
     private static void ProcessSiteBlock(string address, object content, LyConfigContext ctx)
     {
-        // 解析地址 - 可能包含多个域名/地址
+        // 解析地址 - 可能包含多个域名/地址（空格分隔）
         var addresses = address.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var hosts = new List<string>();
-        var listenPort = 0;
         var isHttps = false;
+        
+        // 用于去重端口监听
+        var addedListens = new HashSet<string>();
 
         foreach (var addr in addresses)
         {
@@ -459,42 +473,15 @@ public static class LyToAppSettingsConverter
                     hosts.Add(parsed.Host);
                 }
             }
-            if (parsed.Port > 0)
-            {
-                listenPort = parsed.Port;
-            }
             if (parsed.IsHttps)
             {
                 isHttps = true;
             }
-        }
-
-        // 添加监听配置
-        if (listenPort > 0)
-        {
-            if (hosts.Count == 0)
+            
+            // 为每个地址创建监听配置（去重）
+            if (parsed.Port > 0)
             {
-                // 仅端口格式（如 :5002），监听所有地址
-                ctx.Listens.Add(new Dictionary<string, object>
-                {
-                    ["Host"] = "0.0.0.0",
-                    ["Port"] = listenPort,
-                    ["IsHttps"] = isHttps
-                });
-                
-                // 对于仅端口的站点，添加多种常见主机名匹配
-                // 这样可以匹配 localhost:port, 127.0.0.1:port, 或不带端口的请求
-                hosts.Add($"localhost:{listenPort}");
-                hosts.Add($"127.0.0.1:{listenPort}");
-            }
-            else
-            {
-                // 带 host 的格式（如 127.0.0.1:5003, localhost:5003）
-                // 从 hosts 中提取原始 host（去掉端口部分）用于监听
-                var firstHost = hosts[0];
-                var listenHost = firstHost.Contains(':') 
-                    ? firstHost.Split(':')[0] 
-                    : firstHost;
+                var listenHost = parsed.Host ?? "0.0.0.0";
                 
                 // localhost 转换为 127.0.0.1
                 if (listenHost.Equals("localhost", StringComparison.OrdinalIgnoreCase))
@@ -502,12 +489,26 @@ public static class LyToAppSettingsConverter
                     listenHost = "127.0.0.1";
                 }
                 
-                ctx.Listens.Add(new Dictionary<string, object>
+                var listenKey = $"{listenHost}:{parsed.Port}:{parsed.IsHttps}";
+                if (!addedListens.Contains(listenKey))
                 {
-                    ["Host"] = listenHost,
-                    ["Port"] = listenPort,
-                    ["IsHttps"] = isHttps
-                });
+                    addedListens.Add(listenKey);
+                    ctx.Listens.Add(new Dictionary<string, object>
+                    {
+                        ["Host"] = listenHost,
+                        ["Port"] = parsed.Port,
+                        ["IsHttps"] = parsed.IsHttps || isHttps
+                    });
+                    
+                    // 如果没有 host，添加默认的 localhost 和 127.0.0.1 到 hosts
+                    if (parsed.Host == null)
+                    {
+                        if (!hosts.Contains($"localhost:{parsed.Port}"))
+                            hosts.Add($"localhost:{parsed.Port}");
+                        if (!hosts.Contains($"127.0.0.1:{parsed.Port}"))
+                            hosts.Add($"127.0.0.1:{parsed.Port}");
+                    }
+                }
             }
         }
 
