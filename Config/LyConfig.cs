@@ -682,6 +682,21 @@ public class LyConfigParser
         return !string.IsNullOrEmpty(left) && left.ToLower() != "false" && left != "0";
     }
 
+    /// <summary>
+    /// 已知的站点指令列表
+    /// 这些指令在站点地址后遇到时，表示进入站点内容而不是参数
+    /// </summary>
+    private static readonly HashSet<string> SiteDirectives = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "respond", "file_server", "reverse_proxy", "root", "browse", "index",
+        "try_files", "header", "encode", "log", "route", "handle", "redir",
+        "rewrite", "uri", "request_body", "templates", "tls", "import",
+        "lb_policy", "load_balancing_policy", "health_check", "status",
+        "content-type", "content_type", "charset", "show-req", "show_req",
+        "basepath", "base_path", "precompressed", "pre_compressed",
+        "max_file_size", "maxfilesize", "default"
+    };
+
     private (string, object) ParseBlock()
     {
         var name = Consume(TokenType.Identifier).Value;
@@ -695,6 +710,38 @@ public class LyConfigParser
             return (name, value ?? "");
         }
 
+        // 如果当前 name 是站点地址，且下一个 token 是已知的站点指令或路径
+        // 则直接进入站点内容解析，不收集参数
+        if (IsSiteAddress(name))
+        {
+            // 检查下一个 token 是否是站点指令或路径块
+            if (Current.Type == TokenType.Identifier)
+            {
+                var nextValue = Current.Value;
+                if (nextValue.StartsWith('/') || SiteDirectives.Contains(nextValue))
+                {
+                    // 是站点内的指令或路径，进入非嵌套站点内容解析
+                    var siteContent = ParseNonNestedSiteContent();
+                    return (name, siteContent);
+                }
+            }
+            // 如果是 { 则进入嵌套块
+            if (Current.Type == TokenType.LeftBrace)
+            {
+                Consume();
+                SkipNewLines();
+                var content = ParseBlockContent();
+                Consume(TokenType.RightBrace);
+                return (name, content);
+            }
+            // 如果没有后续内容，返回空字典
+            if (Current.Type == TokenType.NewLine || Current.Type == TokenType.EOF)
+            {
+                var siteContent = ParseNonNestedSiteContent();
+                return (name, siteContent);
+            }
+        }
+
         // 带参数的块: name arg1 arg2 { ... }
         // 注意：以 / 开头的 Identifier 是路径块，不是参数
         var args = new List<string>();
@@ -703,6 +750,11 @@ public class LyConfigParser
         {
             // 如果是以 / 开头的标识符，它是路径块而不是参数，停止收集参数
             if (Current.Type == TokenType.Identifier && Current.Value.StartsWith('/'))
+            {
+                break;
+            }
+            // 如果是已知的站点指令，停止收集参数
+            if (Current.Type == TokenType.Identifier && SiteDirectives.Contains(Current.Value))
             {
                 break;
             }
