@@ -31,6 +31,7 @@ using LyWaf.Services.AccessControl;
 using LyWaf.Services.Compress;
 using LyWaf.Services.Acme;
 using LyWaf.Services.SimpleRes;
+using LyWaf.Services.Dns;
 using LyWaf.Config;
 
 using System.CommandLine;
@@ -1008,6 +1009,7 @@ public class Program
         builder.Services.Configure<CompressOptions>(builder.Configuration.GetSection("Compress"));
         builder.Services.Configure<AcmeOptions>(builder.Configuration.GetSection("Acme"));
         builder.Services.Configure<SimpleResOptions>(builder.Configuration.GetSection("SimpleRes"));
+        builder.Services.Configure<CustomDnsOptions>(builder.Configuration.GetSection("CustomDns"));
 
         // 注册自定义响应压缩中间件（支持 MinSize）
         builder.Services.AddSingleton<ResponseCompressMiddleware>();
@@ -1021,6 +1023,7 @@ public class Program
         builder.Services.AddSingleton<IWafInfoService, WafInfoService>();
         builder.Services.AddSingleton<IAcmeService, AcmeService>();
         builder.Services.AddHostedService(sp => (AcmeService)sp.GetRequiredService<IAcmeService>());
+        builder.Services.AddSingleton<ICustomDnsService, CustomDnsService>();
         builder.Services.AddSingleton<IProbingRequestFactory, LyxProbingRequestFactory>();
         builder.Services.AddSingleton<IActiveHealthCheckPolicy, LyxActiveHealthPolicy>();
 
@@ -1077,6 +1080,11 @@ public class Program
         // 注册端口匹配策略，解决多端口路由的 AmbiguousMatchException
         builder.Services.AddSingleton<MatcherPolicy, PortMatcherPolicy>();
         
+        // 获取自定义 DNS 配置
+        var customDnsOptions = new CustomDnsOptions();
+        builder.Configuration.GetSection("CustomDns").Bind(customDnsOptions);
+        var customDnsEnabled = customDnsOptions.Enabled && customDnsOptions.Entries.Count > 0;
+        
         var reverse = builder.Services.AddReverseProxy()
             .ConfigureHttpClient((context, handler) =>
             {
@@ -1095,6 +1103,12 @@ public class Program
 
                 // 连接的最大生存时间（防止连接过旧，默认无限）
                 handler.PooledConnectionLifetime = TimeSpan.FromMinutes(10);
+
+                // 自定义 DNS 解析（延迟获取服务，支持配置热更新）
+                if (customDnsEnabled)
+                {
+                    handler.ConnectCallback = CustomDnsConnectCallbackFactory.Create();
+                }
             }).AddTransforms<WafTrans>();
         if (routes != null && clusters != null)
         {
@@ -1106,6 +1120,9 @@ public class Program
             reverse.LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
         }
         var app = builder.Build();
+
+        // 初始化 ServiceLocator，确保自定义 DNS 等服务可以通过 ServiceLocator 获取
+        ServiceLocator.Initialize(app.Services);
 
         // 注册控制台 API
         app.MapControlApi(wafInfos);

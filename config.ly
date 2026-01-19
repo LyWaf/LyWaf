@@ -32,3 +32,6 @@ respond "aaa Hello from {HOST}:{PORT}\nPath: {PATH}\nMethod: {METHOD}\nClient IP
 status=200
 content-type="text/plain"
 show-req=true
+
+localhost:5007
+reverse_proxy http://www.baidu.com/api

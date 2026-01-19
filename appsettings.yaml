@@ -77,6 +77,36 @@ Protect:
   RegexPostList:
     - (?:aaa\/\W*passwd)
 
+# =============== 自定义 DNS 配置 ===============
+# 允许将指定域名解析为指定的 IP 地址
+# 支持通配符匹配和多 IP 负载均衡（支持配置热更新）
+# 匹配规则（均为 O(1) hash 查找）：
+#   1. 先精确匹配域名
+#   2. 若未匹配，将域名第一段替换为 * 进行通配符匹配
+#      例如: www.example.com 会尝试匹配 *.example.com
+CustomDns:
+  # 是否启用自定义 DNS
+  Enabled: true
+  # DNS 解析缓存时间（秒），0 表示不缓存
+  CacheTtlSeconds: 300
+  # DNS 解析映射
+  Entries:
+    # 示例: 将 example.com 解析为指定 IP（随机选择）
+    example.com:
+      Addresses:
+        - 192.168.1.100
+        - 192.168.1.101
+        - 192.168.1.102
+      Policy: Random    # 随机选择，或 RoundRobin 轮询
+      TtlSeconds: 60    # 单条目缓存时间，-1 使用全局配置
+
+    # 示例: 通配符匹配
+    # "*.internal.example.com":
+    #   Addresses:
+    #     - 10.0.0.1
+    #     - 10.0.0.2
+    #   Policy: RoundRobin
+
 # =============== ACME/Let's Encrypt 证书配置 ===============
 # 自动申请和续期 Let's Encrypt 免费 HTTPS 证书
 Acme:
@@ -318,7 +348,7 @@ FileProvider:
 ReverseProxy:
   Routes:
     routetest:
-      ClusterId: cluster3
+      ClusterId: cluster2
       Match:
         Path: /respond/{**catch-all}
       DirectResponse:
@@ -440,8 +470,7 @@ ReverseProxy:
 
       Destinations:
         destination1:
-          # Address: 'http://127.0.0.1:8080/'
-          Address: 'https://ttw.caishen.ai/'
+          Address: 'http://127.0.0.1:8080/'
           Metadata:
             # 权重配置: 用于 WeightedRoundRobin, WeightedLeastConnections, WeightedRandom
             # 权重越高，被分配的请求越多
@@ -457,8 +486,7 @@ ReverseProxy:
       LoadBalancingPolicy: IpHash
       Destinations:
         destination1:
-          # Address: 'http://127.0.0.1:8080/'
-          Address: 'https://mat1.gtimg.com/'
+          Address: 'http://127.0.0.1:8080/'
     cluster3:
       # 使用 IP 哈希策略
       LoadBalancingPolicy: IpHash

@@ -47,7 +47,6 @@ public class StatisticService : IStatisticService
             _options = newConfig;
             BuildStatistic();
         });
-        ServiceLocator.Initialize(_serviceProvider);
         BuildStatistic();
         _cache = cache;
         _logger = logger;
