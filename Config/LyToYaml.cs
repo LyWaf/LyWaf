@@ -1619,6 +1619,13 @@ public static class LyToAppSettingsConverter
                 ProcessCustomDnsConfig(value, result);
                 break;
 
+            case "proxyserver":
+            case "proxy_server":
+            case "forward_proxy":
+                // 正向代理服务配置
+                ProcessProxyServerConfig(value, result);
+                break;
+
             case "certs":
                 // 证书配置
                 // 支持格式：
@@ -1633,6 +1640,215 @@ public static class LyToAppSettingsConverter
                 result[normalizedKey] = value;
                 break;
         }
+    }
+
+    /// <summary>
+    /// 处理正向代理服务配置
+    /// 支持格式：
+    /// ProxyServer {
+    ///     Enabled = true
+    ///     Username = "user"
+    ///     Password = "pass"
+    ///     ConnectTimeout = 30
+    ///     DataTimeout = 300
+    ///     AllowedHosts = ["*.example.com"]
+    ///     BlockedHosts = ["*.blocked.com"]
+    ///     Ports {
+    ///         8080 { EnableHttp = true; EnableHttps = true; EnableSocks5 = false }
+    ///         1080 { EnableSocks5 = true; RequireAuth = true }
+    ///     }
+    /// }
+    /// </summary>
+    private static void ProcessProxyServerConfig(object value, Dictionary<string, object> result)
+    {
+        if (value is not Dictionary<string, object> proxyConfig)
+            return;
+
+        var proxyServer = EnsureDict(result, "ProxyServer");
+        var ports = new Dictionary<string, object>();
+
+        foreach (var kv in proxyConfig)
+        {
+            var key = kv.Key.ToLower();
+
+            switch (key)
+            {
+                case "enabled":
+                    proxyServer["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "username":
+                case "user":
+                    proxyServer["Username"] = kv.Value?.ToString();
+                    break;
+                case "password":
+                case "pass":
+                    proxyServer["Password"] = kv.Value?.ToString();
+                    break;
+                case "connecttimeout":
+                case "connect_timeout":
+                    if (int.TryParse(kv.Value?.ToString(), out var ct))
+                    {
+                        proxyServer["ConnectTimeout"] = ct;
+                    }
+                    break;
+                case "datatimeout":
+                case "data_timeout":
+                    if (int.TryParse(kv.Value?.ToString(), out var dt))
+                    {
+                        proxyServer["DataTimeout"] = dt;
+                    }
+                    break;
+                case "allowedhosts":
+                case "allowed_hosts":
+                case "whitelist":
+                    proxyServer["AllowedHosts"] = ParseStringList(kv.Value);
+                    break;
+                case "blockedhosts":
+                case "blocked_hosts":
+                case "blacklist":
+                    proxyServer["BlockedHosts"] = ParseStringList(kv.Value);
+                    break;
+                case "ports":
+                    if (kv.Value is Dictionary<string, object> portsConfig)
+                    {
+                        foreach (var portKv in portsConfig)
+                        {
+                            // 支持纯端口号 (8080) 和 host:port 格式 (127.0.0.1:8080)
+                            if (IsValidPortKey(portKv.Key))
+                            {
+                                var portConfig = ParsePortConfig(portKv.Value);
+                                ports[portKv.Key] = portConfig;
+                            }
+                        }
+                    }
+                    break;
+                case "default":
+                    if (kv.Value is Dictionary<string, object> defaultConfig)
+                    {
+                        proxyServer["Default"] = ParsePortConfig(defaultConfig);
+                    }
+                    break;
+                default:
+                    // 检查是否是端口号或 host:port 格式（直接在顶层配置端口）
+                    if (IsValidPortKey(kv.Key))
+                    {
+                        var portConfig = ParsePortConfig(kv.Value);
+                        ports[kv.Key] = portConfig;
+                    }
+                    break;
+            }
+        }
+
+        if (ports.Count > 0)
+        {
+            proxyServer["Ports"] = ports;
+            // 如果有端口配置但没有显式设置 Enabled，默认启用
+            if (!proxyServer.ContainsKey("Enabled"))
+            {
+                proxyServer["Enabled"] = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 验证端口键格式是否有效
+    /// 支持格式: "8080", "127.0.0.1:8080", "0.0.0.0:1080"
+    /// </summary>
+    private static bool IsValidPortKey(string key)
+    {
+        // 纯端口号
+        if (int.TryParse(key, out var port))
+        {
+            return port > 0 && port <= 65535;
+        }
+
+        // host:port 格式
+        var lastColon = key.LastIndexOf(':');
+        if (lastColon > 0 && lastColon < key.Length - 1)
+        {
+            var hostPart = key[..lastColon];
+            var portPart = key[(lastColon + 1)..];
+            
+            // 验证端口号
+            if (!int.TryParse(portPart, out port) || port <= 0 || port > 65535)
+            {
+                return false;
+            }
+
+            // 验证主机（IP 地址格式）
+            return System.Net.IPAddress.TryParse(hostPart, out _);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 解析端口配置
+    /// </summary>
+    private static Dictionary<string, object> ParsePortConfig(object? value)
+    {
+        var config = new Dictionary<string, object>();
+
+        if (value is Dictionary<string, object> dict)
+        {
+            foreach (var kv in dict)
+            {
+                var key = kv.Key.ToLower();
+                switch (key)
+                {
+                    case "enablehttp":
+                    case "enable_http":
+                    case "http":
+                        config["EnableHttp"] = kv.Value is bool b1 ? b1 : kv.Value?.ToString()?.ToLower() == "true";
+                        break;
+                    case "enablehttps":
+                    case "enable_https":
+                    case "https":
+                        config["EnableHttps"] = kv.Value is bool b2 ? b2 : kv.Value?.ToString()?.ToLower() == "true";
+                        break;
+                    case "enablesocks5":
+                    case "enable_socks5":
+                    case "socks5":
+                    case "socks":
+                        config["EnableSocks5"] = kv.Value is bool b3 ? b3 : kv.Value?.ToString()?.ToLower() == "true";
+                        break;
+                    case "requireauth":
+                    case "require_auth":
+                    case "auth":
+                        config["RequireAuth"] = kv.Value is bool b4 ? b4 : kv.Value?.ToString()?.ToLower() == "true";
+                        break;
+                }
+            }
+        }
+        else if (value is string strValue)
+        {
+            // 简单字符串格式: "http,https,socks5"
+            var types = strValue.ToLower().Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            config["EnableHttp"] = types.Contains("http");
+            config["EnableHttps"] = types.Contains("https");
+            config["EnableSocks5"] = types.Contains("socks5") || types.Contains("socks");
+        }
+
+        return config;
+    }
+
+    /// <summary>
+    /// 解析字符串列表
+    /// </summary>
+    private static List<string> ParseStringList(object? value)
+    {
+        var result = new List<string>();
+
+        if (value is string str)
+        {
+            result.AddRange(str.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries));
+        }
+        else if (value is List<object> list)
+        {
+            result.AddRange(list.Select(x => x?.ToString() ?? "").Where(x => !string.IsNullOrEmpty(x)));
+        }
+
+        return result;
     }
 
     /// <summary>

@@ -195,6 +195,45 @@ CustomDns {
     }
 }
 
+# 正向代理服务配置（HTTP 代理、HTTPS 代理、SOCKS5 代理）
+ProxyServer {
+    Enabled = true
+    
+    # 代理认证（可选）
+    # Username = "proxyuser"
+    # Password = "proxypass"
+    
+    # 超时配置
+    ConnectTimeout = 30     # 连接超时（秒）
+    DataTimeout = 300       # 数据传输超时（秒）
+    
+    # 访问控制
+    # AllowedHosts = ["*.example.com", "api.service.com"]  # 白名单
+    # BlockedHosts = ["*.blocked.com"]                      # 黑名单
+    
+    # 端口配置
+    Ports {
+        # HTTP/HTTPS 代理端口
+        8080 {
+            EnableHttp = true       # 支持 HTTP 代理
+            EnableHttps = true      # 支持 HTTPS 隧道 (CONNECT)
+            EnableSocks5 = false    # 不支持 SOCKS5
+            RequireAuth = false     # 不需要认证
+        }
+        
+        # SOCKS5 代理端口
+        1080 {
+            EnableHttp = false
+            EnableHttps = false
+            EnableSocks5 = true     # 支持 SOCKS5
+            RequireAuth = true      # 需要认证
+        }
+        
+        # 混合代理端口（同时支持所有协议）
+        # 3128 = "http,https,socks5"  # 简化格式
+    }
+}
+
 # 访问控制
 AccessControl {
     RejectStatusCode = 403

@@ -32,6 +32,7 @@ using LyWaf.Services.Compress;
 using LyWaf.Services.Acme;
 using LyWaf.Services.SimpleRes;
 using LyWaf.Services.Dns;
+using LyWaf.Services.ProxyServer;
 using LyWaf.Config;
 
 using System.CommandLine;
@@ -1010,6 +1011,7 @@ public class Program
         builder.Services.Configure<AcmeOptions>(builder.Configuration.GetSection("Acme"));
         builder.Services.Configure<SimpleResOptions>(builder.Configuration.GetSection("SimpleRes"));
         builder.Services.Configure<CustomDnsOptions>(builder.Configuration.GetSection("CustomDns"));
+        builder.Services.Configure<ProxyServerOptions>(builder.Configuration.GetSection("ProxyServer"));
 
         // 注册自定义响应压缩中间件（支持 MinSize）
         builder.Services.AddSingleton<ResponseCompressMiddleware>();
@@ -1024,6 +1026,7 @@ public class Program
         builder.Services.AddSingleton<IAcmeService, AcmeService>();
         builder.Services.AddHostedService(sp => (AcmeService)sp.GetRequiredService<IAcmeService>());
         builder.Services.AddSingleton<ICustomDnsService, CustomDnsService>();
+        builder.Services.AddHostedService<Socks5Service>();
         builder.Services.AddSingleton<IProbingRequestFactory, LyxProbingRequestFactory>();
         builder.Services.AddSingleton<IActiveHealthCheckPolicy, LyxActiveHealthPolicy>();
 
@@ -1135,6 +1138,9 @@ public class Program
         
         app.MapReverseProxy(proxyApp =>
         {
+            // HTTP/HTTPS 代理服务（最先检查，如果是代理请求则直接处理）
+            proxyApp.UseMiddleware<ProxyServerMiddleware>();
+            
             // 启用响应压缩（必须放在其他中间件之前）
             proxyApp.UseMiddleware<ResponseCompressMiddleware>();
             

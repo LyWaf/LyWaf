@@ -107,6 +107,51 @@ CustomDns:
     #     - 10.0.0.2
     #   Policy: RoundRobin
 
+# =============== 正向代理服务配置 ===============
+# 支持 HTTP 代理、HTTPS 代理（CONNECT 隧道）和 SOCKS5 代理
+ProxyServer:
+  # 是否启用代理服务
+  Enabled: false
+  # 代理认证（可选）
+  # Username: proxyuser
+  # Password: proxypass
+  # 连接超时（秒）
+  ConnectTimeout: 30
+  # 数据传输超时（秒）
+  DataTimeout: 300
+  # 允许访问的目标主机（白名单，支持通配符）
+  AllowedHosts: []
+  # 禁止访问的目标主机（黑名单，支持通配符）
+  BlockedHosts: []
+  # 默认端口配置
+  Default:
+    EnableHttp: true
+    EnableHttps: true
+    EnableSocks5: false
+    RequireAuth: false
+  # 端口配置
+  # 支持两种格式:
+  #   - 纯端口号: "8080" (监听所有地址 0.0.0.0)
+  #   - host:port: "127.0.0.1:8080" (监听指定地址)
+  Ports:
+    # 示例：HTTP/HTTPS 代理端口（监听所有地址）
+    # "8080":
+    #   EnableHttp: true
+    #   EnableHttps: true
+    #   EnableSocks5: false
+    #   RequireAuth: false
+    # 示例：SOCKS5 代理端口（仅监听本地）
+    # "127.0.0.1:1080":
+    #   EnableHttp: false
+    #   EnableHttps: false
+    #   EnableSocks5: true
+    #   RequireAuth: true
+    # 示例：指定 IP 监听
+    # "0.0.0.0:3128":
+    #   EnableHttp: true
+    #   EnableHttps: true
+    #   EnableSocks5: true
+
 # =============== ACME/Let's Encrypt 证书配置 ===============
 # 自动申请和续期 Let's Encrypt 免费 HTTPS 证书
 Acme:

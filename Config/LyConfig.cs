@@ -993,6 +993,57 @@ public class LyConfigParser
                 continue;
             }
 
+            // 处理数字作为键的块（如 8080 { ... }）
+            if (Current.Type == TokenType.Number)
+            {
+                var numKey = Consume().Value;
+                SkipNewLines();
+                
+                // 检查是否跟着 { 表示是块定义
+                if (Current.Type == TokenType.LeftBrace)
+                {
+                    Consume();
+                    SkipNewLines();
+                    var blockContent = ParseBlockContent();
+                    Consume(TokenType.RightBrace);
+                    
+                    // 处理重复键
+                    if (result.ContainsKey(numKey))
+                    {
+                        if (result[numKey] is List<object> list)
+                        {
+                            list.Add(blockContent);
+                        }
+                        else
+                        {
+                            result[numKey] = new List<object> { result[numKey], blockContent };
+                        }
+                    }
+                    else
+                    {
+                        result[numKey] = blockContent;
+                    }
+                    
+                    SkipNewLines();
+                    continue;
+                }
+                // 数字后面跟着 = 或 : 表示是赋值
+                else if (Current.Type == TokenType.Equals || Current.Type == TokenType.Colon)
+                {
+                    Consume();
+                    var val = ParseValue();
+                    if (val != null)
+                    {
+                        result[numKey] = val;
+                    }
+                    SkipNewLines();
+                    continue;
+                }
+                // 否则就是孤立的数字值，忽略
+                SkipNewLines();
+                continue;
+            }
+
             if (Current.Type == TokenType.NewLine)
             {
                 SkipNewLines();
@@ -1000,7 +1051,7 @@ public class LyConfigParser
             }
 
             // 处理孤立的值
-            if (Current.Type == TokenType.String || Current.Type == TokenType.Number || 
+            if (Current.Type == TokenType.String || 
                 Current.Type == TokenType.Boolean || Current.Type == TokenType.Variable)
             {
                 ParseValue();
