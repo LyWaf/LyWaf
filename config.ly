@@ -33,7 +33,7 @@ ProxyServer {
         8080 {
             EnableHttp = true       # 支持 HTTP 代理
             EnableHttps = true      # 支持 HTTPS 隧道 (CONNECT)
-            EnableSocks5 = false    # 不支持 SOCKS5
+            EnableSocks5 = true    # 不支持 SOCKS5
             RequireAuth = false     # 不需要认证
         }
         

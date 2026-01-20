@@ -62,13 +62,15 @@ public class ProxyPortConfig
 {
     /// <summary>
     /// 是否启用 HTTP 代理（普通 HTTP 请求转发）
+    /// 默认为 false，需要显式启用
     /// </summary>
-    public bool EnableHttp { get; set; } = true;
+    public bool EnableHttp { get; set; } = false;
 
     /// <summary>
     /// 是否启用 HTTPS 代理（CONNECT 隧道）
+    /// 默认为 false，需要显式启用
     /// </summary>
-    public bool EnableHttps { get; set; } = true;
+    public bool EnableHttps { get; set; } = false;
 
     /// <summary>
     /// 是否启用 SOCKS5 代理

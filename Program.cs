@@ -1026,7 +1026,7 @@ public class Program
         builder.Services.AddSingleton<IAcmeService, AcmeService>();
         builder.Services.AddHostedService(sp => (AcmeService)sp.GetRequiredService<IAcmeService>());
         builder.Services.AddSingleton<ICustomDnsService, CustomDnsService>();
-        builder.Services.AddHostedService<Socks5Service>();
+        builder.Services.AddHostedService<HttpProxyService>();  // 统一代理服务（HTTP/HTTPS/SOCKS5）
         builder.Services.AddSingleton<IProbingRequestFactory, LyxProbingRequestFactory>();
         builder.Services.AddSingleton<IActiveHealthCheckPolicy, LyxActiveHealthPolicy>();
 
@@ -1138,9 +1138,6 @@ public class Program
         
         app.MapReverseProxy(proxyApp =>
         {
-            // HTTP/HTTPS 代理服务（最先检查，如果是代理请求则直接处理）
-            proxyApp.UseMiddleware<ProxyServerMiddleware>();
-            
             // 启用响应压缩（必须放在其他中间件之前）
             proxyApp.UseMiddleware<ResponseCompressMiddleware>();
             

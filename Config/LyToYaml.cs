@@ -402,6 +402,18 @@ public static class LyToAppSettingsConverter
             };
         }
 
+        // 添加 cluster_unuse（用于代理等无需后端的场景）
+        ctx.Clusters["cluster_unuse"] = new Dictionary<string, object>
+        {
+            ["Destinations"] = new Dictionary<string, object>
+            {
+                ["dest1"] = new Dictionary<string, object>
+                {
+                    ["Address"] = "http://0.0.0.0"
+                }
+            }
+        };
+
         // 构建 ReverseProxy
         if (ctx.Routes.Count > 0 || ctx.Clusters.Count > 0)
         {
@@ -1623,7 +1635,7 @@ public static class LyToAppSettingsConverter
             case "proxy_server":
             case "forward_proxy":
                 // 正向代理服务配置
-                ProcessProxyServerConfig(value, result);
+                ProcessProxyServerConfig(value, result, ctx);
                 break;
 
             case "certs":
@@ -1659,7 +1671,7 @@ public static class LyToAppSettingsConverter
     ///     }
     /// }
     /// </summary>
-    private static void ProcessProxyServerConfig(object value, Dictionary<string, object> result)
+    private static void ProcessProxyServerConfig(object value, Dictionary<string, object> result, LyConfigContext ctx)
     {
         if (value is not Dictionary<string, object> proxyConfig)
             return;
@@ -1718,6 +1730,7 @@ public static class LyToAppSettingsConverter
                             {
                                 var portConfig = ParsePortConfig(portKv.Value);
                                 ports[portKv.Key] = portConfig;
+                                // HTTP/HTTPS/SOCKS5 代理都使用独立的 TCP 监听，不需要添加到 YARP 监听配置
                             }
                         }
                     }
@@ -1734,6 +1747,7 @@ public static class LyToAppSettingsConverter
                     {
                         var portConfig = ParsePortConfig(kv.Value);
                         ports[kv.Key] = portConfig;
+                        // HTTP/HTTPS/SOCKS5 代理都使用独立的 TCP 监听，不需要添加到 YARP 监听配置
                     }
                     break;
             }
@@ -1747,6 +1761,7 @@ public static class LyToAppSettingsConverter
             {
                 proxyServer["Enabled"] = true;
             }
+            // HTTP/HTTPS/SOCKS5 代理使用独立的 TCP 监听，不需要添加 YARP 路由
         }
     }
 
@@ -1788,6 +1803,7 @@ public static class LyToAppSettingsConverter
     private static Dictionary<string, object> ParsePortConfig(object? value)
     {
         var config = new Dictionary<string, object>();
+        bool explicitHttp = false, explicitHttps = false, explicitSocks5 = false;
 
         if (value is Dictionary<string, object> dict)
         {
@@ -1800,23 +1816,44 @@ public static class LyToAppSettingsConverter
                     case "enable_http":
                     case "http":
                         config["EnableHttp"] = kv.Value is bool b1 ? b1 : kv.Value?.ToString()?.ToLower() == "true";
+                        explicitHttp = true;
                         break;
                     case "enablehttps":
                     case "enable_https":
                     case "https":
                         config["EnableHttps"] = kv.Value is bool b2 ? b2 : kv.Value?.ToString()?.ToLower() == "true";
+                        explicitHttps = true;
                         break;
                     case "enablesocks5":
                     case "enable_socks5":
                     case "socks5":
                     case "socks":
                         config["EnableSocks5"] = kv.Value is bool b3 ? b3 : kv.Value?.ToString()?.ToLower() == "true";
+                        explicitSocks5 = true;
                         break;
                     case "requireauth":
                     case "require_auth":
                     case "auth":
                         config["RequireAuth"] = kv.Value is bool b4 ? b4 : kv.Value?.ToString()?.ToLower() == "true";
                         break;
+                }
+            }
+            
+            // 如果用户只显式启用了 SOCKS5，则 HTTP/HTTPS 默认不启用
+            // 否则，如果端口被配置但未显式设置 HTTP/HTTPS，则默认启用
+            bool onlySocks5 = explicitSocks5 && (bool)config.GetValueOrDefault("EnableSocks5", false) &&
+                              !explicitHttp && !explicitHttps;
+            
+            if (!onlySocks5)
+            {
+                // 为显式配置的端口设置默认值
+                if (!explicitHttp)
+                {
+                    config["EnableHttp"] = true;
+                }
+                if (!explicitHttps)
+                {
+                    config["EnableHttps"] = true;
                 }
             }
         }
@@ -1827,6 +1864,12 @@ public static class LyToAppSettingsConverter
             config["EnableHttp"] = types.Contains("http");
             config["EnableHttps"] = types.Contains("https");
             config["EnableSocks5"] = types.Contains("socks5") || types.Contains("socks");
+        }
+        else
+        {
+            // 空配置或其他类型，默认启用 HTTP 和 HTTPS
+            config["EnableHttp"] = true;
+            config["EnableHttps"] = true;
         }
 
         return config;
