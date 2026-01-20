@@ -33,6 +33,7 @@ using LyWaf.Services.Acme;
 using LyWaf.Services.SimpleRes;
 using LyWaf.Services.Dns;
 using LyWaf.Services.ProxyServer;
+using LyWaf.Services.StreamServer;
 using LyWaf.Config;
 
 using System.CommandLine;
@@ -1012,6 +1013,7 @@ public class Program
         builder.Services.Configure<SimpleResOptions>(builder.Configuration.GetSection("SimpleRes"));
         builder.Services.Configure<CustomDnsOptions>(builder.Configuration.GetSection("CustomDns"));
         builder.Services.Configure<ProxyServerOptions>(builder.Configuration.GetSection("ProxyServer"));
+        builder.Services.Configure<StreamServerOptions>(builder.Configuration.GetSection("StreamServer"));
 
         // 注册自定义响应压缩中间件（支持 MinSize）
         builder.Services.AddSingleton<ResponseCompressMiddleware>();
@@ -1027,6 +1029,7 @@ public class Program
         builder.Services.AddHostedService(sp => (AcmeService)sp.GetRequiredService<IAcmeService>());
         builder.Services.AddSingleton<ICustomDnsService, CustomDnsService>();
         builder.Services.AddHostedService<HttpProxyService>();  // 统一代理服务（HTTP/HTTPS/SOCKS5）
+        builder.Services.AddHostedService<StreamService>();     // TCP 流代理服务
         builder.Services.AddSingleton<IProbingRequestFactory, LyxProbingRequestFactory>();
         builder.Services.AddSingleton<IActiveHealthCheckPolicy, LyxActiveHealthPolicy>();
 

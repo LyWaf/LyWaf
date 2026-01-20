@@ -8,6 +8,16 @@ var domain = "example.com"
 var backend = "127.0.0.1:8080"
 var env = "production"
 
+
+StreamServer {
+    Enabled = true
+    ConnectTimeout = 30
+    DataTimeout = 300
+    
+    # 列表格式 - 多个上游
+    8089 = ["127.0.0.1:8080"]
+}
+
 # 正向代理服务配置（HTTP 代理、HTTPS 代理、SOCKS5 代理）
 ProxyServer {
     Enabled = true

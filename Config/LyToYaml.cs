@@ -1459,7 +1459,7 @@ public static class LyToAppSettingsConverter
                         case "address":
                         case "addresses":
                             // 上游地址
-                            upstreams.AddRange(ParseUpstreams(kv.Value));
+                            upstreams.AddRange(ParseUpstreams(kv.Value!));
                             break;
 
                         case "lb_policy":
@@ -1478,7 +1478,7 @@ public static class LyToAppSettingsConverter
                         case "request_timeout":
                             // 请求超时配置
                             var httpClientTimeout = EnsureDict(clusterConfig, "HttpClient");
-                            httpClientTimeout["RequestTimeout"] = kv.Value?.ToString();
+                            httpClientTimeout["RequestTimeout"] = kv.Value?.ToString() ?? "60";
                             break;
 
                         case "max_connections":
@@ -1638,6 +1638,13 @@ public static class LyToAppSettingsConverter
                 ProcessProxyServerConfig(value, result, ctx);
                 break;
 
+            case "streamserver":
+            case "stream_server":
+            case "stream":
+                // TCP 流代理配置
+                ProcessStreamServerConfig(value, result);
+                break;
+
             case "certs":
                 // 证书配置
                 // 支持格式：
@@ -1690,11 +1697,11 @@ public static class LyToAppSettingsConverter
                     break;
                 case "username":
                 case "user":
-                    proxyServer["Username"] = kv.Value?.ToString();
+                    proxyServer["Username"] = kv.Value?.ToString() ?? "";
                     break;
                 case "password":
                 case "pass":
-                    proxyServer["Password"] = kv.Value?.ToString();
+                    proxyServer["Password"] = kv.Value?.ToString() ?? "";
                     break;
                 case "connecttimeout":
                 case "connect_timeout":
@@ -1763,6 +1770,190 @@ public static class LyToAppSettingsConverter
             }
             // HTTP/HTTPS/SOCKS5 代理使用独立的 TCP 监听，不需要添加 YARP 路由
         }
+    }
+
+    /// <summary>
+    /// 处理 TCP 流代理配置
+    /// 支持格式：
+    /// StreamServer {
+    ///     Enabled = true
+    ///     ConnectTimeout = 30
+    ///     DataTimeout = 300
+    ///     3306 {
+    ///         Upstreams = ["192.168.1.100:3306", "192.168.1.101:3306"]
+    ///         Policy = "RoundRobin"
+    ///     }
+    ///     6379 {
+    ///         Upstreams = ["redis.example.com:6379"]
+    ///     }
+    /// }
+    /// 
+    /// 或简写格式：
+    /// StreamServer {
+    ///     3306 = "192.168.1.100:3306"
+    ///     6379 = ["redis1:6379", "redis2:6379"]
+    /// }
+    /// </summary>
+    private static void ProcessStreamServerConfig(object value, Dictionary<string, object> result)
+    {
+        if (value is not Dictionary<string, object> streamConfig)
+            return;
+
+        var streamServer = EnsureDict(result, "StreamServer");
+        var streams = new Dictionary<string, object>();
+
+        foreach (var kv in streamConfig)
+        {
+            var key = kv.Key.ToLower();
+            switch (key)
+            {
+                case "enabled":
+                    streamServer["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "connecttimeout":
+                case "connect_timeout":
+                    if (int.TryParse(kv.Value?.ToString(), out var ct))
+                    {
+                        streamServer["ConnectTimeout"] = ct;
+                    }
+                    break;
+                case "datatimeout":
+                case "data_timeout":
+                    if (int.TryParse(kv.Value?.ToString(), out var dt))
+                    {
+                        streamServer["DataTimeout"] = dt;
+                    }
+                    break;
+                case "streams":
+                    // 嵌套的 Streams { ... } 块
+                    if (kv.Value is Dictionary<string, object> streamsConfig)
+                    {
+                        foreach (var streamKv in streamsConfig)
+                        {
+                            if (IsValidPortKey(streamKv.Key))
+                            {
+                                var streamConf = ParseStreamConfig(streamKv.Value);
+                                streams[streamKv.Key] = streamConf;
+                            }
+                        }
+                    }
+                    break;
+                default:
+                    // 检查是否是端口号或 host:port 格式（直接在顶层配置）
+                    if (IsValidPortKey(kv.Key))
+                    {
+                        var streamConf = ParseStreamConfig(kv.Value);
+                        streams[kv.Key] = streamConf;
+                    }
+                    break;
+            }
+        }
+
+        if (streams.Count > 0)
+        {
+            streamServer["Streams"] = streams;
+            // 如果有配置但没有显式设置 Enabled，默认启用
+            if (!streamServer.ContainsKey("Enabled"))
+            {
+                streamServer["Enabled"] = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 解析单个流配置
+    /// </summary>
+    private static Dictionary<string, object> ParseStreamConfig(object? value)
+    {
+        var config = new Dictionary<string, object>();
+        var upstreams = new List<string>();
+
+        if (value is string strValue)
+        {
+            // 简单字符串格式: "192.168.1.100:3306"
+            upstreams.Add(strValue);
+        }
+        else if (value is List<object> listValue)
+        {
+            // 列表格式: ["192.168.1.100:3306", "192.168.1.101:3306"]
+            foreach (var item in listValue)
+            {
+                if (item is string s)
+                {
+                    upstreams.Add(s);
+                }
+            }
+        }
+        else if (value is Dictionary<string, object> dict)
+        {
+            foreach (var kv in dict)
+            {
+                var key = kv.Key.ToLower();
+                switch (key)
+                {
+                    case "upstreams":
+                    case "upstream":
+                    case "to":
+                    case "targets":
+                        if (kv.Value is string s)
+                        {
+                            upstreams.Add(s);
+                        }
+                        else if (kv.Value is List<object> list)
+                        {
+                            foreach (var item in list)
+                            {
+                                if (item is string str)
+                                {
+                                    upstreams.Add(str);
+                                }
+                            }
+                        }
+                        break;
+                    case "policy":
+                    case "lb":
+                    case "loadbalance":
+                        var policy = kv.Value?.ToString()?.ToLower();
+                        config["Policy"] = policy switch
+                        {
+                            "random" => "Random",
+                            "first" => "First",
+                            _ => "RoundRobin"
+                        };
+                        break;
+                    case "connecttimeout":
+                    case "connect_timeout":
+                        if (int.TryParse(kv.Value?.ToString(), out var ct))
+                        {
+                            config["ConnectTimeout"] = ct;
+                        }
+                        break;
+                    case "datatimeout":
+                    case "data_timeout":
+                        if (int.TryParse(kv.Value?.ToString(), out var dt))
+                        {
+                            config["DataTimeout"] = dt;
+                        }
+                        break;
+                    case "enabled":
+                        config["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                        break;
+                }
+            }
+        }
+
+        if (upstreams.Count > 0)
+        {
+            config["Upstreams"] = upstreams;
+        }
+
+        // 默认启用
+        if (!config.ContainsKey("Enabled"))
+        {
+            config["Enabled"] = true;
+        }
+
+        return config;
     }
 
     /// <summary>
@@ -1933,7 +2124,7 @@ public static class LyToAppSettingsConverter
                 case "fallbackdns":
                 case "fallback_dns":
                 case "fallback":
-                    customDns["FallbackDns"] = kv.Value?.ToString();
+                    customDns["FallbackDns"] = kv.Value?.ToString() ?? "";
                     break;
                 default:
                     // 域名配置
