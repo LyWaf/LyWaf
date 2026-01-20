@@ -26,6 +26,26 @@ public class StreamServerOptions
     /// 默认数据传输超时时间（秒）
     /// </summary>
     public int DataTimeout { get; set; } = 300;
+
+    /// <summary>
+    /// 健康检查间隔时间（秒）
+    /// </summary>
+    public int HealthCheckInterval { get; set; } = 30;
+
+    /// <summary>
+    /// 健康检查连接超时时间（秒）
+    /// </summary>
+    public int HealthCheckTimeout { get; set; } = 5;
+
+    /// <summary>
+    /// 连续失败多少次后标记为不健康
+    /// </summary>
+    public int UnhealthyThreshold { get; set; } = 3;
+
+    /// <summary>
+    /// 连续成功多少次后标记为健康
+    /// </summary>
+    public int HealthyThreshold { get; set; } = 1;
 }
 
 /// <summary>

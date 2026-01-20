@@ -523,7 +523,7 @@ ReverseProxy:
             # 虚拟节点数: 用于 ConsistentHash, 默认150
             # VirtualNodes: "150"
         destination2:
-          Address: 'https://mat1.gtimg.com/'
+          Address: 'https://httpbin.org/ip/'
           Metadata:
             Weight: "1"
     cluster2:

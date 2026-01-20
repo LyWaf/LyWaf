@@ -15,16 +15,18 @@ public class StreamHandler
 
     private readonly StreamServerOptions _globalOptions;
     private readonly StreamConfig _streamConfig;
+    private readonly StreamHealthChecker? _healthChecker;
     private readonly string _listenKey;
     
     // 轮询计数器
     private int _roundRobinIndex = 0;
 
-    public StreamHandler(StreamServerOptions globalOptions, StreamConfig streamConfig, string listenKey)
+    public StreamHandler(StreamServerOptions globalOptions, StreamConfig streamConfig, string listenKey, StreamHealthChecker? healthChecker = null)
     {
         _globalOptions = globalOptions;
         _streamConfig = streamConfig;
         _listenKey = listenKey;
+        _healthChecker = healthChecker;
     }
 
     /// <summary>
@@ -46,8 +48,8 @@ public class StreamHandler
             var connectTimeout = TimeSpan.FromSeconds(
                 _streamConfig.ConnectTimeout ?? _globalOptions.ConnectTimeout);
             
-            // 选择上游服务器
-            var (targetHost, targetPort) = await SelectUpstreamAsync(connectTimeout, cancellationToken);
+            // 选择上游服务器（优先选择健康的）
+            var (targetHost, targetPort) = SelectUpstream();
             if (targetHost == null)
             {
                 _logger.Warn("Stream {Listen} 所有上游服务器不可用", _listenKey);
@@ -93,6 +95,9 @@ public class StreamHandler
 
             await targetSocket.ConnectAsync(new IPEndPoint(targetIp, targetPort), cts.Token);
 
+            // 连接成功，通知健康检查器
+            _healthChecker?.MarkHealthy(selectedUpstream);
+
             _logger.Debug("Stream {Listen} 已连接到 {Upstream} ({IP})", _listenKey, selectedUpstream, targetIp);
 
             // 开始双向数据转发
@@ -106,11 +111,21 @@ public class StreamHandler
         catch (OperationCanceledException)
         {
             _logger.Debug("Stream {Listen} 连接取消", _listenKey);
+            // 超时也算连接失败
+            if (selectedUpstream != null)
+            {
+                _healthChecker?.MarkUnhealthy(selectedUpstream, "连接超时");
+            }
         }
         catch (SocketException ex)
         {
             _logger.Warn("Stream {Listen} -> {Upstream} 连接失败: {Error}", 
                 _listenKey, selectedUpstream ?? "unknown", ex.Message);
+            // 连接失败，通知健康检查器
+            if (selectedUpstream != null)
+            {
+                _healthChecker?.MarkUnhealthy(selectedUpstream, ex.Message);
+            }
         }
         catch (Exception ex)
         {
@@ -125,101 +140,41 @@ public class StreamHandler
     /// <summary>
     /// 选择上游服务器
     /// </summary>
-    private async Task<(string? host, int port)> SelectUpstreamAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    private (string? host, int port) SelectUpstream()
     {
-        var upstreams = _streamConfig.Upstreams;
+        // 获取上游列表，优先使用健康的
+        var upstreams = _healthChecker != null 
+            ? _healthChecker.GetHealthyUpstreams(_streamConfig.Upstreams) 
+            : _streamConfig.Upstreams;
+        
+        if (upstreams.Count == 0)
+        {
+            return (null, 0);
+        }
+
+        string selectedUpstream;
         
         switch (_streamConfig.Policy)
         {
             case StreamLoadBalancePolicy.Random:
                 // 随机选择
-                var shuffled = upstreams.OrderBy(_ => _random.Next()).ToList();
-                return await TryConnectToAnyAsync(shuffled, timeout, cancellationToken);
+                selectedUpstream = upstreams[_random.Next(upstreams.Count)];
+                break;
 
             case StreamLoadBalancePolicy.First:
-                // 按顺序尝试第一个可用的
-                return await TryConnectToAnyAsync(upstreams, timeout, cancellationToken);
+                // 第一个
+                selectedUpstream = upstreams[0];
+                break;
 
             case StreamLoadBalancePolicy.RoundRobin:
             default:
                 // 轮询
-                var startIndex = Interlocked.Increment(ref _roundRobinIndex) - 1;
-                var orderedUpstreams = new List<string>();
-                for (int i = 0; i < upstreams.Count; i++)
-                {
-                    orderedUpstreams.Add(upstreams[(startIndex + i) % upstreams.Count]);
-                }
-                return await TryConnectToAnyAsync(orderedUpstreams, timeout, cancellationToken);
-        }
-    }
-
-    /// <summary>
-    /// 尝试连接到任意一个上游服务器
-    /// </summary>
-    private static async Task<(string? host, int port)> TryConnectToAnyAsync(
-        List<string> upstreams, TimeSpan timeout, CancellationToken cancellationToken)
-    {
-        foreach (var upstream in upstreams)
-        {
-            var (host, port) = ParseHostPort(upstream);
-            if (host == null || port == 0)
-            {
-                continue;
-            }
-
-            // 简单检查：如果只有一个上游，直接返回，不做预连接测试
-            if (upstreams.Count == 1)
-            {
-                return (host, port);
-            }
-
-            // 多个上游时，尝试快速连接测试
-            try
-            {
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(TimeSpan.FromSeconds(Math.Min(5, timeout.TotalSeconds / 2)));
-
-                // 使用自定义 DNS 解析
-                var dnsService = ServiceLocator.GetService<Dns.ICustomDnsService>();
-                IPAddress? resolvedIp = null;
-                if (dnsService != null)
-                {
-                    resolvedIp = await dnsService.ResolveAsync(host, cts.Token);
-                }
-
-                IPAddress targetIp;
-                if (resolvedIp != null)
-                {
-                    targetIp = resolvedIp;
-                }
-                else
-                {
-                    var addresses = await System.Net.Dns.GetHostAddressesAsync(host, cts.Token);
-                    if (addresses.Length == 0) continue;
-                    targetIp = addresses[0];
-                }
-
-                using var testSocket = new Socket(targetIp.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-                await testSocket.ConnectAsync(new IPEndPoint(targetIp, port), cts.Token);
-                
-                // 连接成功，返回此上游
-                return (host, port);
-            }
-            catch
-            {
-                // 连接失败，尝试下一个
-                _logger.Debug("Stream 上游 {Upstream} 不可用，尝试下一个", upstream);
-            }
+                var index = Interlocked.Increment(ref _roundRobinIndex) - 1;
+                selectedUpstream = upstreams[index % upstreams.Count];
+                break;
         }
 
-        // 所有上游都不可用，返回第一个让主逻辑处理错误
-        if (upstreams.Count > 0)
-        {
-            var (host, port) = ParseHostPort(upstreams[0]);
-            return (host, port);
-        }
-
-        return (null, 0);
+        return ParseHostPort(selectedUpstream);
     }
 
     /// <summary>

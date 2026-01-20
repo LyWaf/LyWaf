@@ -15,7 +15,7 @@ public class StreamService : BackgroundService
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private StreamServerOptions _options;
     private readonly List<(TcpListener listener, string key, StreamHandler handler)> _listeners = [];
-    private readonly Dictionary<string, StreamHandler> _handlers = [];
+    private StreamHealthChecker? _healthChecker;
 
     public StreamService(IOptionsMonitor<StreamServerOptions> optionsMonitor)
     {
@@ -46,6 +46,10 @@ public class StreamService : BackgroundService
             return;
         }
 
+        // 创建并启动健康检查器
+        _healthChecker = new StreamHealthChecker(_options);
+        _healthChecker.Start();
+
         // 启动监听器
         foreach (var (key, config) in enabledStreams)
         {
@@ -63,9 +67,8 @@ public class StreamService : BackgroundService
                 var listener = new TcpListener(host, port);
                 listener.Start();
 
-                var handler = new StreamHandler(_options, config, key);
+                var handler = new StreamHandler(_options, config, key, _healthChecker);
                 _listeners.Add((listener, key, handler));
-                _handlers[key] = handler;
 
                 var upstreams = string.Join(", ", config.Upstreams);
                 _logger.Info("Stream 代理启动: {Host}:{Port} -> [{Upstreams}] ({Policy})", 
@@ -89,6 +92,10 @@ public class StreamService : BackgroundService
         {
             // 正常停止
         }
+
+        // 停止健康检查器
+        _healthChecker?.Stop();
+        _healthChecker?.Dispose();
 
         // 停止所有监听器
         foreach (var (listener, _, _) in _listeners)

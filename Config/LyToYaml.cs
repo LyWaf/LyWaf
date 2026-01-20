@@ -1824,6 +1824,36 @@ public static class LyToAppSettingsConverter
                         streamServer["DataTimeout"] = dt;
                     }
                     break;
+                case "healthcheckinterval":
+                case "health_check_interval":
+                case "healthinterval":
+                    if (int.TryParse(kv.Value?.ToString(), out var hci))
+                    {
+                        streamServer["HealthCheckInterval"] = hci;
+                    }
+                    break;
+                case "healthchecktimeout":
+                case "health_check_timeout":
+                case "healthtimeout":
+                    if (int.TryParse(kv.Value?.ToString(), out var hct))
+                    {
+                        streamServer["HealthCheckTimeout"] = hct;
+                    }
+                    break;
+                case "unhealthythreshold":
+                case "unhealthy_threshold":
+                    if (int.TryParse(kv.Value?.ToString(), out var ut))
+                    {
+                        streamServer["UnhealthyThreshold"] = ut;
+                    }
+                    break;
+                case "healthythreshold":
+                case "healthy_threshold":
+                    if (int.TryParse(kv.Value?.ToString(), out var ht))
+                    {
+                        streamServer["HealthyThreshold"] = ht;
+                    }
+                    break;
                 case "streams":
                     // 嵌套的 Streams { ... } 块
                     if (kv.Value is Dictionary<string, object> streamsConfig)
