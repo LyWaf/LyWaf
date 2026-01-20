@@ -147,9 +147,53 @@ localhost:3000 {
     reverse_proxy http://127.0.0.1:3000
 }
 
+# proxy 是 reverse_proxy 的简写
+localhost:4000 {
+    # 以下两种写法等价
+    proxy http://127.0.0.1:4000
+}
+
+# proxy 也支持完整配置格式
+localhost:5000 {
+    proxy {
+        to = "http://127.0.0.1:5001 http://127.0.0.1:5002"
+        lb_policy = "RoundRobin"
+        timeout = "00:00:30"
+        max_connections = 100
+    }
+}
+
+# 内部服务使用自定义 DNS 解析
+internal.${domain} {
+    # backend.internal 会被自定义 DNS 解析为配置的 IP
+    proxy http://backend.internal:8080
+}
+
 # ============================================================
 # 其他全局配置
 # ============================================================
+
+# AllowedHosts 配置（限制允许的 Host 头）
+AllowedHosts = "*"
+
+# 自定义 DNS 配置（将域名解析为指定 IP）
+CustomDns {
+    Enabled = true
+    CacheTtlSeconds = 300
+    
+    # 简单格式：域名 = "IP列表（空格分隔）"
+    "backend.internal" = "192.168.1.100 192.168.1.101 192.168.1.102"
+    
+    # 通配符匹配：*.internal.example.com 匹配所有子域名
+    "*.internal.example.com" = "10.0.0.1 10.0.0.2"
+    
+    # 完整配置格式
+    "api.internal" {
+        Addresses = ["192.168.1.200", "192.168.1.201"]
+        Policy = "RoundRobin"    # 或 Random
+        TtlSeconds = 60
+    }
+}
 
 # 访问控制
 AccessControl {

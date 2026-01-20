@@ -580,9 +580,9 @@ public static class LyToAppSettingsConverter
                         ["Order"] = ctx.NextRouteOrder("/{**file-all}", hosts.Count > 0)
                     };
                 }
-                else if (directive == "reverse_proxy" && parts.Length > 1)
+                else if ((directive == "reverse_proxy" || directive == "proxy") && parts.Length > 1)
                 {
-                    // 简化的反向代理配置
+                    // 简化的反向代理配置（proxy 是 reverse_proxy 的简写）
                     var upstreams = parts.Skip(1).Select(NormalizeUpstream).ToList();
                     var clusterId = GetOrCreateCluster(upstreams, new Dictionary<string, object>(), ctx);
 
@@ -666,7 +666,9 @@ public static class LyToAppSettingsConverter
                     switch (key)
                     {
                         case "reverse_proxy":
-                            defaultUpstreams.AddRange(ParseUpstreams(directive.Value));
+                        case "proxy":  // proxy 是 reverse_proxy 的简写
+                            // 解析 reverse_proxy 配置
+                            ParseReverseProxyConfig(directive.Value, defaultUpstreams, defaultClusterConfig);
                             break;
 
                         case "file_server":
@@ -764,7 +766,9 @@ public static class LyToAppSettingsConverter
                     switch (kv.Key.ToLower())
                     {
                         case "reverse_proxy":
-                            upstreams.AddRange(ParseUpstreams(kv.Value));
+                        case "proxy":  // proxy 是 reverse_proxy 的简写
+                            // 解析 reverse_proxy 配置
+                            ParseReverseProxyConfig(kv.Value, upstreams, clusterConfig);
                             break;
                         case "file_server":
                             blockHasFileServer = true;
@@ -1397,6 +1401,111 @@ public static class LyToAppSettingsConverter
     }
 
     /// <summary>
+    /// 解析 reverse_proxy/proxy 配置
+    /// 支持格式：
+    /// 1. 简单格式：proxy http://127.0.0.1:8080
+    /// 2. 多上游：proxy http://127.0.0.1:8080 http://127.0.0.1:8081
+    /// 3. 带配置格式：
+    ///    proxy {
+    ///        to = "http://127.0.0.1:8080"
+    ///        lb_policy = "RoundRobin"
+    ///    }
+    /// </summary>
+    private static void ParseReverseProxyConfig(
+        object value,
+        List<string> upstreams,
+        Dictionary<string, object> clusterConfig)
+    {
+        switch (value)
+        {
+            case string s:
+                // 简单字符串格式：可能是空格分隔的多个上游
+                foreach (var part in s.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    upstreams.Add(NormalizeUpstream(part));
+                }
+                break;
+
+            case List<object> list:
+                // 数组格式
+                foreach (var item in list)
+                {
+                    upstreams.Add(NormalizeUpstream(item?.ToString() ?? ""));
+                }
+                break;
+
+            case Dictionary<string, object> dict:
+                // 完整配置格式
+                foreach (var kv in dict)
+                {
+                    var key = kv.Key.ToLower();
+                    switch (key)
+                    {
+                        case "to":
+                        case "upstream":
+                        case "upstreams":
+                        case "address":
+                        case "addresses":
+                            // 上游地址
+                            upstreams.AddRange(ParseUpstreams(kv.Value));
+                            break;
+
+                        case "lb_policy":
+                        case "load_balancing_policy":
+                            clusterConfig["LoadBalancingPolicy"] = kv.Value?.ToString() ?? "RoundRobin";
+                            break;
+
+                        case "health_check":
+                            if (kv.Value is Dictionary<string, object> hcConfig)
+                            {
+                                clusterConfig["HealthCheck"] = hcConfig;
+                            }
+                            break;
+
+                        case "timeout":
+                        case "request_timeout":
+                            // 请求超时配置
+                            var httpClientTimeout = EnsureDict(clusterConfig, "HttpClient");
+                            httpClientTimeout["RequestTimeout"] = kv.Value?.ToString();
+                            break;
+
+                        case "max_connections":
+                        case "max_connections_per_server":
+                            var httpClientConn = EnsureDict(clusterConfig, "HttpClient");
+                            if (int.TryParse(kv.Value?.ToString(), out var maxConn))
+                            {
+                                httpClientConn["MaxConnectionsPerServer"] = maxConn;
+                            }
+                            break;
+
+                        default:
+                            // 尝试作为上游地址解析
+                            if (kv.Value is Dictionary<string, object> destConfig)
+                            {
+                                if (destConfig.TryGetValue("Address", out var addr) ||
+                                    destConfig.TryGetValue("address", out addr))
+                                {
+                                    upstreams.Add(NormalizeUpstream(addr?.ToString() ?? ""));
+                                }
+                            }
+                            break;
+                    }
+                }
+                break;
+        }
+    }
+
+    private static Dictionary<string, object> EnsureDict(Dictionary<string, object> parent, string key)
+    {
+        if (!parent.TryGetValue(key, out var value) || value is not Dictionary<string, object> dict)
+        {
+            dict = new Dictionary<string, object>();
+            parent[key] = dict;
+        }
+        return (Dictionary<string, object>)dict;
+    }
+
+    /// <summary>
     /// 解析上游服务器列表
     /// </summary>
     private static List<string> ParseUpstreams(object value)
@@ -1497,6 +1606,19 @@ public static class LyToAppSettingsConverter
                 EnsureDict(result, "Logging")["Level"] = "Debug";
                 break;
 
+            case "allowedhosts":
+            case "allowed_hosts":
+                // AllowedHosts 配置
+                result["AllowedHosts"] = value.ToString()!;
+                break;
+
+            case "customdns":
+            case "custom_dns":
+            case "dns":
+                // 自定义 DNS 配置
+                ProcessCustomDnsConfig(value, result);
+                break;
+
             case "certs":
                 // 证书配置
                 // 支持格式：
@@ -1513,14 +1635,116 @@ public static class LyToAppSettingsConverter
         }
     }
 
-    private static Dictionary<string, object> EnsureDict(Dictionary<string, object> parent, string key)
+    /// <summary>
+    /// 处理自定义 DNS 配置
+    /// 支持格式：
+    /// CustomDns {
+    ///     Enabled = true
+    ///     CacheTtlSeconds = 300
+    ///     example.com = "192.168.1.100 192.168.1.101"
+    ///     example.com { Addresses = ["192.168.1.100", "192.168.1.101"]; Policy = "RoundRobin" }
+    ///     "*.internal.com" = "10.0.0.1"
+    /// }
+    /// </summary>
+    private static void ProcessCustomDnsConfig(object value, Dictionary<string, object> result)
     {
-        if (!parent.TryGetValue(key, out var value) || value is not Dictionary<string, object> dict)
+        if (value is not Dictionary<string, object> dnsConfig)
+            return;
+
+        var customDns = EnsureDict(result, "CustomDns");
+        var entries = new Dictionary<string, object>();
+
+        foreach (var kv in dnsConfig)
         {
-            dict = new Dictionary<string, object>();
-            parent[key] = dict;
+            var key = kv.Key.ToLower();
+
+            switch (key)
+            {
+                case "enabled":
+                    customDns["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "cachettlseconds":
+                case "cache_ttl_seconds":
+                case "ttl":
+                    if (int.TryParse(kv.Value?.ToString(), out var ttl))
+                    {
+                        customDns["CacheTtlSeconds"] = ttl;
+                    }
+                    break;
+                case "fallbackdns":
+                case "fallback_dns":
+                case "fallback":
+                    customDns["FallbackDns"] = kv.Value?.ToString();
+                    break;
+                default:
+                    // 域名配置
+                    var domain = kv.Key; // 保持原始大小写
+                    var entry = new Dictionary<string, object>();
+
+                    if (kv.Value is string addresses)
+                    {
+                        // 简单格式：example.com = "192.168.1.100 192.168.1.101"
+                        var addrList = addresses.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries);
+                        entry["Addresses"] = addrList.ToList();
+                        entry["Policy"] = "Random";
+                    }
+                    else if (kv.Value is List<object> addrObjList)
+                    {
+                        // 数组格式：example.com = ["192.168.1.100", "192.168.1.101"]
+                        entry["Addresses"] = addrObjList.Select(x => x?.ToString() ?? "").ToList();
+                        entry["Policy"] = "Random";
+                    }
+                    else if (kv.Value is Dictionary<string, object> entryConfig)
+                    {
+                        // 完整配置格式
+                        foreach (var entryKv in entryConfig)
+                        {
+                            var entryKey = entryKv.Key.ToLower();
+                            switch (entryKey)
+                            {
+                                case "addresses":
+                                case "ips":
+                                    if (entryKv.Value is string addrStr)
+                                    {
+                                        entry["Addresses"] = addrStr.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries).ToList();
+                                    }
+                                    else if (entryKv.Value is List<object> list)
+                                    {
+                                        entry["Addresses"] = list.Select(x => x?.ToString() ?? "").ToList();
+                                    }
+                                    break;
+                                case "policy":
+                                    entry["Policy"] = entryKv.Value?.ToString() ?? "Random";
+                                    break;
+                                case "ttlseconds":
+                                case "ttl_seconds":
+                                case "ttl":
+                                    if (int.TryParse(entryKv.Value?.ToString(), out var entryTtl))
+                                    {
+                                        entry["TtlSeconds"] = entryTtl;
+                                    }
+                                    break;
+                            }
+                        }
+                    }
+
+                    if (entry.ContainsKey("Addresses"))
+                    {
+                        entries[domain] = entry;
+                    }
+                    break;
+            }
         }
-        return (Dictionary<string, object>)dict;
+
+        if (entries.Count > 0)
+        {
+            customDns["Entries"] = entries;
+            // 如果有条目但没有显式设置 Enabled，默认启用
+            if (!customDns.ContainsKey("Enabled"))
+            {
+                customDns["Enabled"] = true;
+            }
+        }
     }
 
     /// <summary>

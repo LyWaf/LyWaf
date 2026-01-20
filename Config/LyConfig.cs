@@ -688,7 +688,7 @@ public class LyConfigParser
     /// </summary>
     private static readonly HashSet<string> SiteDirectives = new(StringComparer.OrdinalIgnoreCase)
     {
-        "respond", "file_server", "reverse_proxy", "root", "browse", "index",
+        "respond", "file_server", "reverse_proxy", "proxy", "root", "browse", "index",
         "try_files", "header", "encode", "log", "route", "handle", "redir",
         "rewrite", "uri", "request_body", "templates", "tls", "import",
         "lb_policy", "load_balancing_policy", "health_check", "status",
