@@ -190,7 +190,8 @@ public class LyConfigParser
             }
 
             // 标识符或关键字
-            if (char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.' || c == '/' || c == '*')
+            // @ 用于方法标记，如 @post @get
+            if (char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.' || c == '/' || c == '*' || c == '@')
             {
                 var (word, newPos) = ParseWord(line, i);
                 var tokenType = word.ToLower() switch
@@ -362,7 +363,8 @@ public class LyConfigParser
             }
             
             // 常规允许的字符
-            if (char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.' || c == '/' || c == '*' || c == ':')
+            // @ 用于方法标记，如 @post @get
+            if (char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.' || c == '/' || c == '*' || c == ':' || c == '@')
             {
                 sb.Append(c);
                 i++;
@@ -790,7 +792,15 @@ public class LyConfigParser
             Consume(TokenType.RightBrace);
 
             // 特殊处理：根据块名称决定结构
-            return (name, ProcessBlock(name, args, content));
+            var processed = ProcessBlock(name, args, content);
+            
+            // 如果 ProcessBlock 返回了 tuple (用于路径+方法的组合)
+            if (processed is ValueTuple<string, Dictionary<string, object>> pathTuple)
+            {
+                return (pathTuple.Item1, pathTuple.Item2);
+            }
+            
+            return (name, processed);
         }
 
         // 非嵌套站点配置：站点地址后面没有 {}，收集后续指令
@@ -1227,7 +1237,24 @@ public class LyConfigParser
     private object ProcessBlock(string name, List<string> args, Dictionary<string, object> content)
     {
         // 根据块名称进行特殊处理
-        return name.ToLower() switch
+        var nameLower = name.ToLower();
+        
+        // 处理路径块（以 / 开头）
+        // 如果有 @method 参数，需要将其合并到路径中以便后续处理
+        if (name.StartsWith('/') && args.Count > 0)
+        {
+            // 收集 @method 参数（如 @post, @get）
+            var methodArgs = args.Where(a => a.StartsWith('@')).ToList();
+            if (methodArgs.Count > 0)
+            {
+                // 将方法参数合并到路径中，格式：/path @method1 @method2
+                var combinedPath = name + " " + string.Join(" ", methodArgs);
+                // 返回一个 tuple，让上层代码用 combinedPath 作为 key
+                return (combinedPath, content);
+            }
+        }
+        
+        return nameLower switch
         {
             // 站点块
             "site" or "server" => ProcessSiteBlock(args, content),

@@ -825,6 +825,13 @@ public static class LyToAppSettingsConverter
                     }
                 }
 
+                // 解析路径中的方法（如 /api/* @post）
+                var (purePath, pathMethods) = ParsePathAndMethods(path);
+                // 从配置块中解析方法（如 method = post）
+                var configMethods = ParseMethodsFromConfig(config);
+                // 合并方法（配置块的方法优先）
+                var methods = configMethods ?? pathMethods;
+
                 if (upstreams.Count > 0)
                 {
                     // 获取或创建 cluster
@@ -832,7 +839,7 @@ public static class LyToAppSettingsConverter
 
                     // 创建路由
                     var routeId = ctx.NextRouteId();
-                    var normalizedPath = NormalizePath(path);
+                    var normalizedPath = NormalizePath(purePath);
                     var match = new Dictionary<string, object>
                     {
                         ["Path"] = normalizedPath
@@ -841,6 +848,7 @@ public static class LyToAppSettingsConverter
                     {
                         match["Hosts"] = hosts;
                     }
+                    AddMethodsToMatch(match, methods);
 
                     var routeConfig = new Dictionary<string, object>
                     {
@@ -857,11 +865,11 @@ public static class LyToAppSettingsConverter
                     ctx.HasFileServerRoute = true;
                     
                     // 将路径转换为 prefix（用于 FileServerItem）
-                    var prefix = PathToFileServerPrefix(path);
+                    var prefix = PathToFileServerPrefix(purePath);
                     var fileServerId = BuildFileServerConfig(blockFileServerConfig, prefix, hosts, ctx);
 
                     // 创建文件服务路由，将 * 替换为 {**file-all}
-                    var matchPath = NormalizeFileServerPath(path);
+                    var matchPath = NormalizeFileServerPath(purePath);
                     var match = new Dictionary<string, object>
                     {
                         ["Path"] = matchPath
@@ -870,6 +878,7 @@ public static class LyToAppSettingsConverter
                     {
                         match["Hosts"] = hosts;
                     }
+                    AddMethodsToMatch(match, methods);
 
                     // 使用 cluster1，如果不存在会在后面创建假的
                     var routeConfig = new Dictionary<string, object>
@@ -885,7 +894,7 @@ public static class LyToAppSettingsConverter
                 {
                     // respond 路由 - 使用 simpleres_xxx 作为路由 ID
                     var routeId = BuildSimpleResConfig(blockRespondConfig, ctx);
-                    var normalizedPath = NormalizePath(path);
+                    var normalizedPath = NormalizePath(purePath);
                     var match = new Dictionary<string, object>
                     {
                         ["Path"] = normalizedPath
@@ -894,6 +903,7 @@ public static class LyToAppSettingsConverter
                     {
                         match["Hosts"] = hosts;
                     }
+                    AddMethodsToMatch(match, methods);
 
                     var routeConfig = new Dictionary<string, object>
                     {
@@ -1235,10 +1245,131 @@ public static class LyToAppSettingsConverter
     }
 
     /// <summary>
+    /// 解析路径和 HTTP 方法
+    /// 支持格式:
+    /// - /api/* @post -> 路径 /api/*，方法 POST
+    /// - /api/* @get,post -> 路径 /api/*，方法 GET,POST
+    /// - /api/* @GET @POST -> 路径 /api/*，方法 GET,POST
+    /// </summary>
+    private static (string path, List<string>? methods) ParsePathAndMethods(string input)
+    {
+        var methods = new List<string>();
+        var path = input.Trim();
+
+        // 查找 @ 符号来提取方法
+        var atIndex = path.IndexOf(" @", StringComparison.Ordinal);
+        if (atIndex > 0)
+        {
+            var methodPart = path[(atIndex + 1)..].Trim();
+            path = path[..atIndex].Trim();
+
+            // 解析方法（可能有多个 @method 或 @method1,method2）
+            var tokens = methodPart.Split(new[] { ' ', '@' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var token in tokens)
+            {
+                // 处理逗号分隔的方法
+                var methodNames = token.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                foreach (var m in methodNames)
+                {
+                    var method = m.Trim().ToUpper();
+                    if (IsValidHttpMethod(method) && !methods.Contains(method))
+                    {
+                        methods.Add(method);
+                    }
+                }
+            }
+        }
+
+        return (path, methods.Count > 0 ? methods : null);
+    }
+
+    /// <summary>
+    /// 从配置块中解析 HTTP 方法
+    /// 支持格式:
+    /// - method = post
+    /// - method = "post,get"
+    /// - methods = ["GET", "POST"]
+    /// </summary>
+    private static List<string>? ParseMethodsFromConfig(Dictionary<string, object> config)
+    {
+        var methods = new List<string>();
+
+        foreach (var kv in config)
+        {
+            var key = kv.Key.ToLower();
+            if (key == "method" || key == "methods")
+            {
+                if (kv.Value is string strValue)
+                {
+                    // 处理 "post" 或 "post,get"
+                    var methodNames = strValue.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var m in methodNames)
+                    {
+                        var method = m.Trim().ToUpper();
+                        if (IsValidHttpMethod(method) && !methods.Contains(method))
+                        {
+                            methods.Add(method);
+                        }
+                    }
+                }
+                else if (kv.Value is List<object> listValue)
+                {
+                    // 处理 ["GET", "POST"]
+                    foreach (var item in listValue)
+                    {
+                        var method = item.ToString()?.Trim().ToUpper();
+                        if (method != null && IsValidHttpMethod(method) && !methods.Contains(method))
+                        {
+                            methods.Add(method);
+                        }
+                    }
+                }
+            }
+        }
+
+        return methods.Count > 0 ? methods : null;
+    }
+
+    /// <summary>
+    /// 检查是否是有效的 HTTP 方法
+    /// </summary>
+    private static bool IsValidHttpMethod(string method)
+    {
+        return method switch
+        {
+            "GET" => true,
+            "POST" => true,
+            "PUT" => true,
+            "DELETE" => true,
+            "PATCH" => true,
+            "HEAD" => true,
+            "OPTIONS" => true,
+            "TRACE" => true,
+            "CONNECT" => true,
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// 将方法列表添加到 Match 配置
+    /// </summary>
+    private static void AddMethodsToMatch(Dictionary<string, object> match, List<string>? methods)
+    {
+        if (methods != null && methods.Count > 0)
+        {
+            match["Methods"] = methods;
+        }
+    }
+
+    /// <summary>
     /// 规范化路径格式
     /// </summary>
     private static string NormalizePath(string path)
     {
+        // 先解析出纯路径（去除方法部分）
+        var (purePath, _) = ParsePathAndMethods(path);
+        path = purePath;
+
         // 确保路径以 / 开头
         if (!path.StartsWith('/'))
         {

@@ -30,17 +30,17 @@ public class StreamServerOptions
     /// <summary>
     /// 健康检查间隔时间（秒）
     /// </summary>
-    public int HealthCheckInterval { get; set; } = 30;
+    public int HealthCheckInterval { get; set; } = 10;
 
     /// <summary>
     /// 健康检查连接超时时间（秒）
     /// </summary>
-    public int HealthCheckTimeout { get; set; } = 5;
+    public int HealthCheckTimeout { get; set; } = 3;
 
     /// <summary>
     /// 连续失败多少次后标记为不健康
     /// </summary>
-    public int UnhealthyThreshold { get; set; } = 3;
+    public int UnhealthyThreshold { get; set; } = 2;
 
     /// <summary>
     /// 连续成功多少次后标记为健康
