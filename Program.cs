@@ -1155,6 +1155,9 @@ public class Program
             // 启用响应压缩（必须放在其他中间件之前）
             proxyApp.UseMiddleware<ResponseCompressMiddleware>();
             
+            // 高优先级插件（Highest, High）- 在核心中间件之前
+            proxyApp.UseLyWafPluginsInProxyHigh();
+            
             // IP访问控制和连接限制（应放在较前面位置）
             proxyApp.UseMiddleware<AccessControlMiddleware>();
             // 自动 HTTPS 重定向
@@ -1163,8 +1166,10 @@ public class Program
             proxyApp.UseMiddleware<StatisticLogMiddleware>();
             proxyApp.UseMiddleware<ThrottledMiddleware>();
             proxyApp.UseMiddleware<SpeedLimitMiddleware>();
-            // 插件代理管道中间件
-            proxyApp.UseLyWafPluginsInProxy();
+            
+            // 普通及低优先级插件（Normal, Low, Lowest）- 在核心中间件之后
+            proxyApp.UseLyWafPluginsInProxyNormal();
+            
             // SimpleRes 简单响应处理中间件
             proxyApp.UseMiddleware<SimpleResMiddleware>();
             proxyApp.UseMiddleware<FileProviderMiddleware>();

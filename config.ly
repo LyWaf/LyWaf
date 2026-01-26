@@ -27,6 +27,13 @@ plugins {
         }
     }
 }
+
+(res) {
+    respond "hello {args[0]}"
+    status 201
+    show-req true
+}
+
 localhost:5003, localhost:5004, 0.0.0.0:5005, example.com:5006
 /static/ {
     file_server {
@@ -39,7 +46,8 @@ localhost:5003, localhost:5004, 0.0.0.0:5005, example.com:5006
     respond "OK"
 }
 
-respond "hello world {HOST}:{PORT}"
-status=201
-content-type="text/plain"
-show-req=true
+import res "aaa"
+#respond "hello world {HOST}:{PORT}"
+#status=201
+#content-type="text/plain"
+#show-req=true

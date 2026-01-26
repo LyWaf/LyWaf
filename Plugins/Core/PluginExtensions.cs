@@ -56,12 +56,33 @@ public static class PluginExtensions
     }
     
     /// <summary>
-    /// 在代理管道中使用插件
+    /// 在代理管道中使用高优先级插件（Highest, High）
+    /// 应在核心中间件之前调用
     /// </summary>
+    public static IApplicationBuilder UseLyWafPluginsInProxyHigh(this IApplicationBuilder proxyApp)
+    {
+        var manager = proxyApp.ApplicationServices.GetRequiredService<PluginManager>();
+        manager.ConfigureProxyPipelineHigh(proxyApp);
+        return proxyApp;
+    }
+    
+    /// <summary>
+    /// 在代理管道中使用普通及低优先级插件（Normal, Low, Lowest）
+    /// 应在核心中间件之后调用
+    /// </summary>
+    public static IApplicationBuilder UseLyWafPluginsInProxyNormal(this IApplicationBuilder proxyApp)
+    {
+        var manager = proxyApp.ApplicationServices.GetRequiredService<PluginManager>();
+        manager.ConfigureProxyPipelineNormal(proxyApp);
+        return proxyApp;
+    }
+    
+    /// <summary>
+    /// 在代理管道中使用所有插件（兼容旧代码）
+    /// </summary>
+    [Obsolete("请使用 UseLyWafPluginsInProxyHigh 和 UseLyWafPluginsInProxyNormal 分别配置")]
     public static IApplicationBuilder UseLyWafPluginsInProxy(this IApplicationBuilder proxyApp)
     {
-        
-        // 配置各插件的代理管道中间件
         var manager = proxyApp.ApplicationServices.GetRequiredService<PluginManager>();
         manager.ConfigureProxyPipeline(proxyApp);
         return proxyApp;

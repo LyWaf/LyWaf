@@ -312,7 +312,7 @@ public class PluginManager : IPluginManager
     }
     
     /// <summary>
-    /// 配置代理管道
+    /// 配置代理管道（所有优先级）
     /// </summary>
     public void ConfigureProxyPipeline(IApplicationBuilder proxyApp)
     {
@@ -323,6 +323,52 @@ public class PluginManager : IPluginManager
             try
             {
                 _logger.Debug("配置插件代理管道: {Id}", info.Plugin.Metadata.Id);
+                info.Plugin.ConfigureProxyPipeline(proxyApp);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "配置插件 {Id} 代理管道失败", info.Plugin.Metadata.Id);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// 配置代理管道 - 高优先级（Highest, High）
+    /// </summary>
+    public void ConfigureProxyPipelineHigh(IApplicationBuilder proxyApp)
+    {
+        var highPriorityPlugins = GetEnabledPluginsSorted()
+            .Where(p => p.Plugin.Metadata.Priority <= PluginPriority.High);
+        
+        foreach (var info in highPriorityPlugins)
+        {
+            try
+            {
+                _logger.Debug("配置高优先级插件代理管道: {Id} (Priority={Priority})", 
+                    info.Plugin.Metadata.Id, info.Plugin.Metadata.Priority);
+                info.Plugin.ConfigureProxyPipeline(proxyApp);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "配置插件 {Id} 代理管道失败", info.Plugin.Metadata.Id);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// 配置代理管道 - 普通及低优先级（Normal, Low, Lowest）
+    /// </summary>
+    public void ConfigureProxyPipelineNormal(IApplicationBuilder proxyApp)
+    {
+        var normalPriorityPlugins = GetEnabledPluginsSorted()
+            .Where(p => p.Plugin.Metadata.Priority > PluginPriority.High);
+        
+        foreach (var info in normalPriorityPlugins)
+        {
+            try
+            {
+                _logger.Debug("配置普通优先级插件代理管道: {Id} (Priority={Priority})", 
+                    info.Plugin.Metadata.Id, info.Plugin.Metadata.Priority);
                 info.Plugin.ConfigureProxyPipeline(proxyApp);
             }
             catch (Exception ex)

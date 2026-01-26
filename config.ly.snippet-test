@@ -1,0 +1,12 @@
+# Snippet 功能测试
+
+# 定义代码片段
+(common_headers) {
+    header_up X-Custom "value"
+}
+
+# 使用 snippet
+localhost:5003 {
+    import common_headers
+    respond "Hello"
+}

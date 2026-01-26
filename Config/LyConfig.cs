@@ -36,6 +36,7 @@ public class LyConfigParser
     }
 
     private readonly Dictionary<string, string> _variables = [];
+    private readonly Dictionary<string, SnippetDefinition> _snippets = [];
     private readonly List<Token> _tokens = [];
     private int _position = 0;
 
@@ -126,6 +127,14 @@ public class LyConfigParser
                     continue;
                 case ']':
                     _tokens.Add(new Token(TokenType.RightBracket, "]", lineNum));
+                    i++;
+                    continue;
+                case '(':
+                    _tokens.Add(new Token(TokenType.LeftParen, "(", lineNum));
+                    i++;
+                    continue;
+                case ')':
+                    _tokens.Add(new Token(TokenType.RightParen, ")", lineNum));
                     i++;
                     continue;
                 case ':':
@@ -456,6 +465,14 @@ public class LyConfigParser
                 continue;
             }
 
+            // 代码片段定义 (snippet_name) { ... }
+            if (Current.Type == TokenType.LeftParen)
+            {
+                ParseSnippetDefinition();
+                SkipNewLines();
+                continue;
+            }
+
             // 条件语句
             if (Current.Type == TokenType.If)
             {
@@ -599,18 +616,182 @@ public class LyConfigParser
     private void ParseImport(Dictionary<string, object> result)
     {
         Consume(TokenType.Import);
-        var path = ParseStringValue();
+        var nameOrPath = ParseStringValue();
         
-        if (File.Exists(path))
+        // 收集参数（用于 snippet 调用）
+        var args = new List<string>();
+        while (Current.Type == TokenType.String || Current.Type == TokenType.Identifier ||
+               Current.Type == TokenType.Number || Current.Type == TokenType.Variable)
         {
-            var importedContent = File.ReadAllText(path);
+            // 如果遇到 { 或换行，停止收集参数
+            if (Current.Type == TokenType.Identifier && 
+                (Current.Value.StartsWith('/') || Current.Value.StartsWith('{')))
+            {
+                break;
+            }
+            args.Add(ParseStringValue());
+        }
+        
+        // 首先检查是否是 snippet 引用
+        if (_snippets.TryGetValue(nameOrPath, out var snippet))
+        {
+            var expandedConfig = ExpandSnippet(snippet, args);
+            MergeDict(result, expandedConfig);
+        }
+        else if (File.Exists(nameOrPath))
+        {
+            // 文件导入
+            var importedContent = File.ReadAllText(nameOrPath);
             var importedConfig = Parse(importedContent, _variables);
             MergeDict(result, importedConfig);
         }
         else
         {
-            _logger.Warn("Import 文件不存在: {Path}", path);
+            _logger.Warn("Import 目标不存在（既不是 snippet 也不是文件）: {Name}", nameOrPath);
         }
+    }
+
+    /// <summary>
+    /// 解析代码片段定义
+    /// 格式: (snippet_name) { ... }
+    /// </summary>
+    private void ParseSnippetDefinition()
+    {
+        Consume(TokenType.LeftParen);
+        
+        if (Current.Type != TokenType.Identifier)
+        {
+            throw new LyConfigException($"期望 snippet 名称，但得到 {Current.Type} 在第 {Current.Line} 行");
+        }
+        
+        var name = Consume(TokenType.Identifier).Value;
+        var line = Current.Line;
+        Consume(TokenType.RightParen);
+        SkipNewLines();
+        
+        if (Current.Type != TokenType.LeftBrace)
+        {
+            throw new LyConfigException($"期望 '{{' 在 snippet 定义之后，但得到 {Current.Type} 在第 {Current.Line} 行");
+        }
+        
+        // 收集 snippet 内的所有 tokens
+        var tokens = new List<Token>();
+        var braceDepth = 0;
+        var startPos = _position;
+        
+        // 消费开始的 {
+        tokens.Add(Consume());
+        braceDepth = 1;
+        
+        while (braceDepth > 0 && Current.Type != TokenType.EOF)
+        {
+            if (Current.Type == TokenType.LeftBrace)
+            {
+                braceDepth++;
+            }
+            else if (Current.Type == TokenType.RightBrace)
+            {
+                braceDepth--;
+            }
+            tokens.Add(Consume());
+        }
+        
+        _snippets[name] = new SnippetDefinition
+        {
+            Name = name,
+            Tokens = tokens,
+            Line = line
+        };
+        
+        _logger.Debug("已定义 snippet: {Name}", name);
+    }
+
+    /// <summary>
+    /// 展开代码片段，替换 {args[N]} 占位符
+    /// </summary>
+    private Dictionary<string, object> ExpandSnippet(SnippetDefinition snippet, List<string> args)
+    {
+        // 创建一个临时解析器来解析 snippet 内容
+        var tempParser = new LyConfigParser();
+        
+        // 复制变量
+        foreach (var kv in _variables)
+        {
+            tempParser._variables[kv.Key] = kv.Value;
+        }
+        
+        // 添加 args 变量
+        for (var i = 0; i < args.Count; i++)
+        {
+            tempParser._variables[$"args[{i}]"] = args[i];
+            tempParser._variables[$"args.{i}"] = args[i];
+        }
+        tempParser._variables["args.length"] = args.Count.ToString();
+        
+        // 复制 snippets（支持嵌套引用）
+        foreach (var kv in _snippets)
+        {
+            tempParser._snippets[kv.Key] = kv.Value;
+        }
+        
+        // 处理 tokens，替换 {args[N]} 占位符
+        var processedTokens = new List<Token>();
+        foreach (var token in snippet.Tokens)
+        {
+            if (token.Type == TokenType.String || token.Type == TokenType.Identifier)
+            {
+                var processedValue = ReplaceArgsPlaceholders(token.Value, args);
+                processedTokens.Add(new Token(token.Type, processedValue, token.Line));
+            }
+            else
+            {
+                processedTokens.Add(token);
+            }
+        }
+        
+        // 添加 EOF token
+        processedTokens.Add(new Token(TokenType.EOF, "", snippet.Line));
+        
+        // 设置 tokens 并解析
+        tempParser._tokens.AddRange(processedTokens);
+        
+        // 跳过开始的 { 和 }
+        if (tempParser._tokens.Count > 0 && tempParser._tokens[0].Type == TokenType.LeftBrace)
+        {
+            tempParser._position = 1;
+            var content = tempParser.ParseBlockContent();
+            return content;
+        }
+        
+        return [];
+    }
+
+    /// <summary>
+    /// 替换 {args[N]} 和 {args.N} 占位符
+    /// </summary>
+    private static string ReplaceArgsPlaceholders(string input, List<string> args)
+    {
+        // 替换 {args[N]} 格式
+        var result = Regex.Replace(input, @"\{args\[(\d+)\]\}", m =>
+        {
+            if (int.TryParse(m.Groups[1].Value, out var index) && index < args.Count)
+            {
+                return args[index];
+            }
+            return m.Value;
+        });
+        
+        // 替换 {args.N} 格式
+        result = Regex.Replace(result, @"\{args\.(\d+)\}", m =>
+        {
+            if (int.TryParse(m.Groups[1].Value, out var index) && index < args.Count)
+            {
+                return args[index];
+            }
+            return m.Value;
+        });
+        
+        return result;
     }
 
     private Dictionary<string, object> ParseConditional()
@@ -878,6 +1059,14 @@ public class LyConfigParser
                 continue;
             }
 
+            // import 语句（支持 snippet 引用）
+            if (Current.Type == TokenType.Import)
+            {
+                ParseImport(result);
+                SkipNewLines();
+                continue;
+            }
+
             // 块定义或赋值
             if (Current.Type == TokenType.Identifier)
             {
@@ -974,6 +1163,14 @@ public class LyConfigParser
             {
                 var conditionalBlock = ParseConditional();
                 MergeDict(result, conditionalBlock);
+                SkipNewLines();
+                continue;
+            }
+
+            // 块内 import 语句（支持 snippet 引用）
+            if (Current.Type == TokenType.Import)
+            {
+                ParseImport(result);
                 SkipNewLines();
                 continue;
             }
@@ -1335,6 +1532,8 @@ public enum TokenType
     RightBrace,     // }
     LeftBracket,    // [
     RightBracket,   // ]
+    LeftParen,      // (
+    RightParen,     // )
     Colon,          // :
     Comma,          // ,
     Equals,         // =
@@ -1352,6 +1551,19 @@ public enum TokenType
 }
 
 public record Token(TokenType Type, string Value, int Line);
+
+/// <summary>
+/// 代码片段定义
+/// </summary>
+public class SnippetDefinition
+{
+    /// <summary>片段名称</summary>
+    public required string Name { get; init; }
+    /// <summary>片段原始内容（Token 列表的起始位置）</summary>
+    public required List<Token> Tokens { get; init; }
+    /// <summary>定义行号（用于错误报告）</summary>
+    public int Line { get; init; }
+}
 
 public class LyConfigException : Exception
 {
