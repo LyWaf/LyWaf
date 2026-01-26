@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text;
-using LyWaf.Backend;
 using LyWaf.Services.AccessControl;
 using LyWaf.Services.WafInfo;
 using LyWaf.Shared;
@@ -70,8 +69,7 @@ public static class ControlApi
         
         app.MapGet("/api/stop", (HttpContext ctx, IHostApplicationLifetime lifetime) =>
         {
-            Analysis.DoStopWork();
-            Thread.Sleep(1000);
+            // 停止应用会触发插件系统停止（包括 AnalysisPlugin）
             lifetime.StopApplication();
             return Results.Json(new { message = "服务正在停止..." });
         }).RequireHost($"*:{controlPort}");

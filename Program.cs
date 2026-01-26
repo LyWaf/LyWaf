@@ -18,7 +18,6 @@ using System.Threading.RateLimiting;
 using LyWaf.Services.SpeedLimit;
 using LyWaf.Services.Statistic;
 using LyWaf.Services;
-using LyWaf.Backend;
 using LyWaf.Services.Protect;
 
 using System.Security.Cryptography.X509Certificates;
@@ -1045,8 +1044,6 @@ public class Program
         // 注册插件系统
         builder.Services.AddLyWafPlugins(builder.Configuration);
 
-        Analysis.DoStartAnalysis();
-
         var wafInfos = new WafInfoOptions();
         builder.Configuration.GetSection("WafInfos").Bind(wafInfos);
         builder.Logging.AddNLog();
@@ -1163,7 +1160,6 @@ public class Program
             // 自动 HTTPS 重定向
             proxyApp.UseMiddleware<AutoHttpsMiddleware>();
             proxyApp.UseMiddleware<WafControlMiddleware>();
-            proxyApp.UseMiddleware<StatisticLogMiddleware>();
             proxyApp.UseMiddleware<ThrottledMiddleware>();
             proxyApp.UseMiddleware<SpeedLimitMiddleware>();
             

@@ -378,6 +378,7 @@ public static class LyToAppSettingsConverter
             wafInfos["Listens"] = ctx.Listens;
         }
         if (ctx.Certs.Count > 0)
+        
         {
             wafInfos["Certs"] = ctx.Certs;
         }
@@ -1784,6 +1785,11 @@ public static class LyToAppSettingsConverter
                 ProcessCertsConfig(value, ctx.Certs);
                 break;
 
+            case "plugins":
+                // 插件配置
+                ProcessPluginsConfig(value, result);
+                break;
+
             default:
                 // 其他配置直接映射（首字母大写）
                 var normalizedKey = char.ToUpper(key[0]) + key[1..];
@@ -2017,6 +2023,96 @@ public static class LyToAppSettingsConverter
             if (!streamServer.ContainsKey("Enabled"))
             {
                 streamServer["Enabled"] = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 处理插件配置
+    /// 支持格式：
+    /// Plugins {
+    ///     Enabled = true
+    ///     PluginDirectory = "plugins"
+    ///     DataDirectory = "plugin_data"
+    ///     EnableHotReload = false
+    ///     DisabledPlugins = ["plugin-id-1", "plugin-id-2"]
+    ///     SystemPlugins = ["request-logger", "custom-header"]  # 系统插件，默认加载
+    ///     PluginConfigs {
+    ///         request-logger { LogLevel = "Info" }
+    ///         custom-header { HeaderName = "X-Custom"; HeaderValue = "test" }
+    ///     }
+    /// }
+    /// </summary>
+    private static void ProcessPluginsConfig(object value, Dictionary<string, object> result)
+    {
+        if (value is not Dictionary<string, object> pluginsConfig)
+            return;
+
+        var plugins = EnsureDict(result, "Plugins");
+
+        foreach (var kv in pluginsConfig)
+        {
+            var key = kv.Key.ToLower();
+            switch (key)
+            {
+                case "enabled":
+                    plugins["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "plugindirectory":
+                case "plugin_directory":
+                case "directory":
+                case "dir":
+                    plugins["PluginDirectory"] = kv.Value?.ToString() ?? "plugins";
+                    break;
+                case "datadirectory":
+                case "data_directory":
+                case "datadir":
+                    plugins["DataDirectory"] = kv.Value?.ToString() ?? "plugin_data";
+                    break;
+                case "enablehotreload":
+                case "enable_hot_reload":
+                case "hotreload":
+                case "hot_reload":
+                    plugins["EnableHotReload"] = kv.Value is bool hr ? hr : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "disabledplugins":
+                case "disabled_plugins":
+                case "disabled":
+                    plugins["DisabledPlugins"] = ParseStringList(kv.Value);
+                    break;
+                case "systemplugins":
+                case "system_plugins":
+                case "system":
+                    plugins["SystemPlugins"] = ParseStringList(kv.Value);
+                    break;
+                case "pluginconfigs":
+                case "plugin_configs":
+                case "configs":
+                    // 各插件的配置
+                    if (kv.Value is Dictionary<string, object> configsDict)
+                    {
+                        var pluginConfigs = new Dictionary<string, object>();
+                        foreach (var configKv in configsDict)
+                        {
+                            if (configKv.Value is Dictionary<string, object> pluginConfig)
+                            {
+                                pluginConfigs[configKv.Key] = pluginConfig;
+                            }
+                        }
+                        if (pluginConfigs.Count > 0)
+                        {
+                            plugins["PluginConfigs"] = pluginConfigs;
+                        }
+                    }
+                    break;
+                default:
+                    // 检查是否是插件配置（以插件ID为键）
+                    if (kv.Value is Dictionary<string, object> pluginConfigDict)
+                    {
+                        var pluginConfigs = EnsureDict(plugins, "PluginConfigs");
+                        pluginConfigs[kv.Key] = pluginConfigDict;
+                    }
+                    break;
             }
         }
     }

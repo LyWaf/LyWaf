@@ -19,9 +19,9 @@ public class BasePluginMiddleware : IMiddleware
     public async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
         var sw = Stopwatch.StartNew();
-
+        var startTime = DateTime.UtcNow;
         // 发布请求开始事件
-        await _eventBus.PublishAsync(new RequestStartedEvent { Context = context });
+        await _eventBus.PublishAsync(new RequestStartedEvent { Context = context, VisitTime = startTime });
 
         try
         {
@@ -36,6 +36,7 @@ public class BasePluginMiddleware : IMiddleware
             {
                 Context = context,
                 StatusCode = context.Response.StatusCode,
+                VisitTime = startTime,
                 Duration = sw.Elapsed
             });
         }

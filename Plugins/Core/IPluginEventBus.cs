@@ -25,7 +25,7 @@ public interface IPluginEventBus
 public class RequestStartedEvent
 {
     public required HttpContext Context { get; init; }
-    public DateTime Timestamp { get; init; } = DateTime.UtcNow;
+    public DateTime VisitTime { get; init; } = DateTime.UtcNow;
 }
 
 /// <summary>
@@ -34,6 +34,7 @@ public class RequestStartedEvent
 public class RequestCompletedEvent
 {
     public required HttpContext Context { get; init; }
+    public DateTime VisitTime { get; init; } = DateTime.UtcNow;
     public TimeSpan Duration { get; init; }
     public int StatusCode { get; init; }
 }

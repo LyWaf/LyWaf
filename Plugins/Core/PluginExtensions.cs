@@ -30,8 +30,8 @@ public static class PluginExtensions
         manager.ConfigureServices(services);
         
         // 替换为实际的单例
-        services.AddSingleton<IPluginEventBus>(eventBus);
         services.AddSingleton<PluginManager>(manager);
+        services.AddSingleton<IPluginEventBus>(eventBus);
         services.AddSingleton<IPluginManager>(manager);
         
         // 注册插件生命周期管理器
