@@ -28,6 +28,7 @@ using System.Net.Security;
 using LyWaf.Utils;
 using LyWaf.Services.WafInfo;
 using LyWaf.Services.AccessControl;
+using LyWaf.Plugins.Core;
 using LyWaf.Services.Compress;
 using LyWaf.Services.Acme;
 using LyWaf.Services.SimpleRes;
@@ -1041,6 +1042,9 @@ public class Program
         builder.Services.AddSingleton<ILoadBalancingPolicy, WeightedRandomPolicy>();
         builder.Services.AddSingleton<ILoadBalancingPolicy, ConsistentHashPolicy>();
 
+        // 注册插件系统
+        builder.Services.AddLyWafPlugins(builder.Configuration);
+
         Analysis.DoStartAnalysis();
 
         var wafInfos = new WafInfoOptions();
@@ -1130,8 +1134,15 @@ public class Program
         // 初始化 ServiceLocator，确保自定义 DNS 等服务可以通过 ServiceLocator 获取
         ServiceLocator.Initialize(app.Services);
 
+        // 初始化插件系统
+        var pluginManager = app.Services.GetRequiredService<PluginManager>();
+        pluginManager.InitializePluginsAsync(app.Services).GetAwaiter().GetResult();
+
         // 注册控制台 API
         app.MapControlApi(wafInfos);
+        
+        // 配置全局插件中间件
+        app.UseLyWafPlugins();
 
         // ACME HTTP-01 挑战中间件（必须在 HTTPS 重定向之前）
         app.UseAcmeChallenge();
@@ -1152,9 +1163,12 @@ public class Program
             proxyApp.UseMiddleware<StatisticLogMiddleware>();
             proxyApp.UseMiddleware<ThrottledMiddleware>();
             proxyApp.UseMiddleware<SpeedLimitMiddleware>();
+            // 插件代理管道中间件
+            proxyApp.UseLyWafPluginsInProxy();
             // SimpleRes 简单响应处理中间件
             proxyApp.UseMiddleware<SimpleResMiddleware>();
             proxyApp.UseMiddleware<FileProviderMiddleware>();
+            
         }).RequireHost(proxyPorts);
         app.Run();
     }

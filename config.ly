@@ -8,6 +8,25 @@ var domain = "example.com"
 var backend = "127.0.0.1:8080"
 var env = "production"
 
+plugins {
+    enabled = true
+    plugin_directory = "plugins"
+    data_directory = "plugin_data"
+    
+    request-logger {
+        enabled = true
+        log_headers = false
+        log_duration = true
+    }
+    
+    custom-header {
+        enabled = true
+        headers {
+            X-Powered-By = "LyWaf"
+            X-Frame-Options = "SAMEORIGIN"
+        }
+    }
+}
 localhost:5003, localhost:5004, 0.0.0.0:5005, example.com:5006
 /static/ {
     file_server {

@@ -1,0 +1,164 @@
+/*
+ * LyWaf 插件模板
+ * 
+ * 使用说明：
+ * 1. 复制此文件并重命名为你的插件名称（如 MyAwesomePlugin.cs）
+ * 2. 替换所有 {{PLUGIN_ID}}, {{PLUGIN_NAME}} 等占位符
+ * 3. 实现你的插件逻辑
+ * 
+ * 插件类型：
+ * - 中间件插件：在 ConfigureProxyPipeline 中注册中间件
+ * - 服务插件：在 ConfigureServices 中注册服务
+ * - 后台任务插件：在 StartAsync/StopAsync 中管理后台任务
+ * - 混合插件：组合以上多种类型
+ */
+
+using LyWaf.Plugins.Core;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace LyWaf.Plugins.Custom;
+
+/// <summary>
+/// {{PLUGIN_DESCRIPTION}}
+/// </summary>
+public class {{PLUGIN_CLASS_NAME}} : LyWafPluginBase
+{
+    private {{PLUGIN_CLASS_NAME}}Options _options = new();
+    
+    public override PluginMetadata Metadata => new()
+    {
+        Id = "{{PLUGIN_ID}}",
+        Name = "{{PLUGIN_NAME}}",
+        Version = "1.0.0",
+        Description = "{{PLUGIN_DESCRIPTION}}",
+        Author = "{{PLUGIN_AUTHOR}}",
+        Priority = PluginPriority.Normal,
+        EnabledByDefault = true,
+        Dependencies = []  // 添加依赖的插件 ID
+    };
+    
+    /// <summary>
+    /// 配置服务（在 DI 容器构建前调用）
+    /// 在这里注册你的服务、配置等
+    /// </summary>
+    public override void ConfigureServices(IServiceCollection services, IConfiguration configuration)
+    {
+        // 注册配置选项
+        services.Configure<{{PLUGIN_CLASS_NAME}}Options>(
+            configuration.GetSection("Plugins:{{PLUGIN_ID}}"));
+        
+        // 注册你的服务
+        // services.AddSingleton<IYourService, YourService>();
+        
+        // 注册中间件（如果使用 IMiddleware 接口）
+        // services.AddSingleton<YourMiddleware>();
+    }
+    
+    /// <summary>
+    /// 初始化插件（在 DI 容器构建后调用）
+    /// 在这里获取配置、初始化资源
+    /// </summary>
+    public override async Task InitializeAsync(IPluginContext context)
+    {
+        await base.InitializeAsync(context);
+        
+        // 获取插件配置
+        _options = context.GetPluginConfig<{{PLUGIN_CLASS_NAME}}Options>();
+        
+        // 订阅事件
+        // context.SubscribeEvent<RequestStartedEvent>(async e => { ... });
+        
+        // 获取其他服务
+        // var someService = context.Services.GetRequiredService<ISomeService>();
+        
+        context.Logger.Info("{{PLUGIN_NAME}} 已初始化");
+    }
+    
+    /// <summary>
+    /// 配置全局中间件管道
+    /// 在 YARP 代理之外运行
+    /// </summary>
+    public override void ConfigureMiddleware(IApplicationBuilder app)
+    {
+        // 这里注册的中间件在所有请求中运行（包括非代理请求）
+        // app.UseMiddleware<YourGlobalMiddleware>();
+    }
+    
+    /// <summary>
+    /// 配置代理管道中间件
+    /// 仅在反向代理请求中运行
+    /// </summary>
+    public override void ConfigureProxyPipeline(IApplicationBuilder proxyApp)
+    {
+        if (!_options.Enabled) return;
+        
+        // 方式 1：使用 IMiddleware 接口（推荐）
+        // proxyApp.UseMiddleware<YourMiddleware>();
+        
+        // 方式 2：使用内联中间件
+        // proxyApp.Use(async (context, next) =>
+        // {
+        //     // 请求前处理
+        //     await next(context);
+        //     // 响应后处理
+        // });
+    }
+    
+    /// <summary>
+    /// 启动插件（在应用启动时调用）
+    /// 在这里启动后台任务、定时器等
+    /// </summary>
+    public override async Task StartAsync(CancellationToken cancellationToken)
+    {
+        await base.StartAsync(cancellationToken);
+        
+        // 启动后台任务
+        // _backgroundTask = Task.Run(() => DoBackgroundWork(cancellationToken));
+        
+        Context?.Logger.Info("{{PLUGIN_NAME}} 已启动");
+    }
+    
+    /// <summary>
+    /// 停止插件（在应用关闭时调用）
+    /// 在这里清理资源、停止后台任务
+    /// </summary>
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        // 停止后台任务
+        // await _backgroundTask;
+        
+        Context?.Logger.Info("{{PLUGIN_NAME}} 已停止");
+        await base.StopAsync(cancellationToken);
+    }
+}
+
+/// <summary>
+/// 插件配置选项
+/// </summary>
+public class {{PLUGIN_CLASS_NAME}}Options
+{
+    /// <summary>是否启用插件</summary>
+    public bool Enabled { get; set; } = true;
+    
+    // 添加你的配置项
+    // public string SomeSetting { get; set; } = "default";
+}
+
+/*
+ * 配置示例 (appsettings.yaml):
+ * 
+ * Plugins:
+ *   {{PLUGIN_ID}}:
+ *     Enabled: true
+ *     # 其他配置项...
+ * 
+ * 或在 config.ly 中:
+ * 
+ * plugins {
+ *     {{PLUGIN_ID}} {
+ *         enabled = true
+ *         # 其他配置项...
+ *     }
+ * }
+ */
