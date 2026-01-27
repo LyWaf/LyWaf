@@ -6,15 +6,10 @@ namespace LyWaf.Plugins.Core;
 /// 插件基础中间件
 /// 负责发布请求开始和结束事件，供其他插件订阅
 /// </summary>
-public class BasePluginMiddleware : IMiddleware
+public class BasePluginMiddleware(IPluginEventBus eventBus) : IMiddleware
 {
-    private readonly IPluginEventBus _eventBus;
+    private readonly IPluginEventBus _eventBus = eventBus;
     private static readonly NLog.Logger _logger = NLog.LogManager.GetCurrentClassLogger();
-
-    public BasePluginMiddleware(IPluginEventBus eventBus)
-    {
-        _eventBus = eventBus;
-    }
 
     public async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {

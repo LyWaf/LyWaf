@@ -78,17 +78,6 @@ public static class PluginExtensions
     }
     
     /// <summary>
-    /// 在代理管道中使用所有插件（兼容旧代码）
-    /// </summary>
-    [Obsolete("请使用 UseLyWafPluginsInProxyHigh 和 UseLyWafPluginsInProxyNormal 分别配置")]
-    public static IApplicationBuilder UseLyWafPluginsInProxy(this IApplicationBuilder proxyApp)
-    {
-        var manager = proxyApp.ApplicationServices.GetRequiredService<PluginManager>();
-        manager.ConfigureProxyPipeline(proxyApp);
-        return proxyApp;
-    }
-    
-    /// <summary>
     /// 初始化插件（在 app.Build() 之后调用）
     /// </summary>
     public static async Task<IHost> InitializeLyWafPluginsAsync(this IHost host)
@@ -102,15 +91,10 @@ public static class PluginExtensions
 /// <summary>
 /// 插件生命周期托管服务
 /// </summary>
-public class PluginHostedService : IHostedService
+public class PluginHostedService(PluginManager pluginManager) : IHostedService
 {
-    private readonly PluginManager _pluginManager;
-    
-    public PluginHostedService(PluginManager pluginManager)
-    {
-        _pluginManager = pluginManager;
-    }
-    
+    private readonly PluginManager _pluginManager = pluginManager;
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         await _pluginManager.StartPluginsAsync(cancellationToken);

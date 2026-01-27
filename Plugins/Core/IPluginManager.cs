@@ -241,16 +241,8 @@ public class PluginManager : IPluginManager
                 }
 
                 // 检查是否被禁用
-                // 系统插件默认启用，除非在 DisabledPlugins 中明确禁用
-                bool isEnabled;
-                if (isSystemPlugin)
-                {
-                    isEnabled = !_options.DisabledPlugins.Contains(metadata.Id);
-                }
-                else
-                {
-                    isEnabled = !_options.DisabledPlugins.Contains(metadata.Id) && metadata.EnabledByDefault;
-                }
+                // 优先级：PluginConfigs 中的 enable/enabled/Enabled > DisabledPlugins > EnabledByDefault
+                bool isEnabled = GetPluginEnabledState(metadata.Id, isSystemPlugin, metadata.EnabledByDefault);
 
                 var info = new PluginInfo
                 {
@@ -473,6 +465,77 @@ public class PluginManager : IPluginManager
                 _logger.Error(ex, "停止插件 {Id} 失败", info.Plugin.Metadata.Id);
             }
         }
+    }
+
+    /// <summary>
+    /// 获取插件的启用状态
+    /// 优先级：PluginConfigs 中的 enable/enabled/Enabled > DisabledPlugins > EnabledByDefault
+    /// </summary>
+    /// <param name="pluginId">插件 ID</param>
+    /// <param name="isSystemPlugin">是否是系统插件</param>
+    /// <param name="enabledByDefault">插件默认启用状态</param>
+    /// <returns>插件是否启用</returns>
+    private bool GetPluginEnabledState(string pluginId, bool isSystemPlugin, bool enabledByDefault)
+    {
+        // 1. 首先检查 PluginConfigs 中是否有该插件的配置
+        if (_options.PluginConfigs.TryGetValue(pluginId, out var pluginConfig))
+        {
+            // 检查 enable/enabled/Enabled 值（不区分大小写）
+            var enableValue = GetConfigValue(pluginConfig, "enable", "enabled", "Enabled", "Enable");
+            if (enableValue != null)
+            {
+                return ParseBoolValue(enableValue);
+            }
+        }
+
+        // 2. 检查是否在 DisabledPlugins 列表中
+        if (_options.DisabledPlugins.Contains(pluginId))
+        {
+            return false;
+        }
+
+        // 3. 系统插件默认启用，非系统插件使用 EnabledByDefault
+        return isSystemPlugin || enabledByDefault;
+    }
+
+    /// <summary>
+    /// 从配置字典中获取值（支持多个键名）
+    /// </summary>
+    private static object? GetConfigValue(Dictionary<string, object> config, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            // 尝试精确匹配
+            if (config.TryGetValue(key, out var value))
+            {
+                return value;
+            }
+
+            // 尝试不区分大小写匹配
+            var matchedKey = config.Keys.FirstOrDefault(k => k.Equals(key, StringComparison.OrdinalIgnoreCase));
+            if (matchedKey != null)
+            {
+                return config[matchedKey];
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 解析布尔值
+    /// </summary>
+    private static bool ParseBoolValue(object value)
+    {
+        if (value is bool b)
+            return b;
+
+        var strValue = value.ToString()?.ToLower();
+        return strValue switch
+        {
+            "true" or "1" or "yes" or "on" => true,
+            "false" or "0" or "no" or "off" => false,
+            _ => true // 默认为 true（存在配置但无法解析时）
+        };
     }
 
     /// <summary>

@@ -25,7 +25,7 @@ public class AnalysisPlugin : LyWafPluginBase
         Version = "1.0.0",
         Description = "后台分析访问流量，检测 CC 攻击等异常行为",
         Author = "LyWaf Team",
-        Priority = PluginPriority.Low,  // 低优先级，后台运行
+        Priority = PluginPriority.High,  // 低优先级，后台运行
         EnabledByDefault = true
     };
 
@@ -52,9 +52,6 @@ public class AnalysisPlugin : LyWafPluginBase
 
         Context?.Logger.Info("启动流量分析后台任务...");
         _isRunning = true;
-
-        // 注册控制台终止事件
-        Console.CancelKeyPress += OnCancelKeyPress;
 
         _workerThread = new Thread(DoWork);
         _workerThread.Start();
@@ -103,13 +100,6 @@ public class AnalysisPlugin : LyWafPluginBase
     public override void ConfigureProxyPipeline(IApplicationBuilder proxyApp)
     {
         proxyApp.UseMiddleware<StatisticLogMiddleware>();
-    }
-
-    private void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
-    {
-        Context?.Logger.Info("接收到终止信号，停止流量分析...");
-        e.Cancel = true; // 允许优雅退出
-        _isRunning = false;
     }
 
     /// <summary>

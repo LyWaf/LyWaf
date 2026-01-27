@@ -18,6 +18,17 @@ plugins {
         log_headers = false
         log_duration = true
     }
+
+    image-process {
+        Enabled = true
+        SupportedFormats = ["jpg", "jpeg", "png", "webp", "gif", "bmp"]
+        DefaultOutputFormat = "webp"
+        DefaultQuality = 85
+        MaxWidth = 4096
+        MaxHeight = 4096
+        EnableUrlParams = true
+        CacheSeconds = 3600
+    }
     
     custom-header {
         enabled = true
