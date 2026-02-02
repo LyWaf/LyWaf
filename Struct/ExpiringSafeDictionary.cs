@@ -522,6 +522,40 @@ public class ExpiringSafeDictionary<TKey, TValue> : IDisposable where TKey : not
     }
 
     /// <summary>
+    /// 获取项目的过期时间
+    /// </summary>
+    public DateTime? GetExpiration(TKey key)
+    {
+        lock (_lockObject)
+        {
+            if (InnerTryGetValue(key, out var expiringValue))
+            {
+                var now = DateTime.UtcNow;
+                if (!expiringValue!.IsExpired(now))
+                {
+                    if (expiringValue.SlidingExpiration.HasValue)
+                    {
+                        return expiringValue.LastAccessTime.Add(expiringValue.SlidingExpiration.Value);
+                    }
+                    else if (expiringValue.ExpiryTime.HasValue)
+                    {
+                        return expiringValue.ExpiryTime;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 设置键值和过期时间
+    /// </summary>
+    public void Set(TKey key, TValue value, TimeSpan expiration)
+    {
+        AddOrUpdate(key, value, expiration);
+    }
+
+    /// <summary>
     /// 获取所有有效项目的快照
     /// </summary>
     public Dictionary<TKey, TValue> GetSnapshot()

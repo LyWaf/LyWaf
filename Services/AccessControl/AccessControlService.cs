@@ -94,6 +94,21 @@ public interface IAccessControlService
     /// </summary>
     /// <returns>黑名单 IP/CIDR 列表</returns>
     List<string> GetBlacklist();
+
+    /// <summary>
+    /// 添加禁止访问的国家/地区
+    /// </summary>
+    bool AddDenyCountry(string country);
+
+    /// <summary>
+    /// 移除禁止访问的国家/地区
+    /// </summary>
+    bool RemoveDenyCountry(string country);
+
+    /// <summary>
+    /// 获取禁止访问的国家/地区列表
+    /// </summary>
+    List<string> GetDenyCountries();
 }
 
 /// <summary>
@@ -237,6 +252,7 @@ public class AccessControlService : IAccessControlService, IDisposable
     // 动态添加的白名单和黑名单（运行时添加，不持久化）
     private readonly HashSet<string> _dynamicWhitelist = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _dynamicBlacklist = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _dynamicDenyCountries = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _dynamicListLock = new();
 
     // 连接计数器
@@ -441,6 +457,21 @@ public class AccessControlService : IAccessControlService, IDisposable
                     }
                 }
             }
+        }
+
+        // 检查动态添加的国家黑名单
+        List<string> dynamicDenyList;
+        lock (_dynamicListLock)
+        {
+            dynamicDenyList = _dynamicDenyCountries.ToList();
+        }
+        if (dynamicDenyList.Count > 0 && IsCountryInList(geoInfo, dynamicDenyList))
+        {
+            return AccessCheckResult.Denied(
+                AccessDenyReason.GeoDenied,
+                _options.RejectStatusCode,
+                rejectMessage,
+                geoInfo);
         }
 
         // 检查全局地理位置规则
@@ -843,6 +874,63 @@ public class AccessControlService : IAccessControlService, IDisposable
             var allBlacklist = new List<string>(_options.IpControl.Blacklist);
             allBlacklist.AddRange(_dynamicBlacklist);
             return allBlacklist.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+    }
+
+    /// <summary>
+    /// 添加禁止访问的国家/地区
+    /// </summary>
+    public bool AddDenyCountry(string country)
+    {
+        if (string.IsNullOrWhiteSpace(country))
+            return false;
+
+        country = country.Trim();
+
+        lock (_dynamicListLock)
+        {
+            if (_dynamicDenyCountries.Add(country))
+            {
+                _logger.Info("已动态添加禁止访问的国家/地区: {Country}", country);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 移除禁止访问的国家/地区
+    /// </summary>
+    public bool RemoveDenyCountry(string country)
+    {
+        if (string.IsNullOrWhiteSpace(country))
+            return false;
+
+        country = country.Trim();
+
+        lock (_dynamicListLock)
+        {
+            if (_dynamicDenyCountries.Remove(country))
+            {
+                _logger.Info("已从禁止列表移除国家/地区: {Country}", country);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 获取禁止访问的国家/地区列表
+    /// </summary>
+    public List<string> GetDenyCountries()
+    {
+        lock (_dynamicListLock)
+        {
+            var allDenyCountries = new List<string>(_options.GeoControl.DenyCountries);
+            allDenyCountries.AddRange(_dynamicDenyCountries);
+            return allDenyCountries.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
     }
 

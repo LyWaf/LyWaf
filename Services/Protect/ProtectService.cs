@@ -18,6 +18,36 @@ public interface IProtectService
 
     public Task<string?> CheckArgsAttck(HttpContext context);
     public Task<string?> CheckPostAttck(HttpContext context);
+
+    /// <summary>
+    /// 获取 Args 检测正则列表
+    /// </summary>
+    List<string> GetArgsRegexList();
+
+    /// <summary>
+    /// 获取 Post 检测正则列表
+    /// </summary>
+    List<string> GetPostRegexList();
+
+    /// <summary>
+    /// 添加 Args 检测正则
+    /// </summary>
+    bool AddArgsRegex(string pattern);
+
+    /// <summary>
+    /// 移除 Args 检测正则
+    /// </summary>
+    bool RemoveArgsRegex(string pattern);
+
+    /// <summary>
+    /// 添加 Post 检测正则
+    /// </summary>
+    bool AddPostRegex(string pattern);
+
+    /// <summary>
+    /// 移除 Post 检测正则
+    /// </summary>
+    bool RemovePostRegex(string pattern);
 }
 
 
@@ -29,6 +59,11 @@ public class ProtectService : IProtectService
 
     private List<Regex> argsRegexes;
     private List<Regex> postRegexes;
+
+    // 动态添加的正则规则
+    private readonly HashSet<string> _dynamicArgsRegex = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _dynamicPostRegex = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _regexLock = new();
 
     public ProtectService(
         IOptionsMonitor<ProtectOptions> options, IMemoryCache cache)
@@ -53,21 +88,48 @@ public class ProtectService : IProtectService
 
     private void BuildRegexes()
     {
-        List<Regex> regexes = [];
-        regexes.AddRange(BuildRegexesFromFile(_options.CheckArgsFile));
-        foreach (var reg in _options.RegexArgsList)
+        lock (_regexLock)
         {
-            regexes.Add(new Regex(reg, RegexOptions.IgnoreCase));
-        }
-        argsRegexes = regexes;
+            List<Regex> regexes = [];
+            regexes.AddRange(BuildRegexesFromFile(_options.CheckArgsFile));
+            foreach (var reg in _options.RegexArgsList)
+            {
+                regexes.Add(new Regex(reg, RegexOptions.IgnoreCase));
+            }
+            // 添加动态规则
+            foreach (var reg in _dynamicArgsRegex)
+            {
+                try
+                {
+                    regexes.Add(new Regex(reg, RegexOptions.IgnoreCase));
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warn("无效的动态 Args 正则: {Pattern}, 错误: {Error}", reg, ex.Message);
+                }
+            }
+            argsRegexes = regexes;
 
-        regexes = [];
-        regexes.AddRange(BuildRegexesFromFile(_options.CheckPostFile));
-        foreach (var reg in _options.RegexPostList)
-        {
-            regexes.Add(new Regex(reg, RegexOptions.IgnoreCase));
+            regexes = [];
+            regexes.AddRange(BuildRegexesFromFile(_options.CheckPostFile));
+            foreach (var reg in _options.RegexPostList)
+            {
+                regexes.Add(new Regex(reg, RegexOptions.IgnoreCase));
+            }
+            // 添加动态规则
+            foreach (var reg in _dynamicPostRegex)
+            {
+                try
+                {
+                    regexes.Add(new Regex(reg, RegexOptions.IgnoreCase));
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warn("无效的动态 Post 正则: {Pattern}, 错误: {Error}", reg, ex.Message);
+                }
+            }
+            postRegexes = regexes;
         }
-        postRegexes = regexes;
     }
 
     private List<Regex> BuildRegexesFromFile(string path)
@@ -191,6 +253,126 @@ public class ProtectService : IProtectService
             }
         }
         return null;
+    }
+
+    /// <summary>
+    /// 获取 Args 检测正则列表
+    /// </summary>
+    public List<string> GetArgsRegexList()
+    {
+        lock (_regexLock)
+        {
+            var list = new List<string>(_options.RegexArgsList);
+            list.AddRange(_dynamicArgsRegex);
+            return list;
+        }
+    }
+
+    /// <summary>
+    /// 获取 Post 检测正则列表
+    /// </summary>
+    public List<string> GetPostRegexList()
+    {
+        lock (_regexLock)
+        {
+            var list = new List<string>(_options.RegexPostList);
+            list.AddRange(_dynamicPostRegex);
+            return list;
+        }
+    }
+
+    /// <summary>
+    /// 添加 Args 检测正则
+    /// </summary>
+    public bool AddArgsRegex(string pattern)
+    {
+        if (string.IsNullOrWhiteSpace(pattern))
+            return false;
+
+        // 验证正则表达式是否有效
+        try
+        {
+            _ = new Regex(pattern, RegexOptions.IgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+
+        lock (_regexLock)
+        {
+            if (_dynamicArgsRegex.Add(pattern))
+            {
+                BuildRegexes();
+                _logger.Info("已添加动态 Args WAF 规则: {Pattern}", pattern);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 移除 Args 检测正则
+    /// </summary>
+    public bool RemoveArgsRegex(string pattern)
+    {
+        lock (_regexLock)
+        {
+            if (_dynamicArgsRegex.Remove(pattern))
+            {
+                BuildRegexes();
+                _logger.Info("已移除动态 Args WAF 规则: {Pattern}", pattern);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 添加 Post 检测正则
+    /// </summary>
+    public bool AddPostRegex(string pattern)
+    {
+        if (string.IsNullOrWhiteSpace(pattern))
+            return false;
+
+        // 验证正则表达式是否有效
+        try
+        {
+            _ = new Regex(pattern, RegexOptions.IgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+
+        lock (_regexLock)
+        {
+            if (_dynamicPostRegex.Add(pattern))
+            {
+                BuildRegexes();
+                _logger.Info("已添加动态 Post WAF 规则: {Pattern}", pattern);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 移除 Post 检测正则
+    /// </summary>
+    public bool RemovePostRegex(string pattern)
+    {
+        lock (_regexLock)
+        {
+            if (_dynamicPostRegex.Remove(pattern))
+            {
+                BuildRegexes();
+                _logger.Info("已移除动态 Post WAF 规则: {Pattern}", pattern);
+                return true;
+            }
+        }
+        return false;
     }
 }
 

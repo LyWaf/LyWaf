@@ -1,6 +1,9 @@
 using System.Diagnostics;
 using System.Text;
 using LyWaf.Services.AccessControl;
+using LyWaf.Services.Protect;
+using LyWaf.Services.SpeedLimit;
+using LyWaf.Services.Statistic;
 using LyWaf.Services.WafInfo;
 using LyWaf.Shared;
 using YamlDotNet.Serialization;
@@ -433,6 +436,569 @@ public static class ControlApi
                 return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
             }
         }).RequireHost($"*:{controlPort}");
+
+        // =============== 被封禁 IP 管理 API ===============
+        
+        // 获取被封禁的 IP 列表
+        app.MapGet("/api/blocked-ips", (HttpContext ctx) =>
+        {
+            var blockedIps = SharedData.ClientFb.GetSnapshot()
+                .Select(kv => new
+                {
+                    ip = kv.Key,
+                    reason = kv.Value,
+                    expiresAt = SharedData.ClientFb.GetExpiration(kv.Key)
+                })
+                .OrderBy(x => x.ip)
+                .ToList();
+
+            return Results.Json(new
+            {
+                success = true,
+                count = blockedIps.Count,
+                blockedIps = blockedIps,
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 手动封禁 IP
+        app.MapPost("/api/blocked-ips/add", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<BlockIpRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Ip))
+                {
+                    return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
+                }
+
+                var duration = request.Duration ?? TimeSpan.FromMinutes(10);
+                var reason = request.Reason ?? "手动封禁";
+                
+                SharedData.ClientFb.Set(request.Ip.Trim(), reason, duration);
+
+                return Results.Json(new
+                {
+                    success = true,
+                    message = $"已封禁 IP: {request.Ip}",
+                    ip = request.Ip,
+                    reason = reason,
+                    duration = duration.ToString(),
+                    expiresAt = DateTime.Now.Add(duration),
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"封禁失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 解封 IP
+        app.MapPost("/api/blocked-ips/remove", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<UnblockIpRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Ip))
+                {
+                    return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
+                }
+
+                if (SharedData.ClientFb.Remove(request.Ip.Trim()))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已解封 IP: {request.Ip}",
+                        ip = request.Ip,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "IP 不在封禁列表中" }, statusCode: 404);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"解封失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 清空所有封禁的 IP
+        app.MapPost("/api/blocked-ips/clear", (HttpContext ctx) =>
+        {
+            var count = SharedData.ClientFb.Count;
+            SharedData.ClientFb.Clear();
+            return Results.Json(new
+            {
+                success = true,
+                message = $"已清空 {count} 个被封禁的 IP",
+                clearedCount = count,
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== WAF 规则管理 API ===============
+        
+        // 获取 WAF 规则列表
+        app.MapGet("/api/waf/rules", (HttpContext ctx, IProtectService protectService) =>
+        {
+            var options = protectService.GetOptions();
+            return Results.Json(new
+            {
+                success = true,
+                openArgsCheck = options.OpenArgsCheck,
+                openPostCheck = options.OpenPostCheck,
+                argsRules = protectService.GetArgsRegexList(),
+                postRules = protectService.GetPostRegexList(),
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 添加 WAF Args 规则
+        app.MapPost("/api/waf/args/add", async (HttpContext ctx, IProtectService protectService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddWafRuleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Pattern))
+                {
+                    return Results.Json(new { success = false, message = "正则表达式不能为空" }, statusCode: 400);
+                }
+
+                if (protectService.AddArgsRegex(request.Pattern))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已添加 Args WAF 规则: {request.Pattern}",
+                        pattern = request.Pattern,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "添加失败：正则格式无效或已存在" }, statusCode: 400);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 移除 WAF Args 规则
+        app.MapPost("/api/waf/args/remove", async (HttpContext ctx, IProtectService protectService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveWafRuleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Pattern))
+                {
+                    return Results.Json(new { success = false, message = "正则表达式不能为空" }, statusCode: 400);
+                }
+
+                if (protectService.RemoveArgsRegex(request.Pattern))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已移除 Args WAF 规则: {request.Pattern}",
+                        pattern = request.Pattern,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "移除失败：规则不存在" }, statusCode: 404);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 添加 WAF Post 规则
+        app.MapPost("/api/waf/post/add", async (HttpContext ctx, IProtectService protectService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddWafRuleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Pattern))
+                {
+                    return Results.Json(new { success = false, message = "正则表达式不能为空" }, statusCode: 400);
+                }
+
+                if (protectService.AddPostRegex(request.Pattern))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已添加 Post WAF 规则: {request.Pattern}",
+                        pattern = request.Pattern,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "添加失败：正则格式无效或已存在" }, statusCode: 400);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 移除 WAF Post 规则
+        app.MapPost("/api/waf/post/remove", async (HttpContext ctx, IProtectService protectService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveWafRuleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Pattern))
+                {
+                    return Results.Json(new { success = false, message = "正则表达式不能为空" }, statusCode: 400);
+                }
+
+                if (protectService.RemovePostRegex(request.Pattern))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已移除 Post WAF 规则: {request.Pattern}",
+                        pattern = request.Pattern,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "移除失败：规则不存在" }, statusCode: 404);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== CC 防护规则管理 API ===============
+        
+        // 获取 CC 规则列表
+        app.MapGet("/api/cc/rules", (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            var options = statisticService.GetOption();
+            return Results.Json(new
+            {
+                success = true,
+                rules = statisticService.GetLimitCcRules().Select(r => new
+                {
+                    path = r.Path,
+                    period = r.Period,
+                    limitNum = r.LimitNum,
+                    fbTime = r.FbTime.ToString()
+                }),
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 添加 CC 规则
+        app.MapPost("/api/cc/rules/add", async (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddCcRuleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Path))
+                {
+                    return Results.Json(new { success = false, message = "路径不能为空" }, statusCode: 400);
+                }
+
+                var rule = new LimitCcOption
+                {
+                    Path = request.Path,
+                    Period = request.Period ?? 60,
+                    LimitNum = request.LimitNum ?? 100,
+                    FbTime = request.FbTime ?? TimeSpan.FromMinutes(5)
+                };
+
+                if (statisticService.AddLimitCcRule(rule))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已添加 CC 规则: {request.Path}",
+                        rule = new { rule.Path, rule.Period, rule.LimitNum, fbTime = rule.FbTime.ToString() },
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "添加失败：规则已存在" }, statusCode: 400);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 移除 CC 规则
+        app.MapPost("/api/cc/rules/remove", async (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveCcRuleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Path))
+                {
+                    return Results.Json(new { success = false, message = "路径不能为空" }, statusCode: 400);
+                }
+
+                if (statisticService.RemoveLimitCcRule(request.Path))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已移除 CC 规则: {request.Path}",
+                        path = request.Path,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "移除失败：规则不存在" }, statusCode: 404);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 地理位置黑名单管理 API ===============
+        
+        // 获取地理位置黑名单
+        app.MapGet("/api/geo/deny-countries", (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            var countries = accessControlService.GetDenyCountries();
+            return Results.Json(new
+            {
+                success = true,
+                count = countries.Count,
+                denyCountries = countries,
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 添加国家到地理位置黑名单
+        app.MapPost("/api/geo/deny-countries/add", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddCountryRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Country))
+                {
+                    return Results.Json(new { success = false, message = "国家/地区名称不能为空" }, statusCode: 400);
+                }
+
+                if (accessControlService.AddDenyCountry(request.Country))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已添加禁止访问国家/地区: {request.Country}",
+                        country = request.Country,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "添加失败：已存在或参数无效" }, statusCode: 400);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 从地理位置黑名单移除国家
+        app.MapPost("/api/geo/deny-countries/remove", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveCountryRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Country))
+                {
+                    return Results.Json(new { success = false, message = "国家/地区名称不能为空" }, statusCode: 400);
+                }
+
+                if (accessControlService.RemoveDenyCountry(request.Country))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已从禁止列表移除国家/地区: {request.Country}",
+                        country = request.Country,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "移除失败：不存在于动态黑名单" }, statusCode: 404);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 带宽限速管理 API ===============
+        
+        // 获取带宽限速配置
+        app.MapGet("/api/throttle/config", (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        {
+            var config = speedLimitService.GetThrottleConfig();
+            return Results.Json(new
+            {
+                success = true,
+                global = config.Global,
+                pathLimits = config.PathLimits,
+                ipLimits = config.IpLimits,
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 设置 IP 带宽限速
+        app.MapPost("/api/throttle/ip/add", async (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddIpThrottleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Ip))
+                {
+                    return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
+                }
+
+                if (request.LimitKbps <= 0)
+                {
+                    return Results.Json(new { success = false, message = "限速值必须大于 0" }, statusCode: 400);
+                }
+
+                speedLimitService.SetIpThrottle(request.Ip, request.LimitKbps);
+                return Results.Json(new
+                {
+                    success = true,
+                    message = $"已设置 IP {request.Ip} 带宽限速: {request.LimitKbps} KB/s",
+                    ip = request.Ip,
+                    limitKbps = request.LimitKbps,
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"设置失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 移除 IP 带宽限速
+        app.MapPost("/api/throttle/ip/remove", async (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveIpThrottleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Ip))
+                {
+                    return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
+                }
+
+                if (speedLimitService.RemoveIpThrottle(request.Ip))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已移除 IP {request.Ip} 的带宽限速",
+                        ip = request.Ip,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "移除失败：IP 不在限速列表中" }, statusCode: 404);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 设置路径带宽限速
+        app.MapPost("/api/throttle/path/add", async (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddPathThrottleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Path))
+                {
+                    return Results.Json(new { success = false, message = "路径不能为空" }, statusCode: 400);
+                }
+
+                if (request.LimitKbps <= 0)
+                {
+                    return Results.Json(new { success = false, message = "限速值必须大于 0" }, statusCode: 400);
+                }
+
+                speedLimitService.SetPathThrottle(request.Path, request.LimitKbps);
+                return Results.Json(new
+                {
+                    success = true,
+                    message = $"已设置路径 {request.Path} 带宽限速: {request.LimitKbps} KB/s",
+                    path = request.Path,
+                    limitKbps = request.LimitKbps,
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"设置失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 移除路径带宽限速
+        app.MapPost("/api/throttle/path/remove", async (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemovePathThrottleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Path))
+                {
+                    return Results.Json(new { success = false, message = "路径不能为空" }, statusCode: 400);
+                }
+
+                if (speedLimitService.RemovePathThrottle(request.Path))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已移除路径 {request.Path} 的带宽限速",
+                        path = request.Path,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "移除失败：路径不在限速列表中" }, statusCode: 404);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
         
         return app;
     }
@@ -446,6 +1012,73 @@ public static class ControlApi
     private class RemoveIpRequest
     {
         public string IpOrCidr { get; set; } = "";
+    }
+
+    private class BlockIpRequest
+    {
+        public string Ip { get; set; } = "";
+        public string? Reason { get; set; }
+        public TimeSpan? Duration { get; set; }
+    }
+
+    private class UnblockIpRequest
+    {
+        public string Ip { get; set; } = "";
+    }
+
+    private class AddWafRuleRequest
+    {
+        public string Pattern { get; set; } = "";
+    }
+
+    private class RemoveWafRuleRequest
+    {
+        public string Pattern { get; set; } = "";
+    }
+
+    private class AddCcRuleRequest
+    {
+        public string Path { get; set; } = "";
+        public int? Period { get; set; }
+        public int? LimitNum { get; set; }
+        public TimeSpan? FbTime { get; set; }
+    }
+
+    private class RemoveCcRuleRequest
+    {
+        public string Path { get; set; } = "";
+    }
+
+    private class AddCountryRequest
+    {
+        public string Country { get; set; } = "";
+    }
+
+    private class RemoveCountryRequest
+    {
+        public string Country { get; set; } = "";
+    }
+
+    private class AddIpThrottleRequest
+    {
+        public string Ip { get; set; } = "";
+        public int LimitKbps { get; set; }
+    }
+
+    private class RemoveIpThrottleRequest
+    {
+        public string Ip { get; set; } = "";
+    }
+
+    private class AddPathThrottleRequest
+    {
+        public string Path { get; set; } = "";
+        public int LimitKbps { get; set; }
+    }
+
+    private class RemovePathThrottleRequest
+    {
+        public string Path { get; set; } = "";
     }
     
     private static object? GetSectionValue(IConfigurationSection section)

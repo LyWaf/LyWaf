@@ -17,6 +17,21 @@ public interface IStatisticService
     public bool IsWhitePath(string path);
 
     public StatisticOptions GetOption();
+
+    /// <summary>
+    /// 获取 CC 限制规则列表
+    /// </summary>
+    List<LimitCcOption> GetLimitCcRules();
+
+    /// <summary>
+    /// 添加 CC 限制规则
+    /// </summary>
+    bool AddLimitCcRule(LimitCcOption rule);
+
+    /// <summary>
+    /// 移除 CC 限制规则
+    /// </summary>
+    bool RemoveLimitCcRule(string path);
 }
 
 
@@ -29,6 +44,10 @@ public class StatisticService : IStatisticService
     private Dictionary<string, string> _isInPathStas = [];
 
     private Dictionary<string, int> _isHasNextPathStas = [];
+
+    // 动态添加的 CC 规则
+    private readonly List<LimitCcOption> _dynamicLimitCc = [];
+    private readonly object _ccRuleLock = new();
 
     private const int HAS_ANY = 0x00000001;
     private const int HAS_MATCH = 0x00000002;
@@ -75,7 +94,14 @@ public class StatisticService : IStatisticService
             {"", HAS_MATCH | HAS_FULL}
         };
 
-        foreach (var limit in _options.LimitCc)
+        // 合并配置中的 CC 规则和动态添加的 CC 规则
+        var allLimitCc = new List<LimitCcOption>(_options.LimitCc);
+        lock (_ccRuleLock)
+        {
+            allLimitCc.AddRange(_dynamicLimitCc);
+        }
+
+        foreach (var limit in allLimitCc)
         {
             if (limit.Path.Length > 0)
             {
@@ -232,5 +258,59 @@ public class StatisticService : IStatisticService
     public StatisticOptions GetOption()
     {
         return _options;
+    }
+
+    /// <summary>
+    /// 获取 CC 限制规则列表
+    /// </summary>
+    public List<LimitCcOption> GetLimitCcRules()
+    {
+        lock (_ccRuleLock)
+        {
+            var allRules = new List<LimitCcOption>(_options.LimitCc);
+            allRules.AddRange(_dynamicLimitCc);
+            return allRules;
+        }
+    }
+
+    /// <summary>
+    /// 添加 CC 限制规则
+    /// </summary>
+    public bool AddLimitCcRule(LimitCcOption rule)
+    {
+        if (string.IsNullOrWhiteSpace(rule.Path))
+            return false;
+
+        lock (_ccRuleLock)
+        {
+            // 检查是否已存在相同路径的规则
+            if (_dynamicLimitCc.Any(r => r.Path.Equals(rule.Path, StringComparison.OrdinalIgnoreCase)))
+                return false;
+
+            _dynamicLimitCc.Add(rule);
+            BuildStatistic();
+            _logger.LogInformation("已添加动态 CC 规则: Path={Path}, Period={Period}, LimitNum={LimitNum}", 
+                rule.Path, rule.Period, rule.LimitNum);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// 移除 CC 限制规则
+    /// </summary>
+    public bool RemoveLimitCcRule(string path)
+    {
+        lock (_ccRuleLock)
+        {
+            var rule = _dynamicLimitCc.FirstOrDefault(r => r.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+            if (rule != null)
+            {
+                _dynamicLimitCc.Remove(rule);
+                BuildStatistic();
+                _logger.LogInformation("已移除动态 CC 规则: Path={Path}", path);
+                return true;
+            }
+        }
+        return false;
     }
 }
