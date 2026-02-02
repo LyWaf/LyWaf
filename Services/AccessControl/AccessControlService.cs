@@ -54,6 +54,46 @@ public interface IAccessControlService
     /// 获取当前连接统计信息
     /// </summary>
     ConnectionStats GetConnectionStats();
+
+    /// <summary>
+    /// 动态添加 IP 到白名单
+    /// </summary>
+    /// <param name="ipOrCidr">IP 地址或 CIDR 格式</param>
+    /// <returns>是否成功添加</returns>
+    bool AddWhitelist(string ipOrCidr);
+
+    /// <summary>
+    /// 动态从白名单移除 IP
+    /// </summary>
+    /// <param name="ipOrCidr">IP 地址或 CIDR 格式</param>
+    /// <returns>是否成功移除</returns>
+    bool RemoveWhitelist(string ipOrCidr);
+
+    /// <summary>
+    /// 获取当前白名单列表
+    /// </summary>
+    /// <returns>白名单 IP/CIDR 列表</returns>
+    List<string> GetWhitelist();
+
+    /// <summary>
+    /// 动态添加 IP 到黑名单
+    /// </summary>
+    /// <param name="ipOrCidr">IP 地址或 CIDR 格式</param>
+    /// <returns>是否成功添加</returns>
+    bool AddBlacklist(string ipOrCidr);
+
+    /// <summary>
+    /// 动态从黑名单移除 IP
+    /// </summary>
+    /// <param name="ipOrCidr">IP 地址或 CIDR 格式</param>
+    /// <returns>是否成功移除</returns>
+    bool RemoveBlacklist(string ipOrCidr);
+
+    /// <summary>
+    /// 获取当前黑名单列表
+    /// </summary>
+    /// <returns>黑名单 IP/CIDR 列表</returns>
+    List<string> GetBlacklist();
 }
 
 /// <summary>
@@ -194,6 +234,11 @@ public class AccessControlService : IAccessControlService, IDisposable
     private List<IpNetwork> _blacklistNetworks = [];
     private Dictionary<string, (List<IpNetwork> Whitelist, List<IpNetwork> Blacklist)> _pathIpRules = [];
 
+    // 动态添加的白名单和黑名单（运行时添加，不持久化）
+    private readonly HashSet<string> _dynamicWhitelist = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _dynamicBlacklist = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _dynamicListLock = new();
+
     // 连接计数器
     private int _totalConnections = 0;
     private readonly ConcurrentDictionary<string, int> _connectionsPerIp = new();
@@ -254,11 +299,21 @@ public class AccessControlService : IAccessControlService, IDisposable
     {
         var ipConfig = _options.IpControl;
 
-        // 解析全局白名单（在 AccessControlOptions 中）
-        _whitelistNetworks = ParseNetworks(_options.Whitelist);
+        // 合并配置中的白名单和动态添加的白名单
+        lock (_dynamicListLock)
+        {
+            var allWhitelist = new List<string>(_options.Whitelist);
+            allWhitelist.AddRange(_dynamicWhitelist);
+            _whitelistNetworks = ParseNetworks(allWhitelist);
+        }
 
-        // 解析黑名单（在 IpControl 中）
-        _blacklistNetworks = ParseNetworks(ipConfig.Blacklist);
+        // 合并配置中的黑名单和动态添加的黑名单
+        lock (_dynamicListLock)
+        {
+            var allBlacklist = new List<string>(ipConfig.Blacklist);
+            allBlacklist.AddRange(_dynamicBlacklist);
+            _blacklistNetworks = ParseNetworks(allBlacklist);
+        }
 
         // 解析路径规则
         _pathIpRules = [];
@@ -657,6 +712,138 @@ public class AccessControlService : IAccessControlService, IDisposable
             ConnectionsPerDestination = new Dictionary<string, int>(_connectionsPerDestination),
             ConnectionsPerPath = new Dictionary<string, int>(_connectionsPerPath)
         };
+    }
+
+    /// <summary>
+    /// 动态添加 IP 到白名单
+    /// </summary>
+    public bool AddWhitelist(string ipOrCidr)
+    {
+        if (string.IsNullOrWhiteSpace(ipOrCidr))
+            return false;
+
+        ipOrCidr = ipOrCidr.Trim();
+        
+        // 验证 IP 或 CIDR 格式
+        if (!IpNetwork.TryParse(ipOrCidr, out _))
+        {
+            _logger.Warn("无效的 IP 或 CIDR 格式: {IpOrCidr}", ipOrCidr);
+            return false;
+        }
+
+        lock (_dynamicListLock)
+        {
+            if (_dynamicWhitelist.Add(ipOrCidr))
+            {
+                BuildIpNetworks(); // 重新构建网络列表
+                _logger.Info("已动态添加白名单: {IpOrCidr}", ipOrCidr);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 动态从白名单移除 IP
+    /// </summary>
+    public bool RemoveWhitelist(string ipOrCidr)
+    {
+        if (string.IsNullOrWhiteSpace(ipOrCidr))
+            return false;
+
+        ipOrCidr = ipOrCidr.Trim();
+
+        lock (_dynamicListLock)
+        {
+            if (_dynamicWhitelist.Remove(ipOrCidr))
+            {
+                BuildIpNetworks(); // 重新构建网络列表
+                _logger.Info("已从白名单移除: {IpOrCidr}", ipOrCidr);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 获取当前白名单列表
+    /// </summary>
+    public List<string> GetWhitelist()
+    {
+        lock (_dynamicListLock)
+        {
+            var allWhitelist = new List<string>(_options.Whitelist);
+            allWhitelist.AddRange(_dynamicWhitelist);
+            return allWhitelist.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+    }
+
+    /// <summary>
+    /// 动态添加 IP 到黑名单
+    /// </summary>
+    public bool AddBlacklist(string ipOrCidr)
+    {
+        if (string.IsNullOrWhiteSpace(ipOrCidr))
+            return false;
+
+        ipOrCidr = ipOrCidr.Trim();
+        
+        // 验证 IP 或 CIDR 格式
+        if (!IpNetwork.TryParse(ipOrCidr, out _))
+        {
+            _logger.Warn("无效的 IP 或 CIDR 格式: {IpOrCidr}", ipOrCidr);
+            return false;
+        }
+
+        lock (_dynamicListLock)
+        {
+            if (_dynamicBlacklist.Add(ipOrCidr))
+            {
+                BuildIpNetworks(); // 重新构建网络列表
+                _logger.Info("已动态添加黑名单: {IpOrCidr}", ipOrCidr);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 动态从黑名单移除 IP
+    /// </summary>
+    public bool RemoveBlacklist(string ipOrCidr)
+    {
+        if (string.IsNullOrWhiteSpace(ipOrCidr))
+            return false;
+
+        ipOrCidr = ipOrCidr.Trim();
+
+        lock (_dynamicListLock)
+        {
+            if (_dynamicBlacklist.Remove(ipOrCidr))
+            {
+                BuildIpNetworks(); // 重新构建网络列表
+                _logger.Info("已从黑名单移除: {IpOrCidr}", ipOrCidr);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 获取当前黑名单列表
+    /// </summary>
+    public List<string> GetBlacklist()
+    {
+        lock (_dynamicListLock)
+        {
+            var allBlacklist = new List<string>(_options.IpControl.Blacklist);
+            allBlacklist.AddRange(_dynamicBlacklist);
+            return allBlacklist.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
     }
 
     public void Dispose()

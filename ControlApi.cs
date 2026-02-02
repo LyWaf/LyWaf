@@ -273,8 +273,179 @@ public static class ControlApi
 
             return Results.Json(result);
         }).RequireHost($"*:{controlPort}");
+
+        // =============== 动态访问控制管理 API ===============
+        
+        // 获取白名单列表
+        app.MapGet("/api/ac/whitelist", (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            var whitelist = accessControlService.GetWhitelist();
+            return Results.Json(new
+            {
+                success = true,
+                count = whitelist.Count,
+                whitelist,
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 添加 IP 到白名单
+        app.MapPost("/api/ac/whitelist/add", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddIpRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.IpOrCidr))
+                {
+                    return Results.Json(new { success = false, message = "IP 或 CIDR 不能为空" }, statusCode: 400);
+                }
+
+                var result = accessControlService.AddWhitelist(request.IpOrCidr);
+                if (result)
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已成功添加白名单: {request.IpOrCidr}",
+                        ipOrCidr = request.IpOrCidr,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "添加失败：IP 格式无效或已存在" }, statusCode: 400);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 从白名单移除 IP
+        app.MapPost("/api/ac/whitelist/remove", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveIpRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.IpOrCidr))
+                {
+                    return Results.Json(new { success = false, message = "IP 或 CIDR 不能为空" }, statusCode: 400);
+                }
+
+                var result = accessControlService.RemoveWhitelist(request.IpOrCidr);
+                if (result)
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已成功从白名单移除: {request.IpOrCidr}",
+                        ipOrCidr = request.IpOrCidr,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "移除失败：IP 不在动态白名单中" }, statusCode: 404);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 获取黑名单列表
+        app.MapGet("/api/ac/blacklist", (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            var blacklist = accessControlService.GetBlacklist();
+            return Results.Json(new
+            {
+                success = true,
+                count = blacklist.Count,
+                blacklist = blacklist,
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 添加 IP 到黑名单
+        app.MapPost("/api/ac/blacklist/add", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddIpRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.IpOrCidr))
+                {
+                    return Results.Json(new { success = false, message = "IP 或 CIDR 不能为空" }, statusCode: 400);
+                }
+
+                var result = accessControlService.AddBlacklist(request.IpOrCidr);
+                if (result)
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已成功添加黑名单: {request.IpOrCidr}",
+                        ipOrCidr = request.IpOrCidr,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "添加失败：IP 格式无效或已存在" }, statusCode: 400);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 从黑名单移除 IP
+        app.MapPost("/api/ac/blacklist/remove", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveIpRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.IpOrCidr))
+                {
+                    return Results.Json(new { success = false, message = "IP 或 CIDR 不能为空" }, statusCode: 400);
+                }
+
+                var result = accessControlService.RemoveBlacklist(request.IpOrCidr);
+                if (result)
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已成功从黑名单移除: {request.IpOrCidr}",
+                        ipOrCidr = request.IpOrCidr,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "移除失败：IP 不在动态黑名单中" }, statusCode: 404);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
         
         return app;
+    }
+
+    // 请求模型
+    private class AddIpRequest
+    {
+        public string IpOrCidr { get; set; } = "";
+    }
+
+    private class RemoveIpRequest
+    {
+        public string IpOrCidr { get; set; } = "";
     }
     
     private static object? GetSectionValue(IConfigurationSection section)
