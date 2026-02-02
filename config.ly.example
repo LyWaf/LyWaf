@@ -294,6 +294,90 @@ StreamServer {
 }
 
 # ============================================================
+# A/B 测试配置 - 有两种方式
+# ============================================================
+
+# 方式一：使用 ABTest 全局配置 + ABCookieTest 负载均衡策略
+# 适合需要统一管理多个 A/B 测试的场景
+ABTest {
+    # 首页 A/B 测试
+    homepage-test {
+        Name = "首页改版测试"
+        Enabled = true
+        # 模式: Random(纯随机), CookieSticky(Cookie会话保持), IpHash(IP哈希), UserIdHash(用户ID哈希)
+        Mode = "CookieSticky"
+        CookieName = "ab_homepage"
+        CookieExpireDays = 30
+        
+        # 流量分配权重（百分比）
+        Variants {
+            A = 70    # 70% 流量到变体 A
+            B = 30    # 30% 流量到变体 B
+        }
+        
+        # 变体对应的后端 Destination ID
+        VariantTargets {
+            A = "dest1"     # 对应 Cluster 中的 dest1
+            B = "dest2"     # 对应 Cluster 中的 dest2
+        }
+        
+        # 匹配路径（空表示匹配所有）
+        MatchPaths = ["/", "/home/*"]
+        # 排除路径
+        ExcludePaths = ["/api/*", "/static/*"]
+    }
+    
+    # 多变体测试示例
+    checkout-flow {
+        Name = "结账流程测试"
+        Mode = "IpHash"
+        Variants {
+            control = 50      # 对照组
+            variant1 = 25     # 变体1
+            variant2 = 25     # 变体2
+        }
+        VariantTargets {
+            control = "dest1"
+            variant1 = "dest2"
+            variant2 = "dest3"
+        }
+        MatchPaths = ["/checkout/*"]
+    }
+}
+
+# 使用 ABCookieTest 策略的站点配置示例
+# 需要配合上面的 ABTest 配置使用
+abtest.${domain} {
+    proxy {
+        to = "http://127.0.0.1:8001 http://127.0.0.1:8002"
+        lb_policy = "ABCookieTest"    # 使用 A/B 测试负载均衡策略
+        abtest_id = "homepage-test"   # 关联上面定义的 A/B 测试 ID
+    }
+}
+
+# 方式二：使用 ABTestWeighted 策略（简单场景）
+# 直接在 upstream 配置权重，无需配置 ABTest 块
+# 适合简单的流量分配场景
+simple-ab.${domain} {
+    proxy {
+        # upstream 地址后面加 @权重，或使用 weight=权重
+        to = "http://127.0.0.1:8001@70 http://127.0.0.1:8002@30"
+        lb_policy = "ABTestWeighted"  # 使用权重负载均衡
+        ab_cookie = "ab_simple"       # Cookie 名称（会话保持）
+        ab_cookie_expire = 30         # Cookie 有效期（天）
+    }
+}
+
+# 三变体测试示例
+multivariant.${domain} {
+    proxy {
+        to = "http://v1.backend:8080@50 http://v2a.backend:8080@25 http://v2b.backend:8080@25"
+        lb_policy = "ABTestWeighted"
+        ab_cookie = "ab_checkout"
+    }
+}
+
+# ============================================================
 # 条件配置
 # ============================================================
 if $env == "development" {

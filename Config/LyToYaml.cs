@@ -697,6 +697,30 @@ public static class LyToAppSettingsConverter
                             defaultClusterConfig["LoadBalancingPolicy"] = directive.Value.ToString()!;
                             break;
 
+                        case "abtest_id":
+                        case "ab_test_id":
+                        case "abtestid":
+                            // A/B 测试 ID，用于 ABCookieTest 策略
+                            var metaAbTest = EnsureDict(defaultClusterConfig, "Metadata");
+                            metaAbTest["ABTestId"] = directive.Value.ToString()!;
+                            break;
+
+                        case "ab_cookie":
+                        case "abcookie":
+                        case "ab_test_cookie":
+                            // A/B 测试 Cookie 名称，用于 ABTestWeighted 策略
+                            var metaCookie = EnsureDict(defaultClusterConfig, "Metadata");
+                            metaCookie["ABTestCookie"] = directive.Value.ToString()!;
+                            break;
+
+                        case "ab_cookie_expire":
+                        case "abcookieexpire":
+                        case "ab_cookie_expire_days":
+                            // A/B 测试 Cookie 有效期（天）
+                            var metaExpire = EnsureDict(defaultClusterConfig, "Metadata");
+                            metaExpire["ABTestCookieExpireDays"] = directive.Value.ToString()!;
+                            break;
+
                         case "health_check":
                             if (directive.Value is Dictionary<string, object> hcConfig)
                             {
@@ -793,6 +817,24 @@ public static class LyToAppSettingsConverter
                         case "lb_policy":
                         case "load_balancing_policy":
                             clusterConfig["LoadBalancingPolicy"] = kv.Value.ToString()!;
+                            break;
+                        case "abtest_id":
+                        case "ab_test_id":
+                        case "abtestid":
+                            var blockMetaAbTest = EnsureDict(clusterConfig, "Metadata");
+                            blockMetaAbTest["ABTestId"] = kv.Value.ToString()!;
+                            break;
+                        case "ab_cookie":
+                        case "abcookie":
+                        case "ab_test_cookie":
+                            var blockMetaCookie = EnsureDict(clusterConfig, "Metadata");
+                            blockMetaCookie["ABTestCookie"] = kv.Value.ToString()!;
+                            break;
+                        case "ab_cookie_expire":
+                        case "abcookieexpire":
+                        case "ab_cookie_expire_days":
+                            var blockMetaExpire = EnsureDict(clusterConfig, "Metadata");
+                            blockMetaExpire["ABTestCookieExpireDays"] = kv.Value.ToString()!;
                             break;
                         case "respond":
                             blockHasRespond = true;
@@ -1164,6 +1206,9 @@ public static class LyToAppSettingsConverter
     /// 获取或创建 Cluster
     /// 如果相同 upstream 配置已存在，则复用；否则创建新的
     /// </summary>
+    /// <param name="upstreams">上游地址列表，支持带权重格式 "http://host:port@weight"</param>
+    /// <param name="clusterConfig">Cluster 配置</param>
+    /// <param name="ctx">配置上下文</param>
     private static string GetOrCreateCluster(
         List<string> upstreams,
         Dictionary<string, object> clusterConfig,
@@ -1177,6 +1222,15 @@ public static class LyToAppSettingsConverter
         if (clusterConfig.TryGetValue("LoadBalancingPolicy", out var lbPolicy))
         {
             cacheKey += $"@lb={lbPolicy}";
+        }
+        
+        // 添加 ABTestId 到缓存 key
+        if (clusterConfig.TryGetValue("Metadata", out var metaObj) && metaObj is Dictionary<string, object> meta)
+        {
+            if (meta.TryGetValue("ABTestId", out var abTestId))
+            {
+                cacheKey += $"@abtest={abTestId}";
+            }
         }
 
         // 检查缓存
@@ -1192,10 +1246,24 @@ public static class LyToAppSettingsConverter
         var destIndex = 1;
         foreach (var upstream in upstreams)
         {
-            destinations[$"dest{destIndex++}"] = new Dictionary<string, object>
+            // 解析 upstream，支持带权重格式: "http://host:port@weight" 或 "http://host:port weight=70"
+            var (address, weight) = ParseUpstreamWithWeight(upstream);
+            
+            var destConfig = new Dictionary<string, object>
             {
-                ["Address"] = upstream
+                ["Address"] = address
             };
+            
+            // 如果有权重配置，添加到 Metadata
+            if (weight > 0)
+            {
+                destConfig["Metadata"] = new Dictionary<string, object>
+                {
+                    ["Weight"] = weight.ToString()
+                };
+            }
+            
+            destinations[$"dest{destIndex++}"] = destConfig;
         }
         
         var newClusterConfig = new Dictionary<string, object>(clusterConfig)
@@ -1207,6 +1275,45 @@ public static class LyToAppSettingsConverter
         ctx.ClusterCache[cacheKey] = clusterId;
 
         return clusterId;
+    }
+    
+    /// <summary>
+    /// 解析带权重的 upstream 地址
+    /// 支持格式：
+    ///   - "http://host:port" -> (address, 0)
+    ///   - "http://host:port@70" -> (address, 70)
+    ///   - "http://host:port weight=70" -> (address, 70)
+    /// </summary>
+    private static (string address, int weight) ParseUpstreamWithWeight(string upstream)
+    {
+        var weight = 0;
+        var address = upstream.Trim();
+        
+        // 检查 @ 格式: "http://host:port@70"
+        var atIndex = address.LastIndexOf('@');
+        if (atIndex > 0 && atIndex < address.Length - 1)
+        {
+            var weightPart = address[(atIndex + 1)..];
+            if (int.TryParse(weightPart, out var w))
+            {
+                weight = w;
+                address = address[..atIndex];
+            }
+        }
+        
+        // 检查 weight= 格式: "http://host:port weight=70"
+        var weightIdx = address.IndexOf(" weight=", StringComparison.OrdinalIgnoreCase);
+        if (weightIdx > 0)
+        {
+            var weightPart = address[(weightIdx + 8)..].Trim();
+            if (int.TryParse(weightPart, out var w))
+            {
+                weight = w;
+                address = address[..weightIdx].Trim();
+            }
+        }
+        
+        return (address, weight);
     }
 
     /// <summary>
@@ -1599,6 +1706,30 @@ public static class LyToAppSettingsConverter
                             clusterConfig["LoadBalancingPolicy"] = kv.Value?.ToString() ?? "RoundRobin";
                             break;
 
+                        case "abtest_id":
+                        case "ab_test_id":
+                        case "abtestid":
+                            // A/B 测试 ID，用于 ABCookieTest 策略
+                            var metadata = EnsureDict(clusterConfig, "Metadata");
+                            metadata["ABTestId"] = kv.Value?.ToString() ?? "";
+                            break;
+
+                        case "ab_cookie":
+                        case "abcookie":
+                        case "ab_test_cookie":
+                            // A/B 测试 Cookie 名称，用于 ABTestWeighted 策略
+                            var metaCookie = EnsureDict(clusterConfig, "Metadata");
+                            metaCookie["ABTestCookie"] = kv.Value?.ToString() ?? "ab_variant";
+                            break;
+
+                        case "ab_cookie_expire":
+                        case "abcookieexpire":
+                        case "ab_cookie_expire_days":
+                            // A/B 测试 Cookie 有效期（天）
+                            var metaExpire = EnsureDict(clusterConfig, "Metadata");
+                            metaExpire["ABTestCookieExpireDays"] = kv.Value?.ToString() ?? "30";
+                            break;
+
                         case "health_check":
                             if (kv.Value is Dictionary<string, object> hcConfig)
                             {
@@ -1788,6 +1919,14 @@ public static class LyToAppSettingsConverter
             case "plugins":
                 // 插件配置
                 ProcessPluginsConfig(value, result);
+                break;
+
+            case "abtest":
+            case "ab_test":
+            case "abtesting":
+            case "ab_testing":
+                // A/B 测试配置
+                ProcessABTestConfig(value, result);
                 break;
 
             default:
@@ -2115,6 +2254,179 @@ public static class LyToAppSettingsConverter
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// 处理 A/B 测试配置
+    /// 支持格式：
+    /// ABTest {
+    ///     homepage-test {
+    ///         Name = "首页 A/B 测试"
+    ///         Enabled = true
+    ///         Mode = "CookieSticky"          # Random, CookieSticky, IpHash, UserIdHash
+    ///         CookieName = "ab_homepage"
+    ///         CookieExpireDays = 30
+    ///         Variants {
+    ///             A = 70                      # 70% 流量到变体 A
+    ///             B = 30                      # 30% 流量到变体 B
+    ///         }
+    ///         VariantTargets {
+    ///             A = "cluster-a"             # 变体 A 对应的 Cluster 或 Destination
+    ///             B = "cluster-b"
+    ///         }
+    ///         MatchPaths = ["/", "/home/*"]  # 匹配路径
+    ///         ExcludePaths = ["/api/*"]      # 排除路径
+    ///     }
+    /// }
+    /// ABTest {
+    ///     homepage-test {
+    ///         Mode = "CookieSticky"
+    ///         Variants { A = 70; B = 30 }
+    ///         VariantTargets { A = "dest1"; B = "dest2" }
+    ///     }
+    /// }
+
+    /// site.example.com {
+    ///     proxy {
+    ///         to = "http://v1:8080 http://v2:8080"
+    ///         lb_policy = "ABCookieTest"
+    ///         abtest_id = "homepage-test"
+    ///     }
+    /// }
+    /// </summary>
+    private static void ProcessABTestConfig(object value, Dictionary<string, object> result)
+    {
+        if (value is not Dictionary<string, object> abTestConfig)
+            return;
+
+        var abTest = EnsureDict(result, "ABTest");
+        var tests = new Dictionary<string, object>();
+
+        foreach (var kv in abTestConfig)
+        {
+            var key = kv.Key.ToLower();
+
+            switch (key)
+            {
+                case "enabled":
+                    abTest["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "tests":
+                    // 嵌套的 Tests { ... } 块
+                    if (kv.Value is Dictionary<string, object> testsConfig)
+                    {
+                        foreach (var testKv in testsConfig)
+                        {
+                            if (testKv.Value is Dictionary<string, object> testConfig)
+                            {
+                                tests[testKv.Key] = ParseABTestItem(testConfig);
+                            }
+                        }
+                    }
+                    break;
+                default:
+                    // 直接定义的测试配置（以测试 ID 为键）
+                    if (kv.Value is Dictionary<string, object> testDict)
+                    {
+                        tests[kv.Key] = ParseABTestItem(testDict);
+                    }
+                    break;
+            }
+        }
+
+        if (tests.Count > 0)
+        {
+            abTest["Tests"] = tests;
+            // 如果有测试配置但没有显式设置 Enabled，默认启用
+            if (!abTest.ContainsKey("Enabled"))
+            {
+                abTest["Enabled"] = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 解析单个 A/B 测试配置项
+    /// </summary>
+    private static Dictionary<string, object> ParseABTestItem(Dictionary<string, object> config)
+    {
+        var item = new Dictionary<string, object>();
+
+        foreach (var kv in config)
+        {
+            var key = kv.Key.ToLower();
+            switch (key)
+            {
+                case "name":
+                case "description":
+                    item["Name"] = kv.Value?.ToString() ?? "";
+                    break;
+                case "enabled":
+                    item["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "mode":
+                    var mode = kv.Value?.ToString()?.ToLower();
+                    item["Mode"] = mode switch
+                    {
+                        "random" => "Random",
+                        "cookiesticky" or "cookie_sticky" or "cookie" or "sticky" => "CookieSticky",
+                        "iphash" or "ip_hash" or "ip" => "IpHash",
+                        "useridhash" or "user_id_hash" or "userid" or "user" => "UserIdHash",
+                        _ => "Random"
+                    };
+                    break;
+                case "cookiename" or "cookie_name" or "cookie":
+                    item["CookieName"] = kv.Value?.ToString() ?? "ab_variant";
+                    break;
+                case "cookieexpiredays" or "cookie_expire_days" or "expire_days" or "expiredays":
+                    if (int.TryParse(kv.Value?.ToString(), out var days))
+                    {
+                        item["CookieExpireDays"] = days;
+                    }
+                    break;
+                case "variants":
+                    // 变体权重配置
+                    if (kv.Value is Dictionary<string, object> variantsDict)
+                    {
+                        var variants = new Dictionary<string, object>();
+                        foreach (var vKv in variantsDict)
+                        {
+                            if (int.TryParse(vKv.Value?.ToString(), out var weight))
+                            {
+                                variants[vKv.Key] = weight;
+                            }
+                        }
+                        item["Variants"] = variants;
+                    }
+                    break;
+                case "varianttargets" or "variant_targets" or "targets":
+                    // 变体目标配置
+                    if (kv.Value is Dictionary<string, object> targetsDict)
+                    {
+                        var targets = new Dictionary<string, object>();
+                        foreach (var tKv in targetsDict)
+                        {
+                            targets[tKv.Key] = tKv.Value?.ToString() ?? "";
+                        }
+                        item["VariantTargets"] = targets;
+                    }
+                    break;
+                case "matchpaths" or "match_paths" or "paths" or "match":
+                    item["MatchPaths"] = ParseStringList(kv.Value);
+                    break;
+                case "excludepaths" or "exclude_paths" or "exclude":
+                    item["ExcludePaths"] = ParseStringList(kv.Value);
+                    break;
+            }
+        }
+
+        // 默认启用
+        if (!item.ContainsKey("Enabled"))
+        {
+            item["Enabled"] = true;
+        }
+
+        return item;
     }
 
     /// <summary>

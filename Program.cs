@@ -34,6 +34,7 @@ using LyWaf.Services.SimpleRes;
 using LyWaf.Services.Dns;
 using LyWaf.Services.ProxyServer;
 using LyWaf.Services.StreamServer;
+using LyWaf.Services.ABTest;
 using LyWaf.Config;
 
 using System.CommandLine;
@@ -1014,6 +1015,7 @@ public class Program
         builder.Services.Configure<CustomDnsOptions>(builder.Configuration.GetSection("CustomDns"));
         builder.Services.Configure<ProxyServerOptions>(builder.Configuration.GetSection("ProxyServer"));
         builder.Services.Configure<StreamServerOptions>(builder.Configuration.GetSection("StreamServer"));
+        builder.Services.Configure<ABTestOptions>(builder.Configuration.GetSection("ABTest"));
 
         // 注册自定义响应压缩中间件（支持 MinSize）
         builder.Services.AddSingleton<ResponseCompressMiddleware>();
@@ -1040,6 +1042,11 @@ public class Program
         builder.Services.AddSingleton<ILoadBalancingPolicy, GenericHashPolicy>();
         builder.Services.AddSingleton<ILoadBalancingPolicy, WeightedRandomPolicy>();
         builder.Services.AddSingleton<ILoadBalancingPolicy, ConsistentHashPolicy>();
+        
+        // 注册 A/B 测试服务和策略
+        builder.Services.AddSingleton<IABTestService, ABTestService>();
+        builder.Services.AddSingleton<ILoadBalancingPolicy, ABCookieTestPolicy>();
+        builder.Services.AddSingleton<ILoadBalancingPolicy, ABTestWeightedPolicy>();
 
         // 注册插件系统
         builder.Services.AddLyWafPlugins(builder.Configuration);

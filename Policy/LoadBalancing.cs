@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using LyWaf.Services.ABTest;
 using LyWaf.Utils;
 using Yarp.ReverseProxy.LoadBalancing;
 using Yarp.ReverseProxy.Model;
@@ -471,5 +472,172 @@ public class ConsistentHashPolicy : ILoadBalancingPolicy
             var hash = MD5.HashData(bytes);
             return BitConverter.ToUInt32(hash, 0);
         }
+    }
+}
+
+/// <summary>
+/// A/B 测试负载均衡策略（支持 Cookie 会话保持）
+/// 基于配置的权重分配流量到不同的变体（后端）
+/// 支持 Cookie 会话保持、IP 哈希、纯随机等模式
+/// 
+/// 配置方式:
+///   - Cluster.Metadata["ABTestId"] = "测试ID"
+///   - 通过 ControlApi 动态配置测试规则
+/// 
+/// 使用示例:
+///   1. 通过 API 创建 A/B 测试配置
+///   2. 设置 Cluster 的 LoadBalancingPolicy 为 "ABCookieTest"
+///   3. 设置 Cluster.Metadata["ABTestId"] 为测试 ID
+/// </summary>
+public class ABCookieTestPolicy : ILoadBalancingPolicy
+{
+    public string Name => "ABCookieTest";
+
+    private readonly IABTestService _abTestService;
+
+    public ABCookieTestPolicy(IABTestService abTestService)
+    {
+        _abTestService = abTestService;
+    }
+
+    public DestinationState? PickDestination(HttpContext context, ClusterState cluster, IReadOnlyList<DestinationState> availableDestinations)
+    {
+        if (availableDestinations.Count == 0)
+            return null;
+
+        if (availableDestinations.Count == 1)
+            return availableDestinations[0];
+
+        // 获取 A/B 测试 ID
+        var testId = cluster.Model.Config.Metadata?.GetValueOrDefault("ABTestId");
+        if (string.IsNullOrEmpty(testId))
+        {
+            // 没有配置 A/B 测试，使用默认随机
+            return availableDestinations[Random.Shared.Next(availableDestinations.Count)];
+        }
+
+        // 选择变体
+        var variant = _abTestService.SelectVariant(testId, context);
+        if (string.IsNullOrEmpty(variant))
+        {
+            return availableDestinations[Random.Shared.Next(availableDestinations.Count)];
+        }
+
+        // 将选中的变体保存到 HttpContext，供其他中间件使用
+        context.Items["ABTest.Variant"] = variant;
+        context.Items["ABTest.TestId"] = testId;
+
+        // 获取变体对应的目标
+        var config = _abTestService.GetConfig(testId);
+        if (config?.VariantTargets.TryGetValue(variant, out var targetId) == true)
+        {
+            // 根据目标 ID 查找 Destination
+            var destination = availableDestinations.FirstOrDefault(d => 
+                d.DestinationId.Equals(targetId, StringComparison.OrdinalIgnoreCase));
+            
+            if (destination != null)
+                return destination;
+        }
+
+        // 如果没有找到指定的目标，根据变体名称匹配 Destination
+        var matchedDestination = availableDestinations.FirstOrDefault(d =>
+            d.DestinationId.Contains(variant, StringComparison.OrdinalIgnoreCase) ||
+            d.Model.Config.Metadata?.GetValueOrDefault("ABVariant")?.Equals(variant, StringComparison.OrdinalIgnoreCase) == true);
+
+        return matchedDestination ?? availableDestinations[Random.Shared.Next(availableDestinations.Count)];
+    }
+}
+
+/// <summary>
+/// A/B 测试加权策略
+/// 直接基于 Destination 的权重进行 A/B 分配
+/// 支持 Cookie 会话保持
+/// 
+/// 配置方式:
+///   - Destination.Metadata["Weight"] = "权重值" (如 70, 30)
+///   - Cluster.Metadata["ABTestCookie"] = "Cookie名称" (可选，启用会话保持)
+///   - Cluster.Metadata["ABTestCookieExpireDays"] = "天数" (可选，Cookie 有效期)
+/// </summary>
+public class ABTestWeightedPolicy : ILoadBalancingPolicy
+{
+    public string Name => "ABTestWeighted";
+
+    public DestinationState? PickDestination(HttpContext context, ClusterState cluster, IReadOnlyList<DestinationState> availableDestinations)
+    {
+        if (availableDestinations.Count == 0)
+            return null;
+
+        if (availableDestinations.Count == 1)
+            return availableDestinations[0];
+
+        var metadata = cluster.Model.Config.Metadata;
+        var cookieName = metadata?.GetValueOrDefault("ABTestCookie");
+        var cookieExpireDays = 30;
+        
+        if (metadata?.TryGetValue("ABTestCookieExpireDays", out var expireDaysStr) == true)
+        {
+            int.TryParse(expireDaysStr, out cookieExpireDays);
+        }
+
+        // 如果启用了 Cookie 会话保持，尝试从 Cookie 获取
+        if (!string.IsNullOrEmpty(cookieName))
+        {
+            if (context.Request.Cookies.TryGetValue(cookieName, out var destId))
+            {
+                var existingDest = availableDestinations.FirstOrDefault(d => 
+                    d.DestinationId.Equals(destId, StringComparison.OrdinalIgnoreCase));
+                
+                if (existingDest != null)
+                {
+                    context.Items["ABTest.Destination"] = existingDest.DestinationId;
+                    return existingDest;
+                }
+            }
+        }
+
+        // 基于权重随机选择
+        var weights = availableDestinations.Select(GetWeight).ToArray();
+        var totalWeight = weights.Sum();
+        var random = Random.Shared.Next(totalWeight);
+
+        var cumulative = 0;
+        DestinationState? selected = null;
+        
+        for (int i = 0; i < availableDestinations.Count; i++)
+        {
+            cumulative += weights[i];
+            if (random < cumulative)
+            {
+                selected = availableDestinations[i];
+                break;
+            }
+        }
+
+        selected ??= availableDestinations[^1];
+
+        // 设置 Cookie
+        if (!string.IsNullOrEmpty(cookieName))
+        {
+            context.Response.Cookies.Append(cookieName, selected.DestinationId, new CookieOptions
+            {
+                Expires = DateTimeOffset.Now.AddDays(cookieExpireDays),
+                HttpOnly = true,
+                SameSite = SameSiteMode.Lax,
+                Path = "/"
+            });
+        }
+
+        context.Items["ABTest.Destination"] = selected.DestinationId;
+        return selected;
+    }
+
+    private static int GetWeight(DestinationState destination)
+    {
+        if (destination.Model.Config.Metadata?.TryGetValue("Weight", out var weightStr) == true
+            && int.TryParse(weightStr, out var weight) && weight > 0)
+        {
+            return weight;
+        }
+        return 1;
     }
 }
