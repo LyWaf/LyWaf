@@ -367,6 +367,19 @@ public class ExpiringSafeDictionary<TKey, TValue> : IDisposable where TKey : not
     }
 
     /// <summary>
+    /// 获取所有未过期的键值对
+    /// </summary>
+    public IEnumerable<KeyValuePair<TKey, TValue>> GetValidItems()
+    {
+        var now = DateTime.UtcNow;
+
+        return _dictionary
+            .Where(pair => !pair.Value.IsExpired(now))
+            .Select(pair => new KeyValuePair<TKey, TValue>(pair.Key, pair.Value.Value))
+            .ToList();
+    }
+
+    /// <summary>
     /// 获取字典中项目的数量（包括过期的）
     /// </summary>
     public int Count => _dictionary.Count;

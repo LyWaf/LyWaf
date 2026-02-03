@@ -145,7 +145,7 @@ public static class ControlTemplate
     /// <summary>
     /// 生成封禁 IP HTML
     /// </summary>
-    public static string GenerateBlockedIpsHtml(List<string> blockedIpList)
+    public static string GenerateBlockedIpsHtml(List<KeyValuePair<string, string>> blockedIpList)
     {
         if (blockedIpList.Count == 0)
         {
@@ -155,10 +155,13 @@ public static class ControlTemplate
         var sb = new StringBuilder();
         sb.AppendLine("<div class=\"item-list\">");
         
-        foreach (var ip in blockedIpList.Take(50))
+        foreach (var item in blockedIpList.Take(50))
         {
-            sb.AppendLine($"    <div class=\"item-row\">");
+            var ip = item.Key;
+            var reason = System.Web.HttpUtility.HtmlEncode(item.Value);
+            sb.AppendLine($"    <div class=\"item-row blocked-ip-row\">");
             sb.AppendLine($"        <span class=\"item-text\">{ip}</span>");
+            sb.AppendLine($"        <span class=\"item-reason\">{reason}</span>");
             sb.AppendLine($"        <button class=\"btn-icon btn-delete\" onclick=\"unblockIp('{ip}')\">×</button>");
             sb.AppendLine($"    </div>");
         }
@@ -477,7 +480,7 @@ public static class ControlTemplate
         AddStatus("地理位置控制", "geo-control", geoControlEnabled);
         AddStatus("WAF Args检测", "waf-args", wafArgsEnabled);
         AddStatus("WAF Post检测", "waf-post", wafPostEnabled);
-        AddStatus("CC 防护", "cc", ccEnabled, false); // CC 防护无法直接切换，需要添加/删除规则
+        AddStatus("CC 防护", "cc", true, false); // CC 防护无法直接切换，需要添加/删除规则
         sb.AppendLine("</div>");
         
         return sb.ToString();
@@ -518,7 +521,7 @@ public static class ControlTemplate
         var ccRules = statisticService.GetLimitCcRules();
         var argsRules = protectService.GetArgsRegexList();
         var postRules = protectService.GetPostRegexList();
-        var blockedIpList = blockedIps.GetValidKeys().ToList();
+        var blockedIpList = blockedIps.GetValidItems().ToList();
         var recentClients = GetRecentClients(5);
 
         // 格式化运行时间
