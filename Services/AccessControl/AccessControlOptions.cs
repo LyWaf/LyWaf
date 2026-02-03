@@ -145,14 +145,23 @@ public class GeoAccessControlConfig
 
     /// <summary>
     /// 允许访问的国家/地区列表
-    /// 支持: 国家名称、省份、城市
     /// </summary>
     public List<string> AllowCountries { get; set; } = [];
+
+    /// <summary>
+    /// 允许访问的省份列表
+    /// </summary>
+    public List<string> AllowRegions { get; set; } = [];
 
     /// <summary>
     /// 禁止访问的国家/地区列表
     /// </summary>
     public List<string> DenyCountries { get; set; } = [];
+
+    /// <summary>
+    /// 禁止访问的省份列表
+    /// </summary>
+    public List<string> DenyRegions { get; set; } = [];
 
     /// <summary>
     /// 基于路径的地理位置规则
