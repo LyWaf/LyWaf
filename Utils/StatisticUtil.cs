@@ -14,7 +14,7 @@ public class StatisticUtil
         var statisticService = context.RequestServices.GetRequiredService<IStatisticService>();
         var path = await statisticService.GetMatchPath(context.Request.Path);
         _logger.Info("统计访问: 路径:{}, 实际归因:{}", context.Request.Path, path);
-        bool func(string url, IpStatistic val)
+        bool func(string url, IpStatistic val, bool updateLastAccess = false)
         {
             if (val.UrlCostTime.TryGetValue(path, out var sub))
             {
@@ -29,6 +29,13 @@ public class StatisticUtil
                 };
             }
             val.CountTime.IncrTime(costTime);
+            
+            // 更新最后访问时间（仅对客户端统计有效）
+            if (updateLastAccess)
+            {
+                val.LastAccessTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            }
+            
             var ct = val.UrlCostTime[path];
             _logger.Info("统计访问: 访问:{} 总次数:{} 总耗时:{}ms, 平均耗时: {}ms", url.TrimEnd('/') + path, ct.Count, ct.UseTime, ct.Average);
             return true;
@@ -38,7 +45,7 @@ public class StatisticUtil
         var host = RequestUtil.GetRequestBaseUrl(context.Request);
         SharedData.ReqStas.DoLockKeyFunc(host, (key) => new(), (val) => func(host, val));
         var client_ip = RequestUtil.GetClientIp(context.Request);
-        SharedData.ClientStas.DoLockKeyFunc(client_ip, (key) => new(), (val) => func(client_ip, val));
+        SharedData.ClientStas.DoLockKeyFunc(client_ip, (key) => new(), (val) => func(client_ip, val, updateLastAccess: true));
         
         // 白名单, 不进行后续的分析统计
         if(statisticService.IsWhitePath(path)) {

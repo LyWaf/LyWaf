@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LyWaf 控制面板</title>
+    <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-secondary: #111827;
+            --bg-card: #1a2332;
+            --bg-card-hover: #232d3f;
+            --accent: #3b82f6;
+            --accent-light: #60a5fa;
+            --accent-dark: #2563eb;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border: #2d3748;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        header {
+            background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-card) 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 20px 0;
+            margin-bottom: 30px;
+        }
+        
+        header .container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .logo-icon {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: white;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+        }
+        
+        .logo h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, var(--text-primary) 0%, var(--accent-light) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: rgba(16, 185, 129, 0.15);
+            border: 1px solid var(--success);
+            border-radius: 20px;
+            font-size: 0.9rem;
+            color: var(--success);
+        }
+        
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid var(--border);
+            transition: all 0.3s ease;
+        }
+        
+        .card:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--accent);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+        }
+        
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        
+        .card-title {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .card-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+        }
+        
+        .card-icon.blue { background: rgba(59, 130, 246, 0.2); color: var(--accent-light); }
+        .card-icon.green { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+        .card-icon.yellow { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+        .card-icon.red { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+        
+        .card-value {
+            font-size: 2.2rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        
+        .card-desc {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+        
+        .section {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid var(--border);
+            margin-bottom: 20px;
+        }
+        
+        .section-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .section-title::before {
+            content: '';
+            width: 4px;
+            height: 24px;
+            background: var(--accent);
+            border-radius: 2px;
+        }
+        
+        .table-container {
+            overflow-x: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        th {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+        
+        td {
+            font-size: 0.9rem;
+        }
+        
+        tr:hover {
+            background: var(--bg-card-hover);
+        }
+        
+        .tag {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+        
+        .tag-blue { background: rgba(59, 130, 246, 0.2); color: var(--accent-light); }
+        .tag-green { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+        .tag-yellow { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+        .tag-red { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+        
+        .list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .list-item {
+            background: var(--bg-secondary);
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            border: 1px solid var(--border);
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-muted);
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--accent-dark);
+        }
+        
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+        
+        .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .refresh-time {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 20px;
+            text-align: center;
+        }
+        
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .recent-ips-container {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .recent-ip-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border-radius: 6px;
+            margin-bottom: 6px;
+            border: 1px solid var(--border);
+        }
+        
+        .recent-ip-item .ip {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-weight: 500;
+        }
+        
+        .recent-ip-item .time {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        
+        @media (max-width: 768px) {
+            .two-col {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div class="logo">
+                <div class="logo-icon">W</div>
+                <h1>LyWaf 控制面板</h1>
+            </div>
+            <div class="status-badge">
+                <span class="status-dot"></span>
+                运行中
+            </div>
+        </div>
+    </header>
+    
+    <div class="container">
+        <!-- 概览卡片 -->
+        <div class="grid">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">运行时间</span>
+                    <div class="card-icon blue">⏱</div>
+                </div>
+                <div class="card-value">{{UPTIME_STR}}</div>
+                <div class="card-desc">自 {{PROCESS_START_TIME}} 启动</div>
+            </div>
+            
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">内存使用</span>
+                    <div class="card-icon green">💾</div>
+                </div>
+                <div class="card-value">{{MEMORY_MB}} MB</div>
+                <div class="card-desc">工作集内存</div>
+            </div>
+            
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">当前连接</span>
+                    <div class="card-icon yellow">🔗</div>
+                </div>
+                <div class="card-value">{{TOTAL_CONNECTIONS}}</div>
+                <div class="card-desc">{{UNIQUE_IPS}} 个独立 IP</div>
+            </div>
+            
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">封禁 IP</span>
+                    <div class="card-icon red">🚫</div>
+                </div>
+                <div class="card-value">{{BLOCKED_IP_COUNT}}</div>
+                <div class="card-desc">当前被 CC 防护封禁的 IP 数量</div>
+            </div>
+        </div>
+        
+        <!-- 最近5分钟访问的客户端 -->
+        <div class="section">
+            <h2 class="section-title">最近 5 分钟访问的客户端 ({{RECENT_CLIENTS_COUNT}})</h2>
+            {{RECENT_CLIENTS_CONTENT}}
+        </div>
+        
+        <div class="two-col">
+            <!-- IP 访问控制 -->
+            <div class="section">
+                <h2 class="section-title">IP 访问控制</h2>
+                <div class="table-container">
+                    <table>
+                        <tr>
+                            <th>类型</th>
+                            <th>数量</th>
+                        </tr>
+                        <tr>
+                            <td><span class="tag tag-green">白名单</span></td>
+                            <td>{{WHITELIST_COUNT}} 条规则</td>
+                        </tr>
+                        <tr>
+                            <td><span class="tag tag-red">黑名单</span></td>
+                            <td>{{BLACKLIST_COUNT}} 条规则</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- 地理位置访问控制 -->
+            <div class="section">
+                <h2 class="section-title">地理位置访问控制</h2>
+                <div class="table-container">
+                    <table>
+                        <tr>
+                            <th>类型</th>
+                            <th>数量</th>
+                        </tr>
+                        <tr>
+                            <td><span class="tag tag-green">允许国家</span></td>
+                            <td>{{ALLOW_COUNTRIES_COUNT}} 个</td>
+                        </tr>
+                        <tr>
+                            <td><span class="tag tag-green">允许省份</span></td>
+                            <td>{{ALLOW_REGIONS_COUNT}} 个</td>
+                        </tr>
+                        <tr>
+                            <td><span class="tag tag-red">禁止国家</span></td>
+                            <td>{{DENY_COUNTRIES_COUNT}} 个</td>
+                        </tr>
+                        <tr>
+                            <td><span class="tag tag-red">禁止省份</span></td>
+                            <td>{{DENY_REGIONS_COUNT}} 个</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <div class="two-col">
+            <!-- WAF 规则 -->
+            <div class="section">
+                <h2 class="section-title">WAF 防护规则</h2>
+                <div class="table-container">
+                    <table>
+                        <tr>
+                            <th>类型</th>
+                            <th>数量</th>
+                        </tr>
+                        <tr>
+                            <td>参数检测规则 (Args)</td>
+                            <td>{{ARGS_RULES_COUNT}} 条</td>
+                        </tr>
+                        <tr>
+                            <td>POST 检测规则</td>
+                            <td>{{POST_RULES_COUNT}} 条</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- CC 防护规则 -->
+            <div class="section">
+                <h2 class="section-title">CC 防护规则</h2>
+                <div class="table-container">
+                    {{CC_RULES_CONTENT}}
+                </div>
+            </div>
+        </div>
+        
+        <!-- 被封禁的 IP -->
+        <div class="section">
+            <h2 class="section-title">当前封禁的 IP ({{BLOCKED_IP_COUNT}})</h2>
+            {{BLOCKED_IPS_CONTENT}}
+        </div>
+        
+        <!-- A/B 测试 -->
+        <div class="section">
+            <h2 class="section-title">A/B 测试配置 ({{ABTEST_COUNT}})</h2>
+            {{ABTEST_CONTENT}}
+        </div>
+        
+        <div class="refresh-time">
+            页面生成时间: <span id="refreshTime">{{REFRESH_TIME}}</span>
+            <button class="btn btn-primary" style="margin-left: 10px;" onclick="location.reload()">刷新</button>
+        </div>
+    </div>
+    
+    <script src="/js/dashboard.js"></script>
+</body>
+</html>

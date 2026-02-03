@@ -69,17 +69,6 @@ public static class SharedData
                                 cleanupInterval: TimeSpan.FromMinutes(30));
 
     /// <summary>
-    /// 客户端最后访问时间
-    /// Key: 客户端IP地址
-    /// Value: Unix时间戳（毫秒）
-    /// 用途: 记录每个客户端的最后一次访问时间，用于活跃度分析
-    /// 过期时间: 60分钟，清理间隔: 30分钟
-    /// </summary>
-    public static readonly ExpiringSafeDictionary<string, long> ClientTimes =
-                            new(defaultExpiration: TimeSpan.FromMinutes(60),
-                                cleanupInterval: TimeSpan.FromMinutes(30));
-
-    /// <summary>
     /// 新客户端访问次数
     /// Key: 客户端IP地址
     /// Value: 访问次数

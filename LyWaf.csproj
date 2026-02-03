@@ -35,4 +35,9 @@
      <None Update="appsettings.yaml" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
+  <!-- 确保 wwwroot 目录复制到输出 -->
+  <ItemGroup>
+    <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

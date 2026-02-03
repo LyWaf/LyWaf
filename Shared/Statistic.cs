@@ -70,6 +70,12 @@ public class IpStatistic : ICloneable
     public StaCountTime CountTime { get; set; } = new();
 
     /// <summary>
+    /// 最后访问时间（Unix时间戳，毫秒）
+    /// 用于记录客户端的最后一次访问时间
+    /// </summary>
+    public long LastAccessTime { get; set; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    /// <summary>
     /// 克隆当前对象（深拷贝）
     /// </summary>
     public object Clone()
@@ -78,6 +84,7 @@ public class IpStatistic : ICloneable
         {
             CountTime = (StaCountTime)CountTime.Clone(),
             UrlCostTime = new Dictionary<string, StaCountTime>(UrlCostTime),
+            LastAccessTime = LastAccessTime,
         };
     }
 }
