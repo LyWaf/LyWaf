@@ -10,7 +10,7 @@ using LyWaf.Shared;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
-namespace LyWaf;
+namespace LyWaf.Control;
 
 public static class ControlApi
 {
@@ -41,7 +41,7 @@ public static class ControlApi
             var blockedIps = SharedData.ClientFb;
             var abTests = abTestService.GetAllConfigs();
             
-            var html = GenerateDashboardHtml(
+            var html = ControlTemplate.GenerateDashboardHtml(
                 process, uptime, connectionStats, blockedIps, 
                 accessControlService, statisticService, protectService, abTests);
             
@@ -323,6 +323,100 @@ public static class ControlApi
             }
 
             return Results.Json(result);
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 功能状态切换 API ===============
+        
+        // 切换 IP 访问控制状态
+        app.MapPost("/api/feature/ip-control/toggle", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<ToggleFeatureRequest>();
+                var enabled = request?.Enabled ?? !accessControlService.GetOptions().IpControl.Enabled;
+                accessControlService.SetIpControlEnabled(enabled);
+                return Results.Json(new
+                {
+                    success = true,
+                    feature = "ip-control",
+                    enabled = enabled,
+                    message = enabled ? "IP 访问控制已启用" : "IP 访问控制已禁用",
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"切换失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 切换地理位置访问控制状态
+        app.MapPost("/api/feature/geo-control/toggle", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<ToggleFeatureRequest>();
+                var enabled = request?.Enabled ?? !accessControlService.GetOptions().GeoControl.Enabled;
+                accessControlService.SetGeoControlEnabled(enabled);
+                return Results.Json(new
+                {
+                    success = true,
+                    feature = "geo-control",
+                    enabled = enabled,
+                    message = enabled ? "地理位置访问控制已启用" : "地理位置访问控制已禁用",
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"切换失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 切换 WAF Args 检测状态
+        app.MapPost("/api/feature/waf-args/toggle", async (HttpContext ctx, IProtectService protectService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<ToggleFeatureRequest>();
+                var enabled = request?.Enabled ?? !protectService.GetOptions().OpenArgsCheck;
+                protectService.SetArgsCheckEnabled(enabled);
+                return Results.Json(new
+                {
+                    success = true,
+                    feature = "waf-args",
+                    enabled = enabled,
+                    message = enabled ? "WAF Args 检测已启用" : "WAF Args 检测已禁用",
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"切换失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 切换 WAF Post 检测状态
+        app.MapPost("/api/feature/waf-post/toggle", async (HttpContext ctx, IProtectService protectService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<ToggleFeatureRequest>();
+                var enabled = request?.Enabled ?? !protectService.GetOptions().OpenPostCheck;
+                protectService.SetPostCheckEnabled(enabled);
+                return Results.Json(new
+                {
+                    success = true,
+                    feature = "waf-post",
+                    enabled = enabled,
+                    message = enabled ? "WAF Post 检测已启用" : "WAF Post 检测已禁用",
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"切换失败: {ex.Message}" }, statusCode: 500);
+            }
         }).RequireHost($"*:{controlPort}");
 
         // =============== 动态访问控制管理 API ===============
@@ -1493,113 +1587,6 @@ public static class ControlApi
         return app;
     }
 
-    // 请求模型
-    private class AddIpRequest
-    {
-        public string IpOrCidr { get; set; } = "";
-    }
-
-    private class RemoveIpRequest
-    {
-        public string IpOrCidr { get; set; } = "";
-    }
-
-    private class BlockIpRequest
-    {
-        public string Ip { get; set; } = "";
-        public string? Reason { get; set; }
-        public TimeSpan? Duration { get; set; }
-    }
-
-    private class UnblockIpRequest
-    {
-        public string Ip { get; set; } = "";
-    }
-
-    private class AddWafRuleRequest
-    {
-        public string Pattern { get; set; } = "";
-    }
-
-    private class RemoveWafRuleRequest
-    {
-        public string Pattern { get; set; } = "";
-    }
-
-    private class AddCcRuleRequest
-    {
-        public string Path { get; set; } = "";
-        public int? Period { get; set; }
-        public int? LimitNum { get; set; }
-        public TimeSpan? FbTime { get; set; }
-    }
-
-    private class RemoveCcRuleRequest
-    {
-        public string Path { get; set; } = "";
-    }
-
-    private class AddCountryRequest
-    {
-        public string Country { get; set; } = "";
-    }
-
-    private class RemoveCountryRequest
-    {
-        public string Country { get; set; } = "";
-    }
-
-    private class AddRegionRequest
-    {
-        public string Region { get; set; } = "";
-    }
-
-    private class RemoveRegionRequest
-    {
-        public string Region { get; set; } = "";
-    }
-
-    private class AddIpThrottleRequest
-    {
-        public string Ip { get; set; } = "";
-        public int LimitKbps { get; set; }
-    }
-
-    private class RemoveIpThrottleRequest
-    {
-        public string Ip { get; set; } = "";
-    }
-
-    private class AddPathThrottleRequest
-    {
-        public string Path { get; set; } = "";
-        public int LimitKbps { get; set; }
-    }
-
-    private class RemovePathThrottleRequest
-    {
-        public string Path { get; set; } = "";
-    }
-
-    private class CreateABTestRequest
-    {
-        public string TestId { get; set; } = "";
-        public string? Name { get; set; }
-        public bool? Enabled { get; set; }
-        public string? Mode { get; set; } // Random, CookieSticky, IpHash, UserIdHash
-        public string? CookieName { get; set; }
-        public int? CookieExpireDays { get; set; }
-        public Dictionary<string, int> Variants { get; set; } = new(); // { "A": 70, "B": 30 }
-        public Dictionary<string, string>? VariantTargets { get; set; } // { "A": "destination-a", "B": "destination-b" }
-        public List<string>? MatchPaths { get; set; }
-        public List<string>? ExcludePaths { get; set; }
-    }
-
-    private class ToggleABTestRequest
-    {
-        public bool? Enabled { get; set; }
-    }
-    
     private static object? GetSectionValue(IConfigurationSection section)
     {
         var children = section.GetChildren().ToList();
@@ -1628,263 +1615,117 @@ public static class ControlApi
         }
         return dict;
     }
-
-    // 缓存 HTML 模板
-    private static string? _dashboardTemplate;
-    private static DateTime _templateLastModified;
-    
-    /// <summary>
-    /// 获取 HTML 模板
-    /// </summary>
-    private static string GetDashboardTemplate()
-    {
-        var templatePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "dashboard.html");
-        if (!File.Exists(templatePath))
-        {
-            templatePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "dashboard.html");
-        }
-        
-        if (!File.Exists(templatePath))
-        {
-            return "<html><body><h1>模板文件未找到</h1></body></html>";
-        }
-        
-        var lastModified = File.GetLastWriteTime(templatePath);
-        if (_dashboardTemplate == null || lastModified > _templateLastModified)
-        {
-            _dashboardTemplate = File.ReadAllText(templatePath, Encoding.UTF8);
-            _templateLastModified = lastModified;
-        }
-        
-        return _dashboardTemplate;
-    }
-    
-    /// <summary>
-    /// 获取最近 5 分钟内访问的客户端 IP
-    /// </summary>
-    private static List<(string Ip, DateTime LastAccess)> GetRecentClients(int minutes = 5)
-    {
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var threshold = now - (minutes * 60 * 1000); // 5分钟前的时间戳
-        
-        var clientStas = SharedData.ClientStas.GetSnapshot();
-        var recentClients = clientStas
-            .Where(kv => kv.Value.LastAccessTime >= threshold)
-            .Select(kv => (
-                Ip: kv.Key, 
-                LastAccess: DateTimeOffset.FromUnixTimeMilliseconds(kv.Value.LastAccessTime).LocalDateTime
-            ))
-            .OrderByDescending(x => x.LastAccess)
-            .ToList();
-        
-        return recentClients;
-    }
-    
-    /// <summary>
-    /// 生成最近客户端 HTML
-    /// </summary>
-    private static string GenerateRecentClientsHtml(List<(string Ip, DateTime LastAccess)> recentClients)
-    {
-        if (recentClients.Count == 0)
-        {
-            return "<div class=\"empty-state\">最近 5 分钟内暂无访问记录</div>";
-        }
-        
-        var sb = new StringBuilder();
-        sb.AppendLine("<div class=\"recent-ips-container\">");
-        
-        // 最多显示 50 个
-        foreach (var client in recentClients.Take(50))
-        {
-            var timeAgo = DateTime.Now - client.LastAccess;
-            var timeAgoStr = timeAgo.TotalSeconds < 60 
-                ? $"{(int)timeAgo.TotalSeconds} 秒前"
-                : timeAgo.TotalMinutes < 60 
-                    ? $"{(int)timeAgo.TotalMinutes} 分钟前"
-                    : $"{client.LastAccess:HH:mm:ss}";
-            
-            sb.AppendLine($"    <div class=\"recent-ip-item\">");
-            sb.AppendLine($"        <span class=\"ip\">{client.Ip}</span>");
-            sb.AppendLine($"        <span class=\"time\">{timeAgoStr}</span>");
-            sb.AppendLine($"    </div>");
-        }
-        
-        if (recentClients.Count > 50)
-        {
-            sb.AppendLine($"    <div class=\"empty-state\">... 还有 {recentClients.Count - 50} 个</div>");
-        }
-        
-        sb.AppendLine("</div>");
-        return sb.ToString();
-    }
-    
-    /// <summary>
-    /// 生成 CC 规则 HTML
-    /// </summary>
-    private static string GenerateCcRulesHtml(List<LimitCcOption> ccRules)
-    {
-        if (ccRules.Count == 0)
-        {
-            return "<div class=\"empty-state\">暂无 CC 防护规则</div>";
-        }
-        
-        var sb = new StringBuilder();
-        sb.AppendLine("<table>");
-        sb.AppendLine("    <tr>");
-        sb.AppendLine("        <th>路径</th>");
-        sb.AppendLine("        <th>限制</th>");
-        sb.AppendLine("        <th>时间窗口</th>");
-        sb.AppendLine("        <th>封禁时长</th>");
-        sb.AppendLine("    </tr>");
-        
-        foreach (var r in ccRules)
-        {
-            var path = string.IsNullOrEmpty(r.Path) ? "全局" : r.Path;
-            sb.AppendLine($"    <tr>");
-            sb.AppendLine($"        <td><code>{path}</code></td>");
-            sb.AppendLine($"        <td>{r.LimitNum} 次</td>");
-            sb.AppendLine($"        <td>{r.Period} 秒</td>");
-            sb.AppendLine($"        <td>{r.FbTime.TotalSeconds} 秒</td>");
-            sb.AppendLine($"    </tr>");
-        }
-        
-        sb.AppendLine("</table>");
-        return sb.ToString();
-    }
-    
-    /// <summary>
-    /// 生成封禁 IP HTML
-    /// </summary>
-    private static string GenerateBlockedIpsHtml(List<string> blockedIpList)
-    {
-        if (blockedIpList.Count == 0)
-        {
-            return "<div class=\"empty-state\">暂无封禁的 IP</div>";
-        }
-        
-        var sb = new StringBuilder();
-        sb.AppendLine("<div class=\"list\">");
-        
-        foreach (var ip in blockedIpList.Take(50))
-        {
-            sb.AppendLine($"    <span class=\"list-item\">{ip}</span>");
-        }
-        
-        if (blockedIpList.Count > 50)
-        {
-            sb.AppendLine($"    <span class=\"list-item\">... 还有 {blockedIpList.Count - 50} 个</span>");
-        }
-        
-        sb.AppendLine("</div>");
-        sb.AppendLine("<div class=\"actions\">");
-        sb.AppendLine("    <button class=\"btn btn-danger\" onclick=\"clearBlockedIps()\">清空所有封禁</button>");
-        sb.AppendLine("</div>");
-        
-        return sb.ToString();
-    }
-    
-    /// <summary>
-    /// 生成 A/B 测试 HTML
-    /// </summary>
-    private static string GenerateAbTestHtml(Dictionary<string, ABTestConfig> abTests)
-    {
-        if (abTests.Count == 0)
-        {
-            return "<div class=\"empty-state\">暂无 A/B 测试配置</div>";
-        }
-        
-        var sb = new StringBuilder();
-        sb.AppendLine("<div class=\"table-container\">");
-        sb.AppendLine("    <table>");
-        sb.AppendLine("        <tr>");
-        sb.AppendLine("            <th>测试 ID</th>");
-        sb.AppendLine("            <th>名称</th>");
-        sb.AppendLine("            <th>状态</th>");
-        sb.AppendLine("            <th>模式</th>");
-        sb.AppendLine("            <th>变体</th>");
-        sb.AppendLine("        </tr>");
-        
-        foreach (var kv in abTests)
-        {
-            var statusClass = kv.Value.Enabled ? "tag-green" : "tag-red";
-            var statusText = kv.Value.Enabled ? "启用" : "禁用";
-            var variants = string.Join(", ", kv.Value.Variants.Select(v => $"{v.Key}:{v.Value}%"));
-            
-            sb.AppendLine($"        <tr>");
-            sb.AppendLine($"            <td><code>{kv.Key}</code></td>");
-            sb.AppendLine($"            <td>{kv.Value.Name}</td>");
-            sb.AppendLine($"            <td><span class=\"tag {statusClass}\">{statusText}</span></td>");
-            sb.AppendLine($"            <td>{kv.Value.Mode}</td>");
-            sb.AppendLine($"            <td>{variants}</td>");
-            sb.AppendLine($"        </tr>");
-        }
-        
-        sb.AppendLine("    </table>");
-        sb.AppendLine("</div>");
-        
-        return sb.ToString();
-    }
-    
-    /// <summary>
-    /// 生成概览页面 HTML
-    /// </summary>
-    private static string GenerateDashboardHtml(
-        Process process,
-        TimeSpan uptime,
-        ConnectionStats connectionStats,
-        Struct.ExpiringSafeDictionary<string, string> blockedIps,
-        IAccessControlService accessControlService,
-        IStatisticService statisticService,
-        IProtectService protectService,
-        Dictionary<string, ABTestConfig> abTests)
-    {
-        // 获取各项数据
-        var whitelist = accessControlService.GetWhitelist();
-        var blacklist = accessControlService.GetBlacklist();
-        var denyCountries = accessControlService.GetDenyCountries();
-        var denyRegions = accessControlService.GetDenyRegions();
-        var allowCountries = accessControlService.GetAllowCountries();
-        var allowRegions = accessControlService.GetAllowRegions();
-        var ccRules = statisticService.GetLimitCcRules();
-        var argsRules = protectService.GetArgsRegexList();
-        var postRules = protectService.GetPostRegexList();
-        var blockedIpList = blockedIps.GetValidKeys().ToList();
-        var recentClients = GetRecentClients(5);
-
-        // 格式化运行时间
-        var uptimeStr = uptime.Days > 0 
-            ? $"{uptime.Days}天 {uptime.Hours}小时 {uptime.Minutes}分钟" 
-            : uptime.Hours > 0 
-                ? $"{uptime.Hours}小时 {uptime.Minutes}分钟 {uptime.Seconds}秒"
-                : $"{uptime.Minutes}分钟 {uptime.Seconds}秒";
-
-        // 读取模板并替换占位符
-        var template = GetDashboardTemplate();
-        
-        var html = template
-            .Replace("{{UPTIME_STR}}", uptimeStr)
-            .Replace("{{PROCESS_START_TIME}}", process.StartTime.ToString("yyyy-MM-dd HH:mm:ss"))
-            .Replace("{{MEMORY_MB}}", (process.WorkingSet64 / (1024 * 1024)).ToString())
-            .Replace("{{TOTAL_CONNECTIONS}}", connectionStats.TotalConnections.ToString())
-            .Replace("{{UNIQUE_IPS}}", connectionStats.ConnectionsPerIp.Count.ToString())
-            .Replace("{{BLOCKED_IP_COUNT}}", blockedIpList.Count.ToString())
-            .Replace("{{RECENT_CLIENTS_COUNT}}", recentClients.Count.ToString())
-            .Replace("{{RECENT_CLIENTS_CONTENT}}", GenerateRecentClientsHtml(recentClients))
-            .Replace("{{WHITELIST_COUNT}}", whitelist.Count.ToString())
-            .Replace("{{BLACKLIST_COUNT}}", blacklist.Count.ToString())
-            .Replace("{{ALLOW_COUNTRIES_COUNT}}", allowCountries.Count.ToString())
-            .Replace("{{ALLOW_REGIONS_COUNT}}", allowRegions.Count.ToString())
-            .Replace("{{DENY_COUNTRIES_COUNT}}", denyCountries.Count.ToString())
-            .Replace("{{DENY_REGIONS_COUNT}}", denyRegions.Count.ToString())
-            .Replace("{{ARGS_RULES_COUNT}}", argsRules.Count.ToString())
-            .Replace("{{POST_RULES_COUNT}}", postRules.Count.ToString())
-            .Replace("{{CC_RULES_CONTENT}}", GenerateCcRulesHtml(ccRules))
-            .Replace("{{BLOCKED_IPS_CONTENT}}", GenerateBlockedIpsHtml(blockedIpList))
-            .Replace("{{ABTEST_COUNT}}", abTests.Count.ToString())
-            .Replace("{{ABTEST_CONTENT}}", GenerateAbTestHtml(abTests))
-            .Replace("{{REFRESH_TIME}}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-
-        return html;
-    }
 }
 
+// =============== 请求模型 ===============
+
+public class AddIpRequest
+{
+    public string IpOrCidr { get; set; } = "";
+}
+
+public class RemoveIpRequest
+{
+    public string IpOrCidr { get; set; } = "";
+}
+
+public class BlockIpRequest
+{
+    public string Ip { get; set; } = "";
+    public string? Reason { get; set; }
+    public TimeSpan? Duration { get; set; }
+}
+
+public class UnblockIpRequest
+{
+    public string Ip { get; set; } = "";
+}
+
+public class AddWafRuleRequest
+{
+    public string Pattern { get; set; } = "";
+}
+
+public class RemoveWafRuleRequest
+{
+    public string Pattern { get; set; } = "";
+}
+
+public class AddCcRuleRequest
+{
+    public string Path { get; set; } = "";
+    public int? Period { get; set; }
+    public int? LimitNum { get; set; }
+    public TimeSpan? FbTime { get; set; }
+}
+
+public class RemoveCcRuleRequest
+{
+    public string Path { get; set; } = "";
+}
+
+public class AddCountryRequest
+{
+    public string Country { get; set; } = "";
+}
+
+public class RemoveCountryRequest
+{
+    public string Country { get; set; } = "";
+}
+
+public class AddRegionRequest
+{
+    public string Region { get; set; } = "";
+}
+
+public class RemoveRegionRequest
+{
+    public string Region { get; set; } = "";
+}
+
+public class AddIpThrottleRequest
+{
+    public string Ip { get; set; } = "";
+    public int LimitKbps { get; set; }
+}
+
+public class RemoveIpThrottleRequest
+{
+    public string Ip { get; set; } = "";
+}
+
+public class AddPathThrottleRequest
+{
+    public string Path { get; set; } = "";
+    public int LimitKbps { get; set; }
+}
+
+public class RemovePathThrottleRequest
+{
+    public string Path { get; set; } = "";
+}
+
+public class CreateABTestRequest
+{
+    public string TestId { get; set; } = "";
+    public string? Name { get; set; }
+    public bool? Enabled { get; set; }
+    public string? Mode { get; set; } // Random, CookieSticky, IpHash, UserIdHash
+    public string? CookieName { get; set; }
+    public int? CookieExpireDays { get; set; }
+    public Dictionary<string, int> Variants { get; set; } = new(); // { "A": 70, "B": 30 }
+    public Dictionary<string, string>? VariantTargets { get; set; } // { "A": "destination-a", "B": "destination-b" }
+    public List<string>? MatchPaths { get; set; }
+    public List<string>? ExcludePaths { get; set; }
+}
+
+public class ToggleABTestRequest
+{
+    public bool? Enabled { get; set; }
+}
+
+public class ToggleFeatureRequest
+{
+    public bool? Enabled { get; set; }
+}

@@ -48,6 +48,16 @@ public interface IProtectService
     /// 移除 Post 检测正则
     /// </summary>
     bool RemovePostRegex(string pattern);
+
+    /// <summary>
+    /// 设置 Args 检测启用状态
+    /// </summary>
+    void SetArgsCheckEnabled(bool enabled);
+
+    /// <summary>
+    /// 设置 Post 检测启用状态
+    /// </summary>
+    void SetPostCheckEnabled(bool enabled);
 }
 
 
@@ -84,6 +94,24 @@ public class ProtectService : IProtectService
     public ProtectOptions GetOptions()
     {
         return _options;
+    }
+
+    /// <summary>
+    /// 设置 Args 检测启用状态
+    /// </summary>
+    public void SetArgsCheckEnabled(bool enabled)
+    {
+        _options.OpenArgsCheck = enabled;
+        _logger.Info("WAF Args 检测已{Status}", enabled ? "启用" : "禁用");
+    }
+
+    /// <summary>
+    /// 设置 Post 检测启用状态
+    /// </summary>
+    public void SetPostCheckEnabled(bool enabled)
+    {
+        _options.OpenPostCheck = enabled;
+        _logger.Info("WAF Post 检测已{Status}", enabled ? "启用" : "禁用");
     }
 
     private void BuildRegexes()

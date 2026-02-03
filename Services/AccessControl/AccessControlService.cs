@@ -154,6 +154,16 @@ public interface IAccessControlService
     /// 获取允许访问的省份列表
     /// </summary>
     List<string> GetAllowRegions();
+
+    /// <summary>
+    /// 设置 IP 访问控制启用状态
+    /// </summary>
+    void SetIpControlEnabled(bool enabled);
+
+    /// <summary>
+    /// 设置地理位置访问控制启用状态
+    /// </summary>
+    void SetGeoControlEnabled(bool enabled);
 }
 
 /// <summary>
@@ -206,11 +216,11 @@ public class AccessCheckResult
     /// 创建拒绝结果
     /// </summary>
     public static AccessCheckResult Denied(AccessDenyReason reason, int statusCode, string message, GeoInfo? geoInfo = null)
-        => new() 
-        { 
-            IsAllowed = false, 
-            DenyReason = reason, 
-            RejectStatusCode = statusCode, 
+        => new()
+        {
+            IsAllowed = false,
+            DenyReason = reason,
+            RejectStatusCode = statusCode,
             RejectMessage = message,
             GeoInfo = geoInfo
         };
@@ -313,7 +323,7 @@ public class AccessControlService : IAccessControlService, IDisposable
     public AccessControlService(IOptionsMonitor<AccessControlOptions> options)
     {
         _options = options.CurrentValue;
-        
+
         // 订阅配置变更
         options.OnChange(newConfig =>
         {
@@ -472,7 +482,7 @@ public class AccessControlService : IAccessControlService, IDisposable
     {
         var geoConfig = _options.GeoControl;
         var geoInfo = GetGeoInfo(clientIp);
-        
+
         if (geoInfo == null)
             return AccessCheckResult.Allowed(); // 查询失败时默认允许
 
@@ -524,21 +534,21 @@ public class AccessControlService : IAccessControlService, IDisposable
         if (dynamicAllowCountries.Count > 0 || dynamicAllowRegions.Count > 0)
         {
             var isAllowed = false;
-            
+
             // 检查国家是否在动态允许列表中
-            if (dynamicAllowCountries.Count > 0 && 
+            if (dynamicAllowCountries.Count > 0 &&
                 dynamicAllowCountries.Any(c => c.Equals(geoInfo.Country, StringComparison.OrdinalIgnoreCase)))
             {
                 isAllowed = true;
             }
-            
+
             // 检查省份是否在动态允许列表中
-            if (!isAllowed && dynamicAllowRegions.Count > 0 && 
+            if (!isAllowed && dynamicAllowRegions.Count > 0 &&
                 dynamicAllowRegions.Any(r => r.Equals(geoInfo.Region, StringComparison.OrdinalIgnoreCase)))
             {
                 isAllowed = true;
             }
-            
+
             if (!isAllowed)
             {
                 return AccessCheckResult.Denied(
@@ -550,7 +560,7 @@ public class AccessControlService : IAccessControlService, IDisposable
         }
 
         // 检查动态添加的国家黑名单
-        if (dynamicDenyCountries.Count > 0 && 
+        if (dynamicDenyCountries.Count > 0 &&
             dynamicDenyCountries.Any(c => c.Equals(geoInfo.Country, StringComparison.OrdinalIgnoreCase)))
         {
             return AccessCheckResult.Denied(
@@ -561,7 +571,7 @@ public class AccessControlService : IAccessControlService, IDisposable
         }
 
         // 检查动态添加的省份黑名单
-        if (dynamicDenyRegions.Count > 0 && 
+        if (dynamicDenyRegions.Count > 0 &&
             dynamicDenyRegions.Any(r => r.Equals(geoInfo.Region, StringComparison.OrdinalIgnoreCase)))
         {
             return AccessCheckResult.Denied(
@@ -576,20 +586,20 @@ public class AccessControlService : IAccessControlService, IDisposable
         {
             // 允许模式：只有列表中的国家/省份可以访问
             var isAllowed = false;
-            
+
             // 检查国家
             if (geoConfig.AllowCountries.Count > 0 && IsCountryInList(geoInfo, geoConfig.AllowCountries))
             {
                 isAllowed = true;
             }
-            
+
             // 检查省份（配置中的 AllowRegions）
-            if (!isAllowed && geoConfig.AllowRegions.Count > 0 && 
+            if (!isAllowed && geoConfig.AllowRegions.Count > 0 &&
                 geoConfig.AllowRegions.Any(r => r.Equals(geoInfo.Region, StringComparison.OrdinalIgnoreCase)))
             {
                 isAllowed = true;
             }
-            
+
             // 如果都没有配置，允许访问
             if (!isAllowed && (geoConfig.AllowCountries.Count > 0 || geoConfig.AllowRegions.Count > 0))
             {
@@ -611,9 +621,9 @@ public class AccessControlService : IAccessControlService, IDisposable
                     rejectMessage,
                     geoInfo);
             }
-            
+
             // 检查省份黑名单（配置中的 DenyRegions）
-            if (geoConfig.DenyRegions.Count > 0 && 
+            if (geoConfig.DenyRegions.Count > 0 &&
                 geoConfig.DenyRegions.Any(r => r.Equals(geoInfo.Region, StringComparison.OrdinalIgnoreCase)))
             {
                 return AccessCheckResult.Denied(
@@ -665,14 +675,30 @@ public class AccessControlService : IAccessControlService, IDisposable
     public AccessControlOptions GetOptions() => _options;
 
     /// <summary>
+    /// 设置 IP 访问控制启用状态
+    /// </summary>
+    public void SetIpControlEnabled(bool enabled)
+    {
+        _options.IpControl.Enabled = enabled;
+        _logger.Info("IP 访问控制已{Status}", enabled ? "启用" : "禁用");
+    }
+
+    /// <summary>
+    /// 设置地理位置访问控制启用状态
+    /// </summary>
+    public void SetGeoControlEnabled(bool enabled)
+    {
+        _options.GeoControl.Enabled = enabled;
+        _logger.Info("地理位置访问控制已{Status}", enabled ? "启用" : "禁用");
+    }
+
+    /// <summary>
     /// 检查国家/地区是否在列表中
     /// </summary>
     private static bool IsCountryInList(GeoInfo geoInfo, List<string> countries)
     {
         return countries.Any(c =>
-            c.Equals(geoInfo.Country, StringComparison.OrdinalIgnoreCase) ||
-            c.Equals(geoInfo.Region, StringComparison.OrdinalIgnoreCase) ||
-            c.Equals(geoInfo.City, StringComparison.OrdinalIgnoreCase));
+            c.Equals(geoInfo.Country, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -878,7 +904,7 @@ public class AccessControlService : IAccessControlService, IDisposable
             return false;
 
         ipOrCidr = ipOrCidr.Trim();
-        
+
         // 验证 IP 或 CIDR 格式
         if (!IpNetwork.TryParse(ipOrCidr, out _))
         {
@@ -944,7 +970,7 @@ public class AccessControlService : IAccessControlService, IDisposable
             return false;
 
         ipOrCidr = ipOrCidr.Trim();
-        
+
         // 验证 IP 或 CIDR 格式
         if (!IpNetwork.TryParse(ipOrCidr, out _))
         {

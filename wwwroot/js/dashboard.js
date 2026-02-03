@@ -3,24 +3,19 @@
  */
 
 $(document).ready(function() {
-    // 初始化
     initDashboard();
     
-    // 自动刷新（每 30 秒）
+    // 自动刷新（每 60 秒）
     setInterval(function() {
         location.reload();
-    }, 30000);
+    }, 60000);
 });
 
 /**
  * 初始化控制面板
  */
 function initDashboard() {
-    // 更新刷新时间显示
     updateRefreshTime();
-    
-    // 绑定事件
-    bindEvents();
 }
 
 /**
@@ -37,133 +32,341 @@ function updateRefreshTime() {
     $('#refreshTime').text(timeStr);
 }
 
-/**
- * 绑定事件
- */
-function bindEvents() {
-    // 刷新按钮
-    $('#btnRefresh').on('click', function() {
-        location.reload();
-    });
-}
+// ==================== 功能状态切换 ====================
 
-/**
- * 清空所有封禁的 IP
- */
-function clearBlockedIps() {
-    if (!confirm('确定要清空所有封禁的 IP 吗？')) return;
+var featureNames = {
+    'ip-control': 'IP 访问控制',
+    'geo-control': '地理位置控制',
+    'waf-args': 'WAF Args检测',
+    'waf-post': 'WAF Post检测'
+};
+
+function toggleFeature(featureId) {
+    var featureName = featureNames[featureId] || featureId;
     
-    $.post('/api/blocked-ips/clear')
+    // 从当前元素的 class 判断当前状态，然后切换到相反状态
+    var $item = $('.feature-item[data-feature="' + featureId + '"]');
+    var currentEnabled = $item.hasClass('status-on');
+    var newEnabled = !currentEnabled;
+    
+    callApi('POST', '/api/feature/' + featureId + '/toggle', { enabled: newEnabled })
         .done(function(res) {
             if (res.success) {
-                showMessage('success', '已清空所有封禁 IP');
-                setTimeout(function() {
-                    location.reload();
-                }, 1000);
+                var statusText = res.enabled ? '启用' : '禁用';
+                showMessage('success', featureName + '已' + statusText);
+                reloadAfterDelay();
             } else {
-                showMessage('error', '操作失败: ' + res.message);
+                showMessage('error', '切换失败: ' + res.message);
             }
         })
-        .fail(function() {
-            showMessage('error', '请求失败，请重试');
-        });
+        .fail(handleApiError);
 }
 
-/**
- * 添加 IP 到黑名单
- */
-function addBlacklistIp() {
-    var ip = prompt('请输入要添加到黑名单的 IP 或 CIDR:');
-    if (!ip) return;
-    
-    callApi('POST', '/api/access-control/blacklist/add', { ipOrCidr: ip })
-        .done(function(res) {
-            if (res.success) {
-                showMessage('success', '已添加到黑名单: ' + ip);
-                setTimeout(function() {
-                    location.reload();
-                }, 1000);
-            } else {
-                showMessage('error', '添加失败: ' + res.message);
-            }
-        })
-        .fail(function() {
-            showMessage('error', '请求失败，请重试');
-        });
-}
+// ==================== IP 白名单管理 ====================
 
-/**
- * 添加 IP 到白名单
- */
 function addWhitelistIp() {
     var ip = prompt('请输入要添加到白名单的 IP 或 CIDR:');
     if (!ip) return;
     
-    callApi('POST', '/api/access-control/whitelist/add', { ipOrCidr: ip })
+    callApi('POST', '/api/ac/whitelist/add', { ipOrCidr: ip })
         .done(function(res) {
             if (res.success) {
                 showMessage('success', '已添加到白名单: ' + ip);
-                setTimeout(function() {
-                    location.reload();
-                }, 1000);
+                reloadAfterDelay();
             } else {
                 showMessage('error', '添加失败: ' + res.message);
             }
         })
-        .fail(function() {
-            showMessage('error', '请求失败，请重试');
-        });
+        .fail(handleApiError);
 }
 
-/**
- * 添加禁止访问的国家
- */
+function removeWhitelistIp(ip) {
+    if (!confirm('确定要从白名单移除 ' + ip + ' 吗？')) return;
+    
+    callApi('POST', '/api/ac/whitelist/remove', { ipOrCidr: ip })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已从白名单移除: ' + ip);
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '移除失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+// ==================== IP 黑名单管理 ====================
+
+function addBlacklistIp() {
+    var ip = prompt('请输入要添加到黑名单的 IP 或 CIDR:');
+    if (!ip) return;
+    
+    callApi('POST', '/api/ac/blacklist/add', { ipOrCidr: ip })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已添加到黑名单: ' + ip);
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '添加失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+function removeBlacklistIp(ip) {
+    if (!confirm('确定要从黑名单移除 ' + ip + ' 吗？')) return;
+    
+    callApi('POST', '/api/ac/blacklist/remove', { ipOrCidr: ip })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已从黑名单移除: ' + ip);
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '移除失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+// ==================== 地理位置访问控制 ====================
+
+function addAllowCountry() {
+    var country = prompt('请输入允许访问的国家名称 (如: 中国):');
+    if (!country) return;
+    
+    callApi('POST', '/api/geo/allow-countries/add', { country: country })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已添加允许访问国家: ' + country);
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '添加失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+function removeAllowCountry(country) {
+    if (!confirm('确定要移除允许访问的国家 "' + country + '" 吗？')) return;
+    
+    callApi('POST', '/api/geo/allow-countries/remove', { country: country })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已移除: ' + country);
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '移除失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+function addAllowRegion() {
+    var region = prompt('请输入允许访问的省份名称 (如: 广东省):');
+    if (!region) return;
+    
+    callApi('POST', '/api/geo/allow-regions/add', { region: region })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已添加允许访问省份: ' + region);
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '添加失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+function removeAllowRegion(region) {
+    if (!confirm('确定要移除允许访问的省份 "' + region + '" 吗？')) return;
+    
+    callApi('POST', '/api/geo/allow-regions/remove', { region: region })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已移除: ' + region);
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '移除失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
 function addDenyCountry() {
-    var country = prompt('请输入要禁止访问的国家/地区名称:');
+    var country = prompt('请输入禁止访问的国家名称:');
     if (!country) return;
     
     callApi('POST', '/api/geo/deny-countries/add', { country: country })
         .done(function(res) {
             if (res.success) {
                 showMessage('success', '已添加禁止访问国家: ' + country);
-                setTimeout(function() {
-                    location.reload();
-                }, 1000);
+                reloadAfterDelay();
             } else {
                 showMessage('error', '添加失败: ' + res.message);
             }
         })
-        .fail(function() {
-            showMessage('error', '请求失败，请重试');
-        });
+        .fail(handleApiError);
 }
 
-/**
- * 添加禁止访问的省份
- */
+function removeDenyCountry(country) {
+    if (!confirm('确定要移除禁止访问的国家 "' + country + '" 吗？')) return;
+    
+    callApi('POST', '/api/geo/deny-countries/remove', { country: country })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已移除: ' + country);
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '移除失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
 function addDenyRegion() {
-    var region = prompt('请输入要禁止访问的省份名称:');
+    var region = prompt('请输入禁止访问的省份名称:');
     if (!region) return;
     
     callApi('POST', '/api/geo/deny-regions/add', { region: region })
         .done(function(res) {
             if (res.success) {
                 showMessage('success', '已添加禁止访问省份: ' + region);
-                setTimeout(function() {
-                    location.reload();
-                }, 1000);
+                reloadAfterDelay();
             } else {
                 showMessage('error', '添加失败: ' + res.message);
             }
         })
-        .fail(function() {
-            showMessage('error', '请求失败，请重试');
-        });
+        .fail(handleApiError);
 }
 
-/**
- * 手动封禁 IP
- */
+function removeDenyRegion(region) {
+    if (!confirm('确定要移除禁止访问的省份 "' + region + '" 吗？')) return;
+    
+    callApi('POST', '/api/geo/deny-regions/remove', { region: region })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已移除: ' + region);
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '移除失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+// ==================== WAF 规则管理 ====================
+
+function addArgsRule() {
+    var regex = prompt('请输入 Args 检测正则表达式:');
+    if (!regex) return;
+    
+    callApi('POST', '/api/waf/args/add', { regex: regex })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已添加 Args 规则');
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '添加失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+function removeArgsRule(regex) {
+    if (!confirm('确定要删除此 Args 规则吗？')) return;
+    
+    callApi('POST', '/api/waf/args/remove', { regex: regex })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已删除 Args 规则');
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '删除失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+function addPostRule() {
+    var regex = prompt('请输入 POST 检测正则表达式:');
+    if (!regex) return;
+    
+    callApi('POST', '/api/waf/post/add', { regex: regex })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已添加 POST 规则');
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '添加失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+function removePostRule(regex) {
+    if (!confirm('确定要删除此 POST 规则吗？')) return;
+    
+    callApi('POST', '/api/waf/post/remove', { regex: regex })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已删除 POST 规则');
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '删除失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+// ==================== CC 规则管理 ====================
+
+function addCcRule() {
+    var path = prompt('请输入限制路径 (留空表示全局):', '/');
+    if (path === null) return;
+    
+    var limitNum = prompt('请输入请求次数限制:', '100');
+    if (!limitNum) return;
+    
+    var period = prompt('请输入时间窗口 (秒):', '60');
+    if (!period) return;
+    
+    var fbSeconds = prompt('请输入封禁时长 (秒):', '300');
+    if (!fbSeconds) return;
+    
+    callApi('POST', '/api/cc/rules/add', {
+        path: path || '/',
+        limitNum: parseInt(limitNum),
+        period: parseInt(period),
+        fbSeconds: parseInt(fbSeconds)
+    })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已添加 CC 规则');
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '添加失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+function removeCcRule(path) {
+    if (!confirm('确定要删除路径 "' + path + '" 的 CC 规则吗？')) return;
+    
+    callApi('POST', '/api/cc/rules/remove', { path: path })
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已删除 CC 规则');
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '删除失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+// ==================== 封禁 IP 管理 ====================
+
 function blockIp() {
     var ip = prompt('请输入要封禁的 IP 地址:');
     if (!ip) return;
@@ -182,21 +385,14 @@ function blockIp() {
         .done(function(res) {
             if (res.success) {
                 showMessage('success', '已封禁 IP: ' + ip + ' (' + minutes + '分钟)');
-                setTimeout(function() {
-                    location.reload();
-                }, 1000);
+                reloadAfterDelay();
             } else {
                 showMessage('error', '封禁失败: ' + res.message);
             }
         })
-        .fail(function() {
-            showMessage('error', '请求失败，请重试');
-        });
+        .fail(handleApiError);
 }
 
-/**
- * 解除封禁 IP
- */
 function unblockIp(ip) {
     if (!ip) {
         ip = prompt('请输入要解除封禁的 IP 地址:');
@@ -209,21 +405,31 @@ function unblockIp(ip) {
         .done(function(res) {
             if (res.success) {
                 showMessage('success', '已解除封禁: ' + ip);
-                setTimeout(function() {
-                    location.reload();
-                }, 1000);
+                reloadAfterDelay();
             } else {
                 showMessage('error', '解除失败: ' + res.message);
             }
         })
-        .fail(function() {
-            showMessage('error', '请求失败，请重试');
-        });
+        .fail(handleApiError);
 }
 
-/**
- * 切换 A/B 测试状态
- */
+function clearBlockedIps() {
+    if (!confirm('确定要清空所有封禁的 IP 吗？')) return;
+    
+    $.post('/api/blocked-ips/clear')
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '已清空所有封禁 IP');
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '操作失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
+// ==================== A/B 测试管理 ====================
+
 function toggleABTest(testId, currentEnabled) {
     var newEnabled = !currentEnabled;
     var action = newEnabled ? '启用' : '禁用';
@@ -234,21 +440,14 @@ function toggleABTest(testId, currentEnabled) {
         .done(function(res) {
             if (res.success) {
                 showMessage('success', '已' + action + ' A/B 测试: ' + testId);
-                setTimeout(function() {
-                    location.reload();
-                }, 1000);
+                reloadAfterDelay();
             } else {
                 showMessage('error', '操作失败: ' + res.message);
             }
         })
-        .fail(function() {
-            showMessage('error', '请求失败，请重试');
-        });
+        .fail(handleApiError);
 }
 
-/**
- * 查看 A/B 测试统计
- */
 function viewABTestStats(testId) {
     callApi('GET', '/api/abtest/stats/' + testId)
         .done(function(res) {
@@ -270,10 +469,10 @@ function viewABTestStats(testId) {
                 showMessage('error', '获取统计失败');
             }
         })
-        .fail(function() {
-            showMessage('error', '请求失败，请重试');
-        });
+        .fail(handleApiError);
 }
+
+// ==================== 工具函数 ====================
 
 /**
  * API 调用封装
@@ -285,6 +484,31 @@ function callApi(method, url, data) {
         contentType: 'application/json',
         data: data ? JSON.stringify(data) : null
     });
+}
+
+/**
+ * 处理 API 错误
+ */
+function handleApiError(xhr) {
+    var msg = '请求失败';
+    if (xhr.responseJSON && xhr.responseJSON.message) {
+        msg = xhr.responseJSON.message;
+    } else if (xhr.status === 0) {
+        msg = '网络连接失败';
+    } else {
+        msg = '请求失败 (' + xhr.status + ')';
+    }
+    showMessage('error', msg);
+}
+
+/**
+ * 延迟后刷新页面
+ */
+function reloadAfterDelay(delay) {
+    delay = delay || 800;
+    setTimeout(function() {
+        location.reload();
+    }, delay);
 }
 
 /**

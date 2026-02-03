@@ -28,6 +28,7 @@ using LyWaf.Utils;
 using LyWaf.Services.WafInfo;
 using LyWaf.Services.AccessControl;
 using LyWaf.Plugins.Core;
+using LyWaf.Control;
 using LyWaf.Services.Compress;
 using LyWaf.Services.Acme;
 using LyWaf.Services.SimpleRes;
