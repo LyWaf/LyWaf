@@ -1017,6 +1017,7 @@ public class Program
         builder.Services.Configure<ProxyServerOptions>(builder.Configuration.GetSection("ProxyServer"));
         builder.Services.Configure<StreamServerOptions>(builder.Configuration.GetSection("StreamServer"));
         builder.Services.Configure<ABTestOptions>(builder.Configuration.GetSection("ABTest"));
+        builder.Services.Configure<LyWaf.Services.DomainLog.DomainLogOptions>(builder.Configuration.GetSection("DomainLog"));
 
         // 注册自定义响应压缩中间件（支持 MinSize）
         builder.Services.AddSingleton<ResponseCompressMiddleware>();
@@ -1048,6 +1049,9 @@ public class Program
         builder.Services.AddSingleton<IABTestService, ABTestService>();
         builder.Services.AddSingleton<ILoadBalancingPolicy, ABCookieTestPolicy>();
         builder.Services.AddSingleton<ILoadBalancingPolicy, ABTestWeightedPolicy>();
+
+        // 注册域名日志服务
+        builder.Services.AddSingleton<LyWaf.Services.DomainLog.IDomainLogService, LyWaf.Services.DomainLog.DomainLogService>();
 
         // 注册插件系统
         builder.Services.AddLyWafPlugins(builder.Configuration);

@@ -378,17 +378,80 @@ multivariant.${domain} {
 }
 
 # ============================================================
+# 域名日志配置 - 按域名分别记录日志
+# ============================================================
+# 
+# 使用方式：在请求开始时会注入一个域名专用的 Logger 到 HttpContext
+# 后续中间件可以通过以下方式使用：
+#   var logger = context.GetDomainLogger();  // 获取域名 Logger
+#   logger?.Info("message");                  // 记录日志
+# 
+# 或使用扩展方法：
+#   context.LogDomainInfo("message");
+#   context.LogDomainError(ex, "error message");
+#
+DomainLog {
+    Enabled = true
+    
+    # 全局日志配置（没有配置专属域名日志时使用）
+    Global {
+        Enabled = true
+        AccessLog = "access_${shortdate}.log"   # 支持 NLog 变量
+        ErrorLog = "error_${shortdate}.log"
+        Directory = "logs"                       # 日志目录
+        Level = "Info"                          # Trace, Debug, Info, Warn, Error, Fatal
+        Format = "Text"                         # Text 或 Json
+        PerfLog = false                         # 高性能日志（保持文件打开）
+    }
+    
+    # 按域名的日志配置
+    Domains {
+        # 主站日志 - 单独记录到 logs/example.com/
+        $domain {
+            Enabled = true
+            Output = "logs/${domain}"           # 日志输出目录
+            Level = "Info"
+            Format = "Text"                     # Text 格式
+            AlsoLogToGlobal = true              # 同时记录到全局日志
+            ExcludePaths = ["/health", "/favicon.ico"]  # 排除的路径
+        }
+        
+        # API 日志 - 单独记录到 logs/api/（JSON 格式便于分析）
+        "api.${domain}" {
+            Output = "logs/api"
+            Level = "Debug"
+            Format = "Json"                     # Json 格式: {"msg": "...", "time": "..."}
+            ExcludePaths = ["/health", "/metrics"]
+        }
+        
+        # 通配符匹配 - *.internal.example.com
+        "*.internal.${domain}" {
+            Output = "logs/internal"
+            Level = "Debug"
+            AlsoLogToGlobal = false             # 不记录到全局日志
+        }
+    }
+}
+
+# ============================================================
 # 条件配置
 # ============================================================
 if $env == "development" {
-    Logging {
-        Level = "Debug"
+    # 开发环境使用 Debug 级别
+    DomainLog {
+        Global {
+            Level = "Debug"
+        }
     }
 }
 
 if $env == "production" {
-    Logging {
-        Level = "Info"
+    # 生产环境使用 Info 级别
+    DomainLog {
+        Global {
+            Level = "Info"
+            PerfLog = true                      # 生产环境启用高性能日志
+        }
     }
 }
 

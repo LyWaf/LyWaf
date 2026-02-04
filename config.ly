@@ -8,6 +8,33 @@ var domain = "example.com"
 var backend = "127.0.0.1:8080"
 var env = "production"
 
+DomainLog {
+    Enabled = true
+    
+    # 全局日志配置（没有配置专属域名日志时使用）
+    Global {
+        Enabled = true
+        AccessLog = "access_${shortdate}.log"   # 支持 NLog 变量
+        ErrorLog = "error_${shortdate}.log"
+        Directory = "logs"                       # 日志目录
+        Level = "Info"                          # Trace, Debug, Info, Warn, Error, Fatal
+        PerfLog = false                         # 高性能日志（保持文件打开）
+    }
+    
+    # 按域名的日志配置
+    Domains {
+        # 主站日志 - 单独记录到 logs/example.com/
+        localhost {
+            Enabled = true
+            Output = "logs/localhost"           # 日志输出目录
+            Level = "Info"
+            Format = "Json"
+            AlsoLogToGlobal = true              # 同时记录到全局日志
+            ExcludePaths = ["/health", "/favicon.ico"]  # 排除的路径
+        }
+    }
+}
+
 plugins {
     enabled = true
     plugin_directory = "plugins"

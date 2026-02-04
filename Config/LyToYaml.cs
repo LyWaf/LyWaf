@@ -1929,6 +1929,13 @@ public static class LyToAppSettingsConverter
                 ProcessABTestConfig(value, result);
                 break;
 
+            case "domainlog":
+            case "domain_log":
+            case "logging":
+                // 域名日志配置
+                ProcessDomainLogConfig(value, result);
+                break;
+
             default:
                 // 其他配置直接映射（首字母大写）
                 var normalizedKey = char.ToUpper(key[0]) + key[1..];
@@ -2427,6 +2434,200 @@ public static class LyToAppSettingsConverter
         }
 
         return item;
+    }
+
+    /// <summary>
+    /// 处理域名日志配置
+    /// 支持格式：
+    /// DomainLog {
+    ///     Enabled = true
+    ///     Global {
+    ///         Enabled = true
+    ///         AccessLog = "access_${shortdate}.log"
+    ///         ErrorLog = "error_${shortdate}.log"
+    ///         Directory = "logs"
+    ///         Level = "Info"
+    ///         Format = "Text"      # Text, Json, Combined
+    ///         PerfLog = false
+    ///     }
+    ///     Domains {
+    ///         "example.com" {
+    ///             Enabled = true
+    ///             Output = "logs/example.com"
+    ///             AccessLog = "access_${shortdate}.log"
+    ///             Level = "Debug"
+    ///             Format = "Json"
+    ///             AlsoLogToGlobal = true
+    ///             ExcludePaths = ["/health", "/metrics"]
+    ///         }
+    ///         "*.api.example.com" {
+    ///             Output = "logs/api"
+    ///             Format = "Combined"
+    ///         }
+    ///     }
+    /// }
+    /// </summary>
+    private static void ProcessDomainLogConfig(object value, Dictionary<string, object> result)
+    {
+        if (value is not Dictionary<string, object> logConfig)
+            return;
+
+        var domainLog = EnsureDict(result, "DomainLog");
+        var global = new Dictionary<string, object>();
+        var domains = new Dictionary<string, object>();
+
+        foreach (var kv in logConfig)
+        {
+            var key = kv.Key.ToLower();
+
+            switch (key)
+            {
+                case "enabled":
+                    domainLog["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+
+                case "global":
+                    // 全局日志配置
+                    if (kv.Value is Dictionary<string, object> globalDict)
+                    {
+                        global = ParseGlobalLogConfig(globalDict);
+                    }
+                    break;
+
+                case "domains":
+                    // 域名日志配置
+                    if (kv.Value is Dictionary<string, object> domainsDict)
+                    {
+                        foreach (var domainKv in domainsDict)
+                        {
+                            if (domainKv.Value is Dictionary<string, object> domainConfig)
+                            {
+                                domains[domainKv.Key] = ParseDomainLogConfig(domainConfig);
+                            }
+                        }
+                    }
+                    break;
+
+                default:
+                    // 直接定义的域名配置（以域名为键）
+                    if (kv.Value is Dictionary<string, object> directConfig && 
+                        (kv.Key.Contains(".") || kv.Key.Contains("*") || kv.Key.Contains(":")))
+                    {
+                        domains[kv.Key] = ParseDomainLogConfig(directConfig);
+                    }
+                    break;
+            }
+        }
+
+        if (global.Count > 0)
+        {
+            domainLog["Global"] = global;
+        }
+
+        if (domains.Count > 0)
+        {
+            domainLog["Domains"] = domains;
+        }
+
+        // 如果有配置但没有显式设置 Enabled，默认启用
+        if (!domainLog.ContainsKey("Enabled"))
+        {
+            domainLog["Enabled"] = true;
+        }
+    }
+
+    /// <summary>
+    /// 解析全局日志配置
+    /// </summary>
+    private static Dictionary<string, object> ParseGlobalLogConfig(Dictionary<string, object> config)
+    {
+        var result = new Dictionary<string, object>();
+
+        foreach (var kv in config)
+        {
+            var key = kv.Key.ToLower();
+            switch (key)
+            {
+                case "enabled":
+                    result["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "accesslog" or "access_log":
+                    result["AccessLog"] = kv.Value?.ToString() ?? "access_${shortdate}.log";
+                    break;
+                case "errorlog" or "error_log":
+                    result["ErrorLog"] = kv.Value?.ToString() ?? "error_${shortdate}.log";
+                    break;
+                case "directory" or "dir":
+                    result["Directory"] = kv.Value?.ToString() ?? "logs";
+                    break;
+                case "level":
+                    result["Level"] = kv.Value?.ToString() ?? "Info";
+                    break;
+                case "format":
+                    var format = kv.Value?.ToString()?.ToLower();
+                    result["Format"] = format == "json" ? "Json" : "Text";
+                    break;
+                case "perflog" or "perf_log":
+                    result["PerfLog"] = kv.Value is bool pb ? pb : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 解析单个域名日志配置
+    /// </summary>
+    private static Dictionary<string, object> ParseDomainLogConfig(Dictionary<string, object> config)
+    {
+        var result = new Dictionary<string, object>();
+
+        foreach (var kv in config)
+        {
+            var key = kv.Key.ToLower();
+            switch (key)
+            {
+                case "enabled":
+                    result["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "output" or "dir" or "directory":
+                    if (kv.Value?.ToString() is string output)
+                        result["Output"] = output;
+                    break;
+                case "accesslog" or "access_log":
+                    result["AccessLog"] = kv.Value?.ToString() ?? "access_${shortdate}.log";
+                    break;
+                case "errorlog" or "error_log":
+                    result["ErrorLog"] = kv.Value?.ToString() ?? "error_${shortdate}.log";
+                    break;
+                case "level":
+                    if (kv.Value?.ToString() is string level)
+                        result["Level"] = level;
+                    break;
+                case "format":
+                    var format = kv.Value?.ToString()?.ToLower();
+                    result["Format"] = format == "json" ? "Json" : "Text";
+                    break;
+                case "alsologtoglobal" or "also_log_to_global" or "global":
+                    result["AlsoLogToGlobal"] = kv.Value is bool gb ? gb : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "excludepaths" or "exclude_paths" or "exclude":
+                    result["ExcludePaths"] = ParseStringList(kv.Value);
+                    break;
+                case "includepaths" or "include_paths" or "include":
+                    result["IncludePaths"] = ParseStringList(kv.Value);
+                    break;
+            }
+        }
+
+        // 默认启用
+        if (!result.ContainsKey("Enabled"))
+        {
+            result["Enabled"] = true;
+        }
+
+        return result;
     }
 
     /// <summary>
