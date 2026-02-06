@@ -198,9 +198,9 @@ public class AccessCheckResult
     public int RejectStatusCode { get; set; } = 403;
 
     /// <summary>
-    /// 拒绝时返回的消息
+    /// 拒绝时返回的消息（为空时使用 WafUtil 的模板）
     /// </summary>
-    public string RejectMessage { get; set; } = "Access Denied";
+    public string? RejectMessage { get; set; }
 
     /// <summary>
     /// 地理位置信息（如果有）
@@ -215,7 +215,11 @@ public class AccessCheckResult
     /// <summary>
     /// 创建拒绝结果
     /// </summary>
-    public static AccessCheckResult Denied(AccessDenyReason reason, int statusCode, string message, GeoInfo? geoInfo = null)
+    /// <param name="reason">拒绝原因</param>
+    /// <param name="statusCode">HTTP 状态码</param>
+    /// <param name="message">拒绝消息（为空时使用 WafUtil 的模板）</param>
+    /// <param name="geoInfo">地理位置信息</param>
+    public static AccessCheckResult Denied(AccessDenyReason reason, int statusCode = 403, string? message = null, GeoInfo? geoInfo = null)
         => new()
         {
             IsAllowed = false,

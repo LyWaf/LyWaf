@@ -1018,6 +1018,7 @@ public class Program
         builder.Services.Configure<StreamServerOptions>(builder.Configuration.GetSection("StreamServer"));
         builder.Services.Configure<ABTestOptions>(builder.Configuration.GetSection("ABTest"));
         builder.Services.Configure<LyWaf.Services.LyLog.LyLogOptions>(builder.Configuration.GetSection("LyLog"));
+        builder.Services.Configure<LyWaf.Services.ErrorTemplate.ErrorTemplateOptions>(builder.Configuration.GetSection("ErrorTemplate"));
 
         // 注册自定义响应压缩中间件（支持 MinSize）
         builder.Services.AddSingleton<ResponseCompressMiddleware>();
@@ -1052,6 +1053,9 @@ public class Program
 
         // 注册域名日志服务
         builder.Services.AddSingleton<LyWaf.Services.LyLog.ILyLogService, LyWaf.Services.LyLog.LyLogService>();
+
+        // 注册错误模板服务
+        builder.Services.AddSingleton<LyWaf.Services.ErrorTemplate.IErrorTemplateService, LyWaf.Services.ErrorTemplate.ErrorTemplateService>();
 
         // 注册插件系统
         builder.Services.AddLyWafPlugins(builder.Configuration);

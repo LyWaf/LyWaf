@@ -443,6 +443,80 @@ LyLog {
 }
 
 # ============================================================
+# 错误页面模板配置
+# ============================================================
+# 支持的模板变量:
+#   {client_ip} / {ClientIp} / {ip}     - 客户端IP
+#   {path} / {Path}                     - 请求路径
+#   {method} / {Method}                 - 请求方法
+#   {host} / {Host}                     - 请求Host
+#   {time} / {Time}                     - 当前时间
+#   {status_code} / {StatusCode}        - 状态码
+#   {status_text} / {StatusText}        - 状态文本
+#   {user_agent} / {UserAgent}          - User-Agent
+#   {referer} / {Referer}               - Referer
+#   {query} / {Query}                   - 查询字符串
+#   {reason} / {Reason}                 - 错误原因（需要 ShowReason = true）
+#   {show_reason_info}                  - 格式化的原因HTML
+#
+ErrorTemplate {
+    Enabled = true
+    ShowReason = false                      # 生产环境建议关闭，避免泄露敏感信息
+    
+    # 403 Forbidden - 使用文件模板
+    Forbidden {
+        Type = "File"
+        FilePath = "templates/403.html"
+        ContentType = "text/html; charset=utf-8"
+    }
+    
+    # 404 Not Found - 使用内联模板
+    NotFound {
+        Type = "Inline"
+        Content = """
+            <!DOCTYPE html>
+            <html>
+            <head><title>404 Not Found</title></head>
+            <body style="text-align:center;padding:50px;">
+                <h1>404</h1>
+                <p>页面不存在: {path}</p>
+                <p><small>LyWaf</small></p>
+            </body>
+            </html>
+        """
+    }
+    
+    # 429 Too Many Requests - CC防护触发
+    TooManyRequests {
+        Type = "File"
+        FilePath = "templates/429.html"
+    }
+    
+    # 502 Bad Gateway
+    BadGateway {
+        Type = "Default"                    # 使用默认模板
+    }
+    
+    # 503 Service Unavailable
+    ServiceUnavailable {
+        Type = "File"
+        FilePath = "templates/503.html"
+        Headers {
+            Retry-After = "60"
+        }
+    }
+    
+    # 自定义状态码模板
+    Custom {
+        "418" {
+            Type = "Inline"
+            Content = "<h1>I'm a teapot ☕</h1>"
+            ContentType = "text/html; charset=utf-8"
+        }
+    }
+}
+
+# ============================================================
 # 条件配置
 # ============================================================
 if $env == "development" {

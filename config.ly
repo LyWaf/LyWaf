@@ -33,6 +33,15 @@ LyLog {
     }
 }
 
+AccessControl {
+    RejectStatusCode = 403
+    
+    IpControl {
+        Enabled = true
+        Blacklist = ["127.0.0.1"]
+    }
+}
+
 plugins {
     enabled = true
     plugin_directory = "plugins"

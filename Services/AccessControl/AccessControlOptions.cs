@@ -12,10 +12,10 @@ public class AccessControlOptions
     public int RejectStatusCode { get; set; } = 403;
 
     /// <summary>
-    /// 拒绝访问时返回的消息
+    /// 拒绝访问时返回的消息（为空时使用 WafUtil 的模板）
     /// 支持占位符: {ClientIp}, {Path}, {Method}, {Host}, {Time}, {Country}, {Region}, {City}
     /// </summary>
-    public string RejectMessage { get; set; } = "Access Denied: {ClientIp}";
+    public string? RejectMessage { get; set; }
 
     /// <summary>
     /// 全局 IP 白名单，支持 CIDR 格式
@@ -76,10 +76,10 @@ public class ConnectionLimitConfig
     public int RejectStatusCode { get; set; } = 503;
 
     /// <summary>
-    /// 超过连接限制时返回的消息
+    /// 超过连接限制时返回的消息（为空时使用 WafUtil 的模板）
     /// 支持占位符: {ClientIp}, {Path}, {Method}, {Host}, {Time}
     /// </summary>
-    public string RejectMessage { get; set; } = "Too Many Connections: {ClientIp}";
+    public string? RejectMessage { get; set; }
 }
 
 /// <summary>

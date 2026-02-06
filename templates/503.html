@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>503 Service Unavailable - LyWaf</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: linear-gradient(135deg, #0c4a6e 0%, #075985 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #e0f2fe;
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+            max-width: 600px;
+        }
+        .icon {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+            animation: spin 4s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .status-code {
+            font-size: 7rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1;
+            margin-bottom: 0.5rem;
+        }
+        .status-text {
+            font-size: 1.5rem;
+            color: #7dd3fc;
+            margin-bottom: 1.5rem;
+        }
+        .description {
+            font-size: 1.1rem;
+            color: #bae6fd;
+            margin-bottom: 2rem;
+            line-height: 1.6;
+        }
+        .maintenance-box {
+            background: rgba(56, 189, 248, 0.1);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin: 2rem 0;
+        }
+        .maintenance-box h3 {
+            color: #38bdf8;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+        .maintenance-box p {
+            color: #bae6fd;
+            font-size: 0.9rem;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 2px;
+            margin: 1.5rem 0;
+            overflow: hidden;
+        }
+        .progress-bar-inner {
+            height: 100%;
+            width: 30%;
+            background: linear-gradient(90deg, #38bdf8, #0ea5e9);
+            border-radius: 2px;
+            animation: loading 2s ease-in-out infinite;
+        }
+        @keyframes loading {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(400%); }
+        }
+        .info-box {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+        }
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .info-item:last-child { border-bottom: none; }
+        .info-label { color: #7dd3fc; }
+        .info-value { 
+            color: #e0f2fe; 
+            font-family: 'SF Mono', Consolas, monospace;
+        }
+        .btn {
+            display: inline-block;
+            margin-top: 2rem;
+            padding: 0.75rem 2rem;
+            background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+            color: #0c4a6e;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            font-size: 1rem;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(56, 189, 248, 0.3);
+        }
+        .footer {
+            margin-top: 3rem;
+            color: #7dd3fc;
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">⚙️</div>
+        <div class="status-code">503</div>
+        <div class="status-text">Service Unavailable</div>
+        <div class="description">
+            服务暂时不可用。<br>
+            我们正在进行维护或遇到了临时性问题。
+        </div>
+        
+        <div class="maintenance-box">
+            <h3>🔧 维护中</h3>
+            <p>我们正在努力恢复服务，请稍后再试。</p>
+            <div class="progress-bar">
+                <div class="progress-bar-inner"></div>
+            </div>
+        </div>
+        
+        <div class="info-box">
+            <div class="info-item">
+                <span class="info-label">请求路径</span>
+                <span class="info-value">{path}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">时间</span>
+                <span class="info-value">{time}</span>
+            </div>
+        </div>
+        
+        {show_reason_info}
+        
+        <button class="btn" onclick="location.reload()">重试</button>
+        
+        <div class="footer">
+            Powered by LyWaf
+        </div>
+    </div>
+</body>
+</html>

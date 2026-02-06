@@ -2025,6 +2025,16 @@ public static class LyToAppSettingsConverter
                 ProcessLyLogConfig(value, result);
                 break;
 
+            case "errortemplate":
+            case "error_template":
+            case "errortemplates":
+            case "error_templates":
+            case "error_pages":
+            case "errorpages":
+                // 错误模板配置
+                ProcessErrorTemplateConfig(value, result);
+                break;
+
             default:
                 // 其他配置直接映射（首字母大写）
                 var normalizedKey = char.ToUpper(key[0]) + key[1..];
@@ -3132,5 +3142,176 @@ public static class LyToAppSettingsConverter
             }
             certs.Add(certInfo);
         }
+    }
+
+    /// <summary>
+    /// 处理错误模板配置
+    /// 支持格式：
+    /// ErrorTemplate {
+    ///     Enabled = true
+    ///     ShowReason = false              # 是否显示详细原因
+    ///     
+    ///     # 403 Forbidden 模板
+    ///     Forbidden {
+    ///         Type = "File"               # File, Inline, Default
+    ///         FilePath = "templates/403.html"
+    ///         ContentType = "text/html; charset=utf-8"
+    ///     }
+    ///     
+    ///     # 内联模板示例
+    ///     NotFound {
+    ///         Type = "Inline"
+    ///         Content = "<h1>404 Not Found</h1><p>Page not found: {path}</p>"
+    ///     }
+    ///     
+    ///     # 429 Too Many Requests
+    ///     TooManyRequests {
+    ///         Type = "File"
+    ///         FilePath = "templates/429.html"
+    ///     }
+    ///     
+    ///     # 自定义状态码
+    ///     Custom {
+    ///         "418" {
+    ///             Type = "Inline"
+    ///             Content = "<h1>I'm a teapot</h1>"
+    ///         }
+    ///     }
+    /// }
+    /// </summary>
+    private static void ProcessErrorTemplateConfig(object value, Dictionary<string, object> result)
+    {
+        if (value is not Dictionary<string, object> config)
+            return;
+
+        var errorTemplate = EnsureDict(result, "ErrorTemplate");
+
+        foreach (var kv in config)
+        {
+            var key = kv.Key.ToLower();
+
+            switch (key)
+            {
+                case "enabled":
+                    errorTemplate["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+
+                case "showreason" or "show_reason":
+                    errorTemplate["ShowReason"] = kv.Value is bool sr ? sr : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+
+                case "forbidden" or "403":
+                    if (kv.Value is Dictionary<string, object> forbiddenConfig)
+                        errorTemplate["Forbidden"] = ParseErrorTemplateItem(forbiddenConfig);
+                    break;
+
+                case "notfound" or "not_found" or "404":
+                    if (kv.Value is Dictionary<string, object> notFoundConfig)
+                        errorTemplate["NotFound"] = ParseErrorTemplateItem(notFoundConfig);
+                    break;
+
+                case "toomanyrequests" or "too_many_requests" or "429":
+                    if (kv.Value is Dictionary<string, object> tooManyConfig)
+                        errorTemplate["TooManyRequests"] = ParseErrorTemplateItem(tooManyConfig);
+                    break;
+
+                case "internalerror" or "internal_error" or "500":
+                    if (kv.Value is Dictionary<string, object> internalConfig)
+                        errorTemplate["InternalError"] = ParseErrorTemplateItem(internalConfig);
+                    break;
+
+                case "badgateway" or "bad_gateway" or "502":
+                    if (kv.Value is Dictionary<string, object> badGatewayConfig)
+                        errorTemplate["BadGateway"] = ParseErrorTemplateItem(badGatewayConfig);
+                    break;
+
+                case "serviceunavailable" or "service_unavailable" or "503":
+                    if (kv.Value is Dictionary<string, object> unavailableConfig)
+                        errorTemplate["ServiceUnavailable"] = ParseErrorTemplateItem(unavailableConfig);
+                    break;
+
+                case "custom":
+                    if (kv.Value is Dictionary<string, object> customConfig)
+                    {
+                        var custom = new Dictionary<string, object>();
+                        foreach (var customKv in customConfig)
+                        {
+                            if (customKv.Value is Dictionary<string, object> customItemConfig)
+                                custom[customKv.Key] = ParseErrorTemplateItem(customItemConfig);
+                        }
+                        errorTemplate["Custom"] = custom;
+                    }
+                    break;
+            }
+        }
+
+        // 如果有配置但没有显式设置 Enabled，默认启用
+        if (!errorTemplate.ContainsKey("Enabled"))
+        {
+            errorTemplate["Enabled"] = true;
+        }
+    }
+
+    /// <summary>
+    /// 解析单个错误模板配置项
+    /// </summary>
+    private static Dictionary<string, object> ParseErrorTemplateItem(Dictionary<string, object> config)
+    {
+        var result = new Dictionary<string, object>();
+
+        foreach (var kv in config)
+        {
+            var key = kv.Key.ToLower();
+
+            switch (key)
+            {
+                case "type":
+                    var typeStr = kv.Value?.ToString()?.ToLower();
+                    result["Type"] = typeStr switch
+                    {
+                        "file" => "File",
+                        "inline" => "Inline",
+                        _ => "Default"
+                    };
+                    break;
+
+                case "filepath" or "file_path" or "file" or "path":
+                    result["FilePath"] = kv.Value?.ToString() ?? "";
+                    break;
+
+                case "content" or "template":
+                    result["Content"] = kv.Value?.ToString() ?? "";
+                    break;
+
+                case "contenttype" or "content_type" or "content-type":
+                    result["ContentType"] = kv.Value?.ToString() ?? "text/html; charset=utf-8";
+                    break;
+
+                case "headers":
+                    if (kv.Value is Dictionary<string, object> headersConfig)
+                    {
+                        var headers = new Dictionary<string, string>();
+                        foreach (var headerKv in headersConfig)
+                        {
+                            headers[headerKv.Key] = headerKv.Value?.ToString() ?? "";
+                        }
+                        result["Headers"] = headers;
+                    }
+                    break;
+            }
+        }
+
+        // 如果指定了文件路径但没有指定类型，默认为 File
+        if (result.ContainsKey("FilePath") && !result.ContainsKey("Type"))
+        {
+            result["Type"] = "File";
+        }
+        // 如果指定了内容但没有指定类型，默认为 Inline
+        else if (result.ContainsKey("Content") && !result.ContainsKey("Type"))
+        {
+            result["Type"] = "Inline";
+        }
+
+        return result;
     }
 }

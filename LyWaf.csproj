@@ -40,4 +40,9 @@
     <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- 确保 templates 目录复制到输出 -->
+  <ItemGroup>
+    <Content Include="templates\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
