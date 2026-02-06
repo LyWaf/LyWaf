@@ -10,7 +10,7 @@ namespace LyWaf.Middleware;
 /// 处理基于 IP 的访问控制（黑白名单）、地理位置限制和连接数限制
 /// </summary>
 public class AccessControlMiddleware(
-    RequestDelegate next, 
+    RequestDelegate next,
     IAccessControlService accessControlService)
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
@@ -47,11 +47,12 @@ public class AccessControlMiddleware(
             {
                 _logger.Warn("连接数超限: ClientIp={ClientIp}, Destination={Destination}, Path={Path}",
                     clientIp, destination, path);
-                
+
                 // 如果 RejectMessage 为空，使用 WafUtil 的模板
                 if (string.IsNullOrEmpty(options.ConnectionLimit.RejectMessage))
                 {
-                    await WafUtil.WriteErrorOutput(context, options.ConnectionLimit.RejectStatusCode, "连接数超限");
+                    await WafUtil.WriteErrorOutput(context, options.ConnectionLimit.RejectStatusCode,
+                        new Dictionary<string, string?> { ["reason"] = "连接数超限" });
                 }
                 else
                 {
@@ -85,7 +86,7 @@ public class AccessControlMiddleware(
     private async Task WriteRejectResponse(HttpContext context, AccessCheckResult checkResult, string clientIp)
     {
         var geoInfo = checkResult.GeoInfo;
-        
+
         // 构建拒绝原因描述
         var reasonDesc = checkResult.DenyReason switch
         {
@@ -95,7 +96,7 @@ public class AccessControlMiddleware(
             AccessDenyReason.PathGeoDenied => $"路径地理位置限制({geoInfo?.Country}/{geoInfo?.Region})",
             _ => "访问被拒绝"
         };
-        
+
         switch (checkResult.DenyReason)
         {
             case AccessDenyReason.IpDenied:
@@ -109,10 +110,19 @@ public class AccessControlMiddleware(
                 break;
         }
 
+        var extraValues = new Dictionary<string, string?>
+        {
+            ["reason"] = reasonDesc,
+            ["Country"] = geoInfo?.Country ?? "Unknown",
+            ["Region"] = geoInfo?.Region ?? "",
+            ["City"] = geoInfo?.City ?? "",
+            ["Isp"] = geoInfo?.Isp ?? ""
+        };
+
         // 如果 RejectMessage 为空，使用 WafUtil 的模板
         if (string.IsNullOrEmpty(checkResult.RejectMessage))
         {
-            await WafUtil.WriteErrorOutput(context, checkResult.RejectStatusCode, reasonDesc);
+            await WafUtil.WriteErrorOutput(context, checkResult.RejectStatusCode, extraValues);
             return;
         }
 
@@ -120,16 +130,7 @@ public class AccessControlMiddleware(
         context.Response.StatusCode = checkResult.RejectStatusCode;
         context.Response.ContentType = "text/plain; charset=utf-8";
 
-        // 格式化消息
-        var message = checkResult.RejectMessage
-            .Replace("{ClientIp}", clientIp)
-            .Replace("{Country}", geoInfo?.Country ?? "Unknown")
-            .Replace("{Region}", geoInfo?.Region ?? "")
-            .Replace("{City}", geoInfo?.City ?? "")
-            .Replace("{Isp}", geoInfo?.Isp ?? "");
-        
-        message = WafUtil.FormatMessage(message, context);
-
+        var message = WafUtil.FormatMessage(checkResult.RejectMessage, context, extraValues);
         await context.Response.WriteAsync(message);
     }
 }

@@ -12,7 +12,10 @@ public interface IErrorTemplateService
     /// <summary>
     /// 获取指定状态码的模板内容（已替换占位符）
     /// </summary>
-    Task<string> GetTemplateAsync(int statusCode, HttpContext context, string? reason = null);
+    /// <param name="statusCode">HTTP 状态码</param>
+    /// <param name="context">HTTP 上下文</param>
+    /// <param name="extraValues">额外的占位符值（如 reason、custom 等）</param>
+    Task<string> GetTemplateAsync(int statusCode, HttpContext context, Dictionary<string, string?>? extraValues = null);
 
     /// <summary>
     /// 获取指定状态码的模板配置
@@ -20,29 +23,32 @@ public interface IErrorTemplateService
     ErrorTemplateConfig GetConfig(int statusCode);
 
     /// <summary>
-    /// 写入错误响应
+    /// 写入错误响应（统一入口）
     /// </summary>
-    Task WriteErrorResponseAsync(HttpContext context, int statusCode, string? reason = null);
+    /// <param name="context">HTTP 上下文</param>
+    /// <param name="statusCode">HTTP 状态码</param>
+    /// <param name="extraValues">额外的占位符值（支持 reason、custom 等任意参数）</param>
+    Task WriteErrorResponseAsync(HttpContext context, int statusCode, Dictionary<string, string?>? extraValues = null);
 
     /// <summary>
     /// 写入 403 Forbidden 响应
     /// </summary>
-    Task WriteForbiddenAsync(HttpContext context, string? reason = null);
+    Task WriteForbiddenAsync(HttpContext context, Dictionary<string, string?>? extraValues = null);
 
     /// <summary>
     /// 写入 429 Too Many Requests 响应
     /// </summary>
-    Task WriteTooManyRequestsAsync(HttpContext context, string? reason = null);
+    Task WriteTooManyRequestsAsync(HttpContext context, Dictionary<string, string?>? extraValues = null);
 
     /// <summary>
     /// 写入 502 Bad Gateway 响应
     /// </summary>
-    Task WriteBadGatewayAsync(HttpContext context, string? reason = null);
+    Task WriteBadGatewayAsync(HttpContext context, Dictionary<string, string?>? extraValues = null);
 
     /// <summary>
     /// 写入 503 Service Unavailable 响应
     /// </summary>
-    Task WriteServiceUnavailableAsync(HttpContext context, string? reason = null);
+    Task WriteServiceUnavailableAsync(HttpContext context, Dictionary<string, string?>? extraValues = null);
 }
 
 /// <summary>
@@ -74,11 +80,11 @@ public class ErrorTemplateService : IErrorTemplateService
         };
     }
 
-    public async Task<string> GetTemplateAsync(int statusCode, HttpContext context, string? reason = null)
+    public async Task<string> GetTemplateAsync(int statusCode, HttpContext context, Dictionary<string, string?>? extraValues = null)
     {
         var config = GetConfig(statusCode);
         var template = await GetRawTemplateAsync(statusCode, config);
-        return ReplaceVariables(template, context, statusCode, reason);
+        return ReplaceVariables(template, context, statusCode, extraValues);
     }
 
     private async Task<string> GetRawTemplateAsync(int statusCode, ErrorTemplateConfig config)
@@ -111,58 +117,53 @@ public class ErrorTemplateService : IErrorTemplateService
         }
     }
 
-    private string ReplaceVariables(string template, HttpContext context, int statusCode, string? reason)
+    private string ReplaceVariables(string template, HttpContext context, int statusCode, Dictionary<string, string?>? inputValues)
     {
-        var clientIp = RequestUtil.GetClientIp(context.Request);
+        var statusText = GetStatusText(statusCode);
+        
+        // 构建基础占位符值
+        var values = new Dictionary<string, string?>
+        {
+            // 状态码相关
+            ["status_code"] = statusCode.ToString(),
+            ["StatusCode"] = statusCode.ToString(),
+            ["status_text"] = statusText,
+            ["StatusText"] = statusText,
+            // 兼容旧格式
+            ["local_client_ip"] = RequestUtil.GetClientIp(context.Request)
+        };
 
-        // 基础变量替换
-        var result = template
-            .Replace("{client_ip}", clientIp)
-            .Replace("{local_client_ip}", clientIp)  // 兼容旧格式
-            .Replace("{ClientIp}", clientIp)
-            .Replace("{ip}", clientIp)
-            .Replace("{path}", context.Request.Path.Value ?? "/")
-            .Replace("{Path}", context.Request.Path.Value ?? "/")
-            .Replace("{method}", context.Request.Method)
-            .Replace("{Method}", context.Request.Method)
-            .Replace("{host}", context.Request.Host.ToString())
-            .Replace("{Host}", context.Request.Host.ToString())
-            .Replace("{time}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"))
-            .Replace("{Time}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"))
-            .Replace("{status_code}", statusCode.ToString())
-            .Replace("{StatusCode}", statusCode.ToString())
-            .Replace("{status_text}", GetStatusText(statusCode))
-            .Replace("{StatusText}", GetStatusText(statusCode))
-            .Replace("{user_agent}", context.Request.Headers.UserAgent.ToString())
-            .Replace("{UserAgent}", context.Request.Headers.UserAgent.ToString())
-            .Replace("{referer}", context.Request.Headers.Referer.ToString())
-            .Replace("{Referer}", context.Request.Headers.Referer.ToString())
-            .Replace("{query}", context.Request.QueryString.ToString())
-            .Replace("{Query}", context.Request.QueryString.ToString())
-            .Replace("{scheme}", context.Request.Scheme)
-            .Replace("{Scheme}", context.Request.Scheme)
-            .Replace("{port}", context.Request.Host.Port?.ToString() ?? "")
-            .Replace("{Port}", context.Request.Host.Port?.ToString() ?? "");
+        // 合并传入的额外值
+        if (inputValues != null)
+        {
+            foreach (var kv in inputValues)
+            {
+                values[kv.Key] = kv.Value;
+            }
+        }
 
-        // 原因信息替换
+        // 获取 reason 值（支持多种 key）
+        var reason = values.GetValueOrDefault("reason") 
+                  ?? values.GetValueOrDefault("Reason");
+
+        // 处理原因信息显示
         if (_options.ShowReason && !string.IsNullOrEmpty(reason))
         {
-            result = result
-                .Replace("{reason}", reason)
-                .Replace("{Reason}", reason)
-                .Replace("{show_reason}", reason)
-                .Replace("{show_reason_info}", $"<h3 align=\"center\">原因: {reason}</h3>");
+            values["reason"] = reason;
+            values["Reason"] = reason;
+            values["show_reason"] = reason;
+            values["show_reason_info"] = $"<h3 align=\"center\">原因: {reason}</h3>";
         }
         else
         {
-            result = result
-                .Replace("{reason}", "")
-                .Replace("{Reason}", "")
-                .Replace("{show_reason}", "")
-                .Replace("{show_reason_info}", "");
+            values.TryAdd("reason", "");
+            values.TryAdd("Reason", "");
+            values.TryAdd("show_reason", "");
+            values.TryAdd("show_reason_info", "");
         }
 
-        return result;
+        // 使用 StringUtil 高效替换
+        return StringUtil.FormatTemplate(template, context, values);
     }
 
     private static string GetStatusText(int statusCode)
@@ -290,6 +291,10 @@ public class ErrorTemplateService : IErrorTemplateService
                             <span class="info-label">时间</span>
                             <span class="info-value">{time}</span>
                         </div>
+                        <div class="info-item">
+                            <span class="info-label">国家</span>
+                            <span class="info-value">{Country}</span>
+                        </div>
                     </div>
                     {show_reason_info}
                     <div class="footer">Powered by LyWaf</div>
@@ -299,13 +304,13 @@ public class ErrorTemplateService : IErrorTemplateService
             """;
     }
 
-    public async Task WriteErrorResponseAsync(HttpContext context, int statusCode, string? reason = null)
+    public async Task WriteErrorResponseAsync(HttpContext context, int statusCode, Dictionary<string, string?>? extraValues = null)
     {
         if (context.Response.HasStarted)
             return;
 
         var config = GetConfig(statusCode);
-        var template = await GetTemplateAsync(statusCode, context, reason);
+        var template = await GetTemplateAsync(statusCode, context, extraValues);
 
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = config.ContentType;
@@ -319,17 +324,17 @@ public class ErrorTemplateService : IErrorTemplateService
         await context.Response.WriteAsync(template);
     }
 
-    public Task WriteForbiddenAsync(HttpContext context, string? reason = null)
-        => WriteErrorResponseAsync(context, 403, reason);
+    public Task WriteForbiddenAsync(HttpContext context, Dictionary<string, string?>? extraValues = null)
+        => WriteErrorResponseAsync(context, 403, extraValues);
 
-    public Task WriteTooManyRequestsAsync(HttpContext context, string? reason = null)
-        => WriteErrorResponseAsync(context, 429, reason);
+    public Task WriteTooManyRequestsAsync(HttpContext context, Dictionary<string, string?>? extraValues = null)
+        => WriteErrorResponseAsync(context, 429, extraValues);
 
-    public Task WriteBadGatewayAsync(HttpContext context, string? reason = null)
-        => WriteErrorResponseAsync(context, 502, reason);
+    public Task WriteBadGatewayAsync(HttpContext context, Dictionary<string, string?>? extraValues = null)
+        => WriteErrorResponseAsync(context, 502, extraValues);
 
-    public Task WriteServiceUnavailableAsync(HttpContext context, string? reason = null)
-        => WriteErrorResponseAsync(context, 503, reason);
+    public Task WriteServiceUnavailableAsync(HttpContext context, Dictionary<string, string?>? extraValues = null)
+        => WriteErrorResponseAsync(context, 503, extraValues);
 
     /// <summary>
     /// 清除模板缓存

@@ -676,9 +676,11 @@ public class Program
         }
 
         // 替换变量
-        var responseBody = respond.Body
-            .Replace("{Port}", port.ToString())
-            .Replace("{Address}", host);
+        var responseBody = StringUtil.ReplacePlaceholders(respond.Body, new Dictionary<string, string?>
+        {
+            ["Port"] = port.ToString(),
+            ["Address"] = host
+        });
 
         // 从 headers 中提取 Content-Type 和 charset
         var contentType = "text/plain";

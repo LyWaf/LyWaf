@@ -61,7 +61,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             var reason = WafUtil.GetFbReason(clientIp);
             if (reason != null)
             {
-                await WafUtil.WriteFbOutput(context, reason);
+                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason });
                 return;
             }
             if (await WhitePathCheck(context))
@@ -71,12 +71,12 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             }
             if ((reason = await CheckArgsAttck(context)) != null)
             {
-                await WafUtil.WriteFbOutput(context, reason!);
+                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason });
                 return;
             }
             if ((reason = await CheckPostAttck(context)) != null)
             {
-                await WafUtil.WriteFbOutput(context, reason!);
+                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason });
                 return;
             }
             await _next(context);

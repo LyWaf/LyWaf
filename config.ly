@@ -42,6 +42,10 @@ AccessControl {
     }
 }
 
+ErrorTemplate {
+    ShowReason = true
+}
+
 plugins {
     enabled = true
     plugin_directory = "plugins"
