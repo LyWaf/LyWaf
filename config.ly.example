@@ -70,6 +70,13 @@ Certs {
 
 # 主站点 - 支持多路由配置
 $domain www.${domain} {
+    # 站点级别日志配置（自动归并到 LyLog 模块）
+    log {
+        output = "logs/${domain}"
+        level = "Info"
+        exclude_paths = ["/health", "/favicon.ico"]
+    }
+    
     # 不同路径转发到不同后端
     /api/* {
         reverse_proxy http://127.0.0.1:3000
@@ -112,6 +119,9 @@ static.${domain} {
 
 # API 站点 - 使用 handle 块
 api.${domain} {
+    # 简化日志配置：只指定输出目录
+    log = "logs/api"
+    
     handle {
         /v1/* {
             reverse_proxy http://127.0.0.1:3001
@@ -383,14 +393,14 @@ multivariant.${domain} {
 # 
 # 使用方式：在请求开始时会注入一个域名专用的 Logger 到 HttpContext
 # 后续中间件可以通过以下方式使用：
-#   var logger = context.GetDomainLogger();  // 获取域名 Logger
+#   var logger = context.GetLyLogger();  // 获取域名 Logger
 #   logger?.Info("message");                  // 记录日志
 # 
 # 或使用扩展方法：
 #   context.LogDomainInfo("message");
 #   context.LogDomainError(ex, "error message");
 #
-DomainLog {
+LyLog {
     Enabled = true
     
     # 全局日志配置（没有配置专属域名日志时使用）
@@ -404,32 +414,31 @@ DomainLog {
         PerfLog = false                         # 高性能日志（保持文件打开）
     }
     
-    # 按域名的日志配置
-    Domains {
-        # 主站日志 - 单独记录到 logs/example.com/
-        $domain {
-            Enabled = true
-            Output = "logs/${domain}"           # 日志输出目录
-            Level = "Info"
-            Format = "Text"                     # Text 格式
-            AlsoLogToGlobal = true              # 同时记录到全局日志
-            ExcludePaths = ["/health", "/favicon.ico"]  # 排除的路径
-        }
-        
-        # API 日志 - 单独记录到 logs/api/（JSON 格式便于分析）
-        "api.${domain}" {
-            Output = "logs/api"
-            Level = "Debug"
-            Format = "Json"                     # Json 格式: {"msg": "...", "time": "..."}
-            ExcludePaths = ["/health", "/metrics"]
-        }
-        
-        # 通配符匹配 - *.internal.example.com
-        "*.internal.${domain}" {
-            Output = "logs/internal"
-            Level = "Debug"
-            AlsoLogToGlobal = false             # 不记录到全局日志
-        }
+    # 域名日志配置（直接使用域名作为 key，无需 Domains 层级）
+    
+    # 主站日志 - 单独记录到 logs/example.com/
+    $domain {
+        Enabled = true
+        Output = "logs/${domain}"           # 日志输出目录
+        Level = "Info"
+        Format = "Text"                     # Text 格式
+        AlsoLogToGlobal = true              # 同时记录到全局日志
+        ExcludePaths = ["/health", "/favicon.ico"]  # 排除的路径
+    }
+    
+    # API 日志 - 单独记录到 logs/api/（JSON 格式便于分析）
+    "api.${domain}" {
+        Output = "logs/api"
+        Level = "Debug"
+        Format = "Json"                     # Json 格式: {"msg": "...", "time": "..."}
+        ExcludePaths = ["/health", "/metrics"]
+    }
+    
+    # 通配符匹配 - *.internal.example.com
+    "*.internal.${domain}" {
+        Output = "logs/internal"
+        Level = "Debug"
+        AlsoLogToGlobal = false             # 不记录到全局日志
     }
 }
 
@@ -438,7 +447,7 @@ DomainLog {
 # ============================================================
 if $env == "development" {
     # 开发环境使用 Debug 级别
-    DomainLog {
+    LyLog {
         Global {
             Level = "Debug"
         }
@@ -447,7 +456,7 @@ if $env == "development" {
 
 if $env == "production" {
     # 生产环境使用 Info 级别
-    DomainLog {
+    LyLog {
         Global {
             Level = "Info"
             PerfLog = true                      # 生产环境启用高性能日志

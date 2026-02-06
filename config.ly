@@ -8,7 +8,7 @@ var domain = "example.com"
 var backend = "127.0.0.1:8080"
 var env = "production"
 
-DomainLog {
+LyLog {
     Enabled = true
     
     # 全局日志配置（没有配置专属域名日志时使用）
@@ -21,17 +21,15 @@ DomainLog {
         PerfLog = false                         # 高性能日志（保持文件打开）
     }
     
-    # 按域名的日志配置
-    Domains {
-        # 主站日志 - 单独记录到 logs/example.com/
-        localhost {
-            Enabled = true
-            Output = "logs/localhost"           # 日志输出目录
-            Level = "Info"
-            Format = "Json"
-            AlsoLogToGlobal = true              # 同时记录到全局日志
-            ExcludePaths = ["/health", "/favicon.ico"]  # 排除的路径
-        }
+    # 域名日志配置（直接使用域名作为 key）
+    # 主站日志 - 单独记录到 logs/localhost/
+    localhost1 {
+        Enabled = true
+        Output = "logs/localhost"           # 日志输出目录
+        Level = "Info"
+        Format = "Json"
+        AlsoLogToGlobal = true              # 同时记录到全局日志
+        ExcludePaths = ["/health", "/favicon.ico"]  # 排除的路径
     }
 }
 
@@ -73,6 +71,7 @@ plugins {
 }
 
 localhost:5003, localhost:5004, 0.0.0.0:5005, example.com:5006
+log = "logs/xx"
 /static/ {
     file_server {
         root = "./wwwroot"

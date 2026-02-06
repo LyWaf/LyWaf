@@ -6,12 +6,12 @@ using NLog;
 using NLog.Config;
 using NLog.Targets;
 
-namespace LyWaf.Services.DomainLog;
+namespace LyWaf.Services.LyLog;
 
 /// <summary>
 /// 域名日志服务接口
 /// </summary>
-public interface IDomainLogService
+public interface ILyLogService
 {
     /// <summary>
     /// 获取指定域名的 Logger
@@ -45,12 +45,12 @@ public interface IDomainLogService
     /// <summary>
     /// 获取指定域名的配置
     /// </summary>
-    DomainLogConfig? GetDomainConfig(string domain);
+    LyLogConfig? GetDomainConfig(string domain);
 
     /// <summary>
     /// 动态添加域名日志配置
     /// </summary>
-    void AddDomainConfig(string domain, DomainLogConfig config);
+    void AddDomainConfig(string domain, LyLogConfig config);
 
     /// <summary>
     /// 移除域名日志配置
@@ -71,15 +71,15 @@ public interface IDomainLogService
 /// <summary>
 /// 域名日志服务实现
 /// </summary>
-public class DomainLogService : IDomainLogService
+public class LyLogService : ILyLogService
 {
-    private readonly DomainLogOptions _options;
+    private readonly LyLogOptions _options;
     private readonly string _projectRoot;
     private readonly ConcurrentDictionary<string, Logger> _domainLoggers = new();
     private readonly Logger _globalLogger;
-    private readonly ConcurrentDictionary<string, DomainLogConfig> _dynamicConfigs = new();
+    private readonly ConcurrentDictionary<string, LyLogConfig> _dynamicConfigs = new();
 
-    public DomainLogService(IOptions<DomainLogOptions> options, string? projectRoot = null)
+    public LyLogService(IOptions<LyLogOptions> options, string? projectRoot = null)
     {
         _options = options.Value;
         _projectRoot = projectRoot ?? Directory.GetCurrentDirectory();
@@ -88,7 +88,7 @@ public class DomainLogService : IDomainLogService
         ConfigureLogging();
 
         // 获取全局日志
-        _globalLogger = LogManager.GetLogger("DomainLog.Global");
+        _globalLogger = LogManager.GetLogger("LyLog.Global");
     }
 
     private void ConfigureLogging()
@@ -103,22 +103,22 @@ public class DomainLogService : IDomainLogService
             var isJson = _options.Global.Format == LogFormat.Json;
 
             var globalTarget = CreateFileTarget(
-                "domainlog-global",
+                "lylog-global",
                 Path.Combine(globalDir, _options.Global.AccessLog),
                 _options.Global.PerfLog,
                 isJson
             );
             config.AddTarget(globalTarget);
-            config.AddRule(ParseLogLevel(_options.Global.Level), NLog.LogLevel.Fatal, globalTarget, "DomainLog.Global");
+            config.AddRule(ParseLogLevel(_options.Global.Level), NLog.LogLevel.Fatal, globalTarget, "LyLog.Global");
 
             var globalErrorTarget = CreateFileTarget(
-                "domainlog-global-error",
+                "lylog-global-error",
                 Path.Combine(globalDir, _options.Global.ErrorLog),
                 _options.Global.PerfLog,
                 isJson
             );
             config.AddTarget(globalErrorTarget);
-            config.AddRuleForOneLevel(NLog.LogLevel.Error, globalErrorTarget, "DomainLog.Global");
+            config.AddRuleForOneLevel(NLog.LogLevel.Error, globalErrorTarget, "LyLog.Global");
         }
 
         // 配置各域名日志目标
@@ -130,20 +130,20 @@ public class DomainLogService : IDomainLogService
         LogManager.Configuration = config;
     }
 
-    private void ConfigureDomainLogging(LoggingConfiguration config, string domain, DomainLogConfig domainConfig)
+    private void ConfigureDomainLogging(LoggingConfiguration config, string domain, LyLogConfig domainConfig)
     {
         if (!domainConfig.Enabled) return;
 
         var domainDir = GetDomainLogDirectory(domain, domainConfig);
         Directory.CreateDirectory(domainDir);
 
-        var loggerName = $"DomainLog.{SanitizeDomain(domain)}";
+        var loggerName = $"LyLog.{SanitizeDomain(domain)}";
         var level = domainConfig.Level ?? _options.Global.Level;
         var isJson = (domainConfig.Format ?? _options.Global.Format) == LogFormat.Json;
 
         // 访问日志
         var accessTarget = CreateFileTarget(
-            $"domainlog-{SanitizeDomain(domain)}",
+            $"lylog-{SanitizeDomain(domain)}",
             Path.Combine(domainDir, domainConfig.AccessLog),
             _options.Global.PerfLog,
             isJson
@@ -153,7 +153,7 @@ public class DomainLogService : IDomainLogService
 
         // 错误日志
         var errorTarget = CreateFileTarget(
-            $"domainlog-{SanitizeDomain(domain)}-error",
+            $"lylog-{SanitizeDomain(domain)}-error",
             Path.Combine(domainDir, domainConfig.ErrorLog),
             _options.Global.PerfLog,
             isJson
@@ -164,7 +164,7 @@ public class DomainLogService : IDomainLogService
         // 如果需要同时记录到全局日志
         if (domainConfig.AlsoLogToGlobal && _options.Global.Enabled)
         {
-            var globalTarget = config.FindTargetByName("domainlog-global");
+            var globalTarget = config.FindTargetByName("lylog-global");
             if (globalTarget != null)
             {
                 config.AddRule(ParseLogLevel(level), NLog.LogLevel.Fatal, globalTarget, loggerName);
@@ -172,7 +172,7 @@ public class DomainLogService : IDomainLogService
         }
     }
 
-    private string GetDomainLogDirectory(string domain, DomainLogConfig config)
+    private string GetDomainLogDirectory(string domain, LyLogConfig config)
     {
         if (!string.IsNullOrEmpty(config.Output))
         {
@@ -229,7 +229,7 @@ public class DomainLogService : IDomainLogService
         {
             return _domainLoggers.GetOrAdd(domain, d =>
             {
-                var loggerName = $"DomainLog.{SanitizeDomain(d)}";
+                var loggerName = $"LyLog.{SanitizeDomain(d)}";
                 return LogManager.GetLogger(loggerName);
             });
         }
@@ -294,7 +294,7 @@ public class DomainLogService : IDomainLogService
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
-    public DomainLogConfig? GetDomainConfig(string domain)
+    public LyLogConfig? GetDomainConfig(string domain)
     {
         // 先查动态配置
         if (_dynamicConfigs.TryGetValue(domain, out var dynamicConfig))
@@ -353,7 +353,7 @@ public class DomainLogService : IDomainLogService
         return path.Equals(pattern, StringComparison.OrdinalIgnoreCase);
     }
 
-    public void AddDomainConfig(string domain, DomainLogConfig config)
+    public void AddDomainConfig(string domain, LyLogConfig config)
     {
         _dynamicConfigs[domain] = config;
 
@@ -378,9 +378,9 @@ public class DomainLogService : IDomainLogService
 /// <summary>
 /// HttpContext 扩展方法 - 用于获取和设置域名 Logger
 /// </summary>
-public static class DomainLogExtensions
+public static class LyLogExtensions
 {
-    private const string LoggerKey = "DomainLogger";
+    private const string LoggerKey = "LyLogger";
     private const string DomainKey = "LogDomain";
     private const string FormatKey = "LogFormat";
 

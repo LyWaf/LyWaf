@@ -1,5 +1,5 @@
 
-using LyWaf.Services.DomainLog;
+using LyWaf.Services.LyLog;
 using LyWaf.Services.Protect;
 using LyWaf.Services.Statistic;
 using LyWaf.Utils;
@@ -9,13 +9,13 @@ using NLog;
 
 namespace LyWaf.Middleware;
 
-public class WafControlMiddleware(RequestDelegate next, IStatisticService statisticService, IProtectService protectService, IDomainLogService logService)
+public class WafControlMiddleware(RequestDelegate next, IStatisticService statisticService, IProtectService protectService, ILyLogService logService)
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly RequestDelegate _next = next;
     private readonly IStatisticService statisticService = statisticService;
     private readonly IProtectService protectService = protectService;
-    private readonly IDomainLogService _logService = logService;
+    private readonly ILyLogService _logService = logService;
     public async Task<bool> WhitePathCheck(HttpContext context)
     {
         var path = await statisticService.GetMatchPath(context.Request.Path);
@@ -39,13 +39,6 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             var logger = _logService.GetLogger(domain);
             context.SetDomainLogger(logger, domain, _logService.GetFormat(domain));
         }
-
-        context.LogDomainJsonInfo(new Dictionary<string, object>
-        {
-            ["msg"] = "处理失败",
-            ["code"] = 500
-        });
-        context.LogDomainInfo("ssss");
 
         await TryCheckWaf(context);
     }

@@ -145,7 +145,7 @@ public static class ControlTemplate
     /// <summary>
     /// 生成封禁 IP HTML
     /// </summary>
-    public static string GenerateBlockedIpsHtml(List<KeyValuePair<string, string>> blockedIpList)
+    public static string GenerateBlockedIpsHtml(List<(string Ip, string Reason, TimeSpan? RemainingTime)> blockedIpList)
     {
         if (blockedIpList.Count == 0)
         {
@@ -157,11 +157,13 @@ public static class ControlTemplate
         
         foreach (var item in blockedIpList.Take(50))
         {
-            var ip = item.Key;
-            var reason = System.Web.HttpUtility.HtmlEncode(item.Value);
+            var ip = item.Ip;
+            var reason = System.Web.HttpUtility.HtmlEncode(item.Reason);
+            var remaining = FormatRemainingTime(item.RemainingTime);
             sb.AppendLine($"    <div class=\"item-row blocked-ip-row\">");
             sb.AppendLine($"        <span class=\"item-text\">{ip}</span>");
             sb.AppendLine($"        <span class=\"item-reason\">{reason}</span>");
+            sb.AppendLine($"        <span class=\"item-remaining\">{remaining}</span>");
             sb.AppendLine($"        <button class=\"btn-icon btn-delete\" onclick=\"unblockIp('{ip}')\">×</button>");
             sb.AppendLine($"    </div>");
         }
@@ -174,6 +176,27 @@ public static class ControlTemplate
         sb.AppendLine("</div>");
         
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// 格式化剩余时间
+    /// </summary>
+    private static string FormatRemainingTime(TimeSpan? remaining)
+    {
+        if (!remaining.HasValue)
+            return "永久";
+        
+        var ts = remaining.Value;
+        if (ts.TotalSeconds < 0)
+            return "已过期";
+        
+        if (ts.TotalDays >= 1)
+            return $"{(int)ts.TotalDays}天{ts.Hours}时";
+        if (ts.TotalHours >= 1)
+            return $"{(int)ts.TotalHours}时{ts.Minutes}分";
+        if (ts.TotalMinutes >= 1)
+            return $"{(int)ts.TotalMinutes}分{ts.Seconds}秒";
+        return $"{(int)ts.TotalSeconds}秒";
     }
     
     /// <summary>
@@ -521,7 +544,9 @@ public static class ControlTemplate
         var ccRules = statisticService.GetLimitCcRules();
         var argsRules = protectService.GetArgsRegexList();
         var postRules = protectService.GetPostRegexList();
-        var blockedIpList = blockedIps.GetValidItems().ToList();
+        var blockedIpList = blockedIps.GetValidItemsWithExpiry()
+            .Select(x => (x.Key, x.Value, x.RemainingTime))
+            .ToList();
         var recentClients = GetRecentClients(5);
 
         // 格式化运行时间

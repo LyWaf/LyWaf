@@ -1,9 +1,9 @@
-namespace LyWaf.Services.DomainLog;
+namespace LyWaf.Services.LyLog;
 
 /// <summary>
 /// 域名日志配置
 /// </summary>
-public class DomainLogOptions
+public class LyLogOptions
 {
     /// <summary>
     /// 是否启用域名日志
@@ -20,7 +20,7 @@ public class DomainLogOptions
     /// Key: 域名（如 example.com，支持 *.example.com 通配符）
     /// Value: 该域名的日志配置
     /// </summary>
-    public Dictionary<string, DomainLogConfig> Domains { get; set; } = [];
+    public Dictionary<string, LyLogConfig> Domains { get; set; } = [];
 }
 
 /// <summary>
@@ -83,7 +83,7 @@ public enum LogFormat
 /// <summary>
 /// 单个域名的日志配置
 /// </summary>
-public class DomainLogConfig
+public class LyLogConfig
 {
     /// <summary>
     /// 是否启用该域名的日志

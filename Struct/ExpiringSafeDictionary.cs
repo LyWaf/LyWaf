@@ -380,6 +380,31 @@ public class ExpiringSafeDictionary<TKey, TValue> : IDisposable where TKey : not
     }
 
     /// <summary>
+    /// 获取所有未过期的键值对及其剩余时间
+    /// </summary>
+    public IEnumerable<(TKey Key, TValue Value, TimeSpan? RemainingTime)> GetValidItemsWithExpiry()
+    {
+        var now = DateTime.UtcNow;
+
+        return _dictionary
+            .Where(pair => !pair.Value.IsExpired(now))
+            .Select(pair =>
+            {
+                TimeSpan? remaining = null;
+                if (pair.Value.SlidingExpiration.HasValue)
+                {
+                    remaining = pair.Value.LastAccessTime.Add(pair.Value.SlidingExpiration.Value) - now;
+                }
+                else if (pair.Value.ExpiryTime.HasValue)
+                {
+                    remaining = pair.Value.ExpiryTime.Value - now;
+                }
+                return (pair.Key, pair.Value.Value, remaining);
+            })
+            .ToList();
+    }
+
+    /// <summary>
     /// 获取字典中项目的数量（包括过期的）
     /// </summary>
     public int Count => _dictionary.Count;

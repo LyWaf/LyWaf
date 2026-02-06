@@ -269,6 +269,13 @@ public class LyConfigContext
     public int FileServerIndex { get; set; } = 1;
     
     /// <summary>
+    /// 域名日志配置（站点级别的 log 指令）
+    /// Key: 域名
+    /// Value: 日志配置
+    /// </summary>
+    public Dictionary<string, Dictionary<string, object>> LyLogs { get; } = new();
+    
+    /// <summary>
     /// 获取下一个路由 ID
     /// </summary>
     public string NextRouteId() => $"route{RouteIndex++}";
@@ -446,6 +453,30 @@ public static class LyToAppSettingsConverter
             {
                 ["Items"] = ctx.SimpleResItems
             };
+        }
+
+        // 合并站点级别的日志配置到 LyLog
+        if (ctx.LyLogs.Count > 0)
+        {
+            var domainLog = EnsureDict(result, "LyLog");
+            domainLog["Enabled"] = true;
+            
+            var domains = EnsureDict(domainLog, "Domains");
+            foreach (var (domain, logConfig) in ctx.LyLogs)
+            {
+                // 如果已存在该域名的配置，合并（站点级配置优先）
+                if (domains.TryGetValue(domain, out var existing) && existing is Dictionary<string, object> existingDict)
+                {
+                    foreach (var kv in logConfig)
+                    {
+                        existingDict[kv.Key] = kv.Value;
+                    }
+                }
+                else
+                {
+                    domains[domain] = logConfig;
+                }
+            }
         }
 
         return result;
@@ -764,6 +795,11 @@ public static class LyToAppSettingsConverter
                         case "showreq":
                             // respond 的显示请求头配置
                             defaultRespondConfig["show_req"] = directive.Value;
+                            break;
+
+                        case "log":
+                            // 域名日志配置
+                            ProcessSiteLogConfig(hosts, directive.Value, ctx);
                             break;
 
                         // file_server 的相关配置属性（非嵌套配置时这些是平级的）
@@ -1652,6 +1688,57 @@ public static class LyToAppSettingsConverter
     }
 
     /// <summary>
+    /// 处理站点级别的 log 配置
+    /// 支持格式：
+    /// 1. 简单格式：log = "logs/example.com"  （指定输出目录）
+    /// 2. 布尔格式：log = true  （启用，使用默认配置）
+    /// 3. 完整格式：
+    ///    log {
+    ///        output = "logs/example.com"
+    ///        level = "Debug"
+    ///        format = "Json"
+    ///        also_log_to_global = true
+    ///        exclude_paths = ["/health", "/metrics"]
+    ///    }
+    /// </summary>
+    private static void ProcessSiteLogConfig(List<string> hosts, object value, LyConfigContext ctx)
+    {
+        var logConfig = new Dictionary<string, object>
+        {
+            ["Enabled"] = true
+        };
+
+        switch (value)
+        {
+            case bool b:
+                // 布尔格式：log = true
+                logConfig["Enabled"] = b;
+                break;
+
+            case string s:
+                // 简单字符串格式：log = "logs/example.com"
+                logConfig["Output"] = s;
+                break;
+
+            case Dictionary<string, object> dict:
+                // 完整配置格式
+                logConfig = ParseLyLogConfig(dict);
+                break;
+        }
+
+        // 为每个域名添加日志配置
+        foreach (var host in hosts)
+        {
+            // 提取纯域名（去掉端口）
+            var domain = host.Contains(':') ? host.Split(':')[0] : host;
+            if (!string.IsNullOrEmpty(domain) && domain != "*")
+            {
+                ctx.LyLogs[domain] = logConfig;
+            }
+        }
+    }
+
+    /// <summary>
     /// 解析 reverse_proxy/proxy 配置
     /// 支持格式：
     /// 1. 简单格式：proxy http://127.0.0.1:8080
@@ -1932,8 +2019,10 @@ public static class LyToAppSettingsConverter
             case "domainlog":
             case "domain_log":
             case "logging":
+            case "lylog":
+            case "ly_log":
                 // 域名日志配置
-                ProcessDomainLogConfig(value, result);
+                ProcessLyLogConfig(value, result);
                 break;
 
             default:
@@ -2439,7 +2528,7 @@ public static class LyToAppSettingsConverter
     /// <summary>
     /// 处理域名日志配置
     /// 支持格式：
-    /// DomainLog {
+    /// LyLog {
     ///     Enabled = true
     ///     Global {
     ///         Enabled = true
@@ -2467,12 +2556,12 @@ public static class LyToAppSettingsConverter
     ///     }
     /// }
     /// </summary>
-    private static void ProcessDomainLogConfig(object value, Dictionary<string, object> result)
+    private static void ProcessLyLogConfig(object value, Dictionary<string, object> result)
     {
         if (value is not Dictionary<string, object> logConfig)
             return;
 
-        var domainLog = EnsureDict(result, "DomainLog");
+        var domainLog = EnsureDict(result, "LyLog");
         var global = new Dictionary<string, object>();
         var domains = new Dictionary<string, object>();
 
@@ -2502,18 +2591,17 @@ public static class LyToAppSettingsConverter
                         {
                             if (domainKv.Value is Dictionary<string, object> domainConfig)
                             {
-                                domains[domainKv.Key] = ParseDomainLogConfig(domainConfig);
+                                domains[domainKv.Key] = ParseLyLogConfig(domainConfig);
                             }
                         }
                     }
                     break;
 
                 default:
-                    // 直接定义的域名配置（以域名为键）
-                    if (kv.Value is Dictionary<string, object> directConfig && 
-                        (kv.Key.Contains(".") || kv.Key.Contains("*") || kv.Key.Contains(":")))
+                    // 直接定义的域名配置（除了 enabled 和 global 之外的所有字典配置都视为域名配置）
+                    if (kv.Value is Dictionary<string, object> directConfig)
                     {
-                        domains[kv.Key] = ParseDomainLogConfig(directConfig);
+                        domains[kv.Key] = ParseLyLogConfig(directConfig);
                     }
                     break;
             }
@@ -2579,7 +2667,7 @@ public static class LyToAppSettingsConverter
     /// <summary>
     /// 解析单个域名日志配置
     /// </summary>
-    private static Dictionary<string, object> ParseDomainLogConfig(Dictionary<string, object> config)
+    private static Dictionary<string, object> ParseLyLogConfig(Dictionary<string, object> config)
     {
         var result = new Dictionary<string, object>();
 
