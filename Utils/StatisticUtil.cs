@@ -58,6 +58,35 @@ public class StatisticUtil
             val.AddLast(new ReqestShortMsg(context, path, costTime));
             return true;
         });
+        
+        // 记录 API 详细耗时统计
+        RecordApiTiming(context, path, costTime);
+    }
+    
+    /// <summary>
+    /// 记录 API 详细耗时统计
+    /// </summary>
+    public static void RecordApiTiming(HttpContext context, string path, long totalTime)
+    {
+        var method = context.Request.Method;
+        var statusCode = context.Response.StatusCode;
+        
+        // 获取后端耗时（如果有代理到后端的话）
+        long backendTime = 0;
+        if (context.Items.TryGetValue("BackendTime", out var backendTimeObj) && backendTimeObj is long bt)
+        {
+            backendTime = bt;
+        }
+        
+        var key = $"{method}:{path}";
+        
+        SharedData.ApiTimings.DoLockKeyFunc(key, 
+            (k) => new ApiTimingStatistic { Path = path, Method = method },
+            (val) =>
+            {
+                val.RecordRequest(totalTime, backendTime, statusCode);
+                return true;
+            });
     }
 
     public static int GetPeriodIdx(int period, DateTime? time = null) {

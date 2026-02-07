@@ -58,12 +58,12 @@ public static class ControlApi
                 return Results.NotFound();
             }
             
-            var jsPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "js", filename);
+            var jsPath = Path.Combine(AppContext.BaseDirectory, "control_html", "js", filename);
             
             // 如果在 BaseDirectory 下找不到，尝试在当前目录下找
             if (!File.Exists(jsPath))
             {
-                jsPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "js", filename);
+                jsPath = Path.Combine(Directory.GetCurrentDirectory(), "control_html", "js", filename);
             }
             
             if (!File.Exists(jsPath))
@@ -73,6 +73,85 @@ public static class ControlApi
             
             var content = File.ReadAllText(jsPath);
             return Results.Content(content, "application/javascript; charset=utf-8");
+        }).RequireHost($"*:{controlPort}");
+
+        // API 耗时统计页面
+        app.MapGet("/api-timing", (HttpContext ctx) =>
+        {
+            var html = ControlTemplate.GetApiTimingTemplate();
+            return Results.Content(html, "text/html; charset=utf-8");
+        }).RequireHost($"*:{controlPort}");
+
+        // API 耗时统计数据列表
+        app.MapGet("/api/timing/list", (HttpContext ctx) =>
+        {
+            try
+            {
+                var snapshot = SharedData.ApiTimings.GetSnapshot();
+                
+                var data = snapshot.Values
+                    .Select(item => new
+                    {
+                        path = item.Path,
+                        method = item.Method,
+                        requestCount = item.RequestCount,
+                        avgTotalTime = Math.Round(item.AvgTotalTime, 2),
+                        avgBackendTime = Math.Round(item.AvgBackendTime, 2),
+                        avgGatewayTime = Math.Round(item.AvgGatewayTime, 2),
+                        minTotalTime = item.MinTotalTime == long.MaxValue ? 0 : item.MinTotalTime,
+                        maxTotalTime = item.MaxTotalTime,
+                        minBackendTime = item.MinBackendTime == long.MaxValue ? 0 : item.MinBackendTime,
+                        maxBackendTime = item.MaxBackendTime,
+                        totalTime = item.TotalTime,
+                        backendTime = item.BackendTime,
+                        statusCodeCounts = item.StatusCodeCounts,
+                        lastRequestTime = item.LastRequestTime
+                    })
+                    .ToList();
+                
+                // 计算汇总数据
+                var totalRequests = data.Sum(x => x.requestCount);
+                var totalApis = data.Count;
+                var avgTotalTime = totalRequests > 0 
+                    ? Math.Round(data.Sum(x => x.totalTime) / (double)totalRequests, 2) 
+                    : 0;
+                var avgBackendTime = totalRequests > 0 
+                    ? Math.Round(data.Sum(x => x.backendTime) / (double)totalRequests, 2) 
+                    : 0;
+                var avgGatewayTime = avgTotalTime - avgBackendTime;
+                
+                return Results.Json(new
+                {
+                    success = true,
+                    data,
+                    summary = new
+                    {
+                        totalApis,
+                        totalRequests,
+                        avgTotalTime,
+                        avgBackendTime,
+                        avgGatewayTime
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = ex.Message });
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 清除 API 耗时统计数据
+        app.MapPost("/api/timing/clear", (HttpContext ctx) =>
+        {
+            try
+            {
+                SharedData.ApiTimings.Clear();
+                return Results.Json(new { success = true, message = "API 耗时统计数据已清除" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = ex.Message });
+            }
         }).RequireHost($"*:{controlPort}");
 
         app.MapGet("/api/status", (HttpContext ctx) =>

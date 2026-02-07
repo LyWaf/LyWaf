@@ -38,7 +38,7 @@ AccessControl {
     
     IpControl {
         Enabled = true
-        Blacklist = ["127.0.0.1"]
+        Blacklist = ["127.0.0.11"]
     }
 }
 
@@ -96,7 +96,8 @@ log = "logs/xx"
     respond "OK"
 }
 
-import res "aaa"
+proxy http://httpbin.org
+#import res "aaa"
 #respond "hello world {HOST}:{PORT}"
 #status=201
 #content-type="text/plain"

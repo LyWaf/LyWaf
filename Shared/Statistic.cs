@@ -139,3 +139,122 @@ public class ReqestShortMsg(HttpContext context, string path, long costTime)
     /// </summary>
     public int StatusCode { get; set; } = context.Response.StatusCode;
 }
+
+/// <summary>
+/// API 耗时详细统计
+/// 包含总耗时（客户端→网关→客户端）和后端耗时（网关→后端→网关）
+/// </summary>
+public class ApiTimingStatistic : ICloneable
+{
+    /// <summary>
+    /// API 路径（如 /api/users）
+    /// </summary>
+    public string Path { get; set; } = "";
+
+    /// <summary>
+    /// HTTP 方法（GET, POST 等）
+    /// </summary>
+    public string Method { get; set; } = "";
+
+    /// <summary>
+    /// 请求总次数
+    /// </summary>
+    public int RequestCount { get; set; } = 0;
+
+    /// <summary>
+    /// 总耗时统计（客户端→网关→客户端的完整链路）
+    /// 累计耗时（毫秒）
+    /// </summary>
+    public long TotalTime { get; set; } = 0;
+
+    /// <summary>
+    /// 后端耗时统计（网关→后端→网关）
+    /// 累计耗时（毫秒）
+    /// </summary>
+    public long BackendTime { get; set; } = 0;
+
+    /// <summary>
+    /// 最小总耗时（毫秒）
+    /// </summary>
+    public long MinTotalTime { get; set; } = long.MaxValue;
+
+    /// <summary>
+    /// 最大总耗时（毫秒）
+    /// </summary>
+    public long MaxTotalTime { get; set; } = 0;
+
+    /// <summary>
+    /// 最小后端耗时（毫秒）
+    /// </summary>
+    public long MinBackendTime { get; set; } = long.MaxValue;
+
+    /// <summary>
+    /// 最大后端耗时（毫秒）
+    /// </summary>
+    public long MaxBackendTime { get; set; } = 0;
+
+    /// <summary>
+    /// 最后请求时间
+    /// </summary>
+    public DateTime LastRequestTime { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// 各状态码计数
+    /// </summary>
+    public Dictionary<int, int> StatusCodeCounts { get; set; } = [];
+
+    /// <summary>
+    /// 平均总耗时（毫秒）
+    /// </summary>
+    public double AvgTotalTime => RequestCount > 0 ? (double)TotalTime / RequestCount : 0;
+
+    /// <summary>
+    /// 平均后端耗时（毫秒）
+    /// </summary>
+    public double AvgBackendTime => RequestCount > 0 ? (double)BackendTime / RequestCount : 0;
+
+    /// <summary>
+    /// 平均网关处理耗时（毫秒）= 总耗时 - 后端耗时
+    /// </summary>
+    public double AvgGatewayTime => AvgTotalTime - AvgBackendTime;
+
+    /// <summary>
+    /// 记录一次请求
+    /// </summary>
+    public void RecordRequest(long totalTime, long backendTime, int statusCode)
+    {
+        RequestCount++;
+        TotalTime += totalTime;
+        BackendTime += backendTime;
+
+        if (totalTime < MinTotalTime) MinTotalTime = totalTime;
+        if (totalTime > MaxTotalTime) MaxTotalTime = totalTime;
+        if (backendTime < MinBackendTime) MinBackendTime = backendTime;
+        if (backendTime > MaxBackendTime) MaxBackendTime = backendTime;
+
+        LastRequestTime = DateTime.UtcNow;
+
+        if (StatusCodeCounts.TryGetValue(statusCode, out var count))
+            StatusCodeCounts[statusCode] = count + 1;
+        else
+            StatusCodeCounts[statusCode] = 1;
+    }
+
+    public object Clone()
+    {
+        return new ApiTimingStatistic
+        {
+            Path = Path,
+            Method = Method,
+            RequestCount = RequestCount,
+            TotalTime = TotalTime,
+            BackendTime = BackendTime,
+            MinTotalTime = MinTotalTime,
+            MaxTotalTime = MaxTotalTime,
+            MinBackendTime = MinBackendTime,
+            MaxBackendTime = MaxBackendTime,
+            LastRequestTime = LastRequestTime,
+            StatusCodeCounts = new Dictionary<int, int>(StatusCodeCounts)
+        };
+    }
+}

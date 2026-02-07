@@ -315,6 +315,15 @@ public class AccessControlService : IAccessControlService, IDisposable
     private readonly HashSet<string> _dynamicDenyRegions = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _dynamicAllowCountries = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _dynamicAllowRegions = new(StringComparer.OrdinalIgnoreCase);
+    
+    // 从配置中排除的列表（运行时移除，不持久化）
+    private readonly HashSet<string> _excludedWhitelist = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _excludedBlacklist = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _excludedDenyCountries = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _excludedDenyRegions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _excludedAllowCountries = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _excludedAllowRegions = new(StringComparer.OrdinalIgnoreCase);
+    
     private readonly object _dynamicListLock = new();
 
     // 连接计数器
@@ -377,18 +386,22 @@ public class AccessControlService : IAccessControlService, IDisposable
     {
         var ipConfig = _options.IpControl;
 
-        // 合并配置中的白名单和动态添加的白名单
+        // 合并配置中的白名单和动态添加的白名单（排除被移除的）
         lock (_dynamicListLock)
         {
-            var allWhitelist = new List<string>(_options.Whitelist);
+            var allWhitelist = _options.Whitelist
+                .Where(ip => !_excludedWhitelist.Contains(ip))
+                .ToList();
             allWhitelist.AddRange(_dynamicWhitelist);
             _whitelistNetworks = ParseNetworks(allWhitelist);
         }
 
-        // 合并配置中的黑名单和动态添加的黑名单
+        // 合并配置中的黑名单和动态添加的黑名单（排除被移除的）
         lock (_dynamicListLock)
         {
-            var allBlacklist = new List<string>(ipConfig.Blacklist);
+            var allBlacklist = ipConfig.Blacklist
+                .Where(ip => !_excludedBlacklist.Contains(ip))
+                .ToList();
             allBlacklist.AddRange(_dynamicBlacklist);
             _blacklistNetworks = ParseNetworks(allBlacklist);
         }
@@ -930,7 +943,7 @@ public class AccessControlService : IAccessControlService, IDisposable
     }
 
     /// <summary>
-    /// 动态从白名单移除 IP
+    /// 动态从白名单移除 IP（支持移除配置中的和动态添加的）
     /// </summary>
     public bool RemoveWhitelist(string ipOrCidr)
     {
@@ -941,7 +954,24 @@ public class AccessControlService : IAccessControlService, IDisposable
 
         lock (_dynamicListLock)
         {
+            var removed = false;
+            
+            // 尝试从动态白名单移除
             if (_dynamicWhitelist.Remove(ipOrCidr))
+            {
+                removed = true;
+            }
+            
+            // 如果是配置中的白名单条目，添加到排除列表
+            if (_options.Whitelist.Contains(ipOrCidr, StringComparer.OrdinalIgnoreCase))
+            {
+                if (_excludedWhitelist.Add(ipOrCidr))
+                {
+                    removed = true;
+                }
+            }
+            
+            if (removed)
             {
                 BuildIpNetworks(); // 重新构建网络列表
                 _logger.Info("已从白名单移除: {IpOrCidr}", ipOrCidr);
@@ -953,13 +983,15 @@ public class AccessControlService : IAccessControlService, IDisposable
     }
 
     /// <summary>
-    /// 获取当前白名单列表
+    /// 获取当前白名单列表（排除已移除的配置条目）
     /// </summary>
     public List<string> GetWhitelist()
     {
         lock (_dynamicListLock)
         {
-            var allWhitelist = new List<string>(_options.Whitelist);
+            var allWhitelist = _options.Whitelist
+                .Where(ip => !_excludedWhitelist.Contains(ip))
+                .ToList();
             allWhitelist.AddRange(_dynamicWhitelist);
             return allWhitelist.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
@@ -996,7 +1028,7 @@ public class AccessControlService : IAccessControlService, IDisposable
     }
 
     /// <summary>
-    /// 动态从黑名单移除 IP
+    /// 动态从黑名单移除 IP（支持移除配置中的和动态添加的）
     /// </summary>
     public bool RemoveBlacklist(string ipOrCidr)
     {
@@ -1007,7 +1039,24 @@ public class AccessControlService : IAccessControlService, IDisposable
 
         lock (_dynamicListLock)
         {
+            var removed = false;
+            
+            // 尝试从动态黑名单移除
             if (_dynamicBlacklist.Remove(ipOrCidr))
+            {
+                removed = true;
+            }
+            
+            // 如果是配置中的黑名单条目，添加到排除列表
+            if (_options.IpControl.Blacklist.Contains(ipOrCidr, StringComparer.OrdinalIgnoreCase))
+            {
+                if (_excludedBlacklist.Add(ipOrCidr))
+                {
+                    removed = true;
+                }
+            }
+            
+            if (removed)
             {
                 BuildIpNetworks(); // 重新构建网络列表
                 _logger.Info("已从黑名单移除: {IpOrCidr}", ipOrCidr);
@@ -1019,13 +1068,15 @@ public class AccessControlService : IAccessControlService, IDisposable
     }
 
     /// <summary>
-    /// 获取当前黑名单列表
+    /// 获取当前黑名单列表（排除已移除的配置条目）
     /// </summary>
     public List<string> GetBlacklist()
     {
         lock (_dynamicListLock)
         {
-            var allBlacklist = new List<string>(_options.IpControl.Blacklist);
+            var allBlacklist = _options.IpControl.Blacklist
+                .Where(ip => !_excludedBlacklist.Contains(ip))
+                .ToList();
             allBlacklist.AddRange(_dynamicBlacklist);
             return allBlacklist.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
@@ -1054,7 +1105,7 @@ public class AccessControlService : IAccessControlService, IDisposable
     }
 
     /// <summary>
-    /// 移除禁止访问的国家/地区
+    /// 移除禁止访问的国家/地区（支持移除配置中的和动态添加的）
     /// </summary>
     public bool RemoveDenyCountry(string country)
     {
@@ -1065,7 +1116,24 @@ public class AccessControlService : IAccessControlService, IDisposable
 
         lock (_dynamicListLock)
         {
+            var removed = false;
+            
+            // 尝试从动态列表移除
             if (_dynamicDenyCountries.Remove(country))
+            {
+                removed = true;
+            }
+            
+            // 如果是配置中的条目，添加到排除列表
+            if (_options.GeoControl.DenyCountries.Contains(country, StringComparer.OrdinalIgnoreCase))
+            {
+                if (_excludedDenyCountries.Add(country))
+                {
+                    removed = true;
+                }
+            }
+            
+            if (removed)
             {
                 _logger.Info("已从禁止列表移除国家/地区: {Country}", country);
                 return true;
@@ -1076,13 +1144,15 @@ public class AccessControlService : IAccessControlService, IDisposable
     }
 
     /// <summary>
-    /// 获取禁止访问的国家/地区列表
+    /// 获取禁止访问的国家/地区列表（排除已移除的配置条目）
     /// </summary>
     public List<string> GetDenyCountries()
     {
         lock (_dynamicListLock)
         {
-            var allDenyCountries = new List<string>(_options.GeoControl.DenyCountries);
+            var allDenyCountries = _options.GeoControl.DenyCountries
+                .Where(c => !_excludedDenyCountries.Contains(c))
+                .ToList();
             allDenyCountries.AddRange(_dynamicDenyCountries);
             return allDenyCountries.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
@@ -1111,7 +1181,7 @@ public class AccessControlService : IAccessControlService, IDisposable
     }
 
     /// <summary>
-    /// 移除禁止访问的省份
+    /// 移除禁止访问的省份（支持移除配置中的和动态添加的）
     /// </summary>
     public bool RemoveDenyRegion(string region)
     {
@@ -1122,7 +1192,24 @@ public class AccessControlService : IAccessControlService, IDisposable
 
         lock (_dynamicListLock)
         {
+            var removed = false;
+            
+            // 尝试从动态列表移除
             if (_dynamicDenyRegions.Remove(region))
+            {
+                removed = true;
+            }
+            
+            // 如果是配置中的条目，添加到排除列表
+            if (_options.GeoControl.DenyRegions.Contains(region, StringComparer.OrdinalIgnoreCase))
+            {
+                if (_excludedDenyRegions.Add(region))
+                {
+                    removed = true;
+                }
+            }
+            
+            if (removed)
             {
                 _logger.Info("已从禁止列表移除省份: {Region}", region);
                 return true;
@@ -1133,13 +1220,15 @@ public class AccessControlService : IAccessControlService, IDisposable
     }
 
     /// <summary>
-    /// 获取禁止访问的省份列表
+    /// 获取禁止访问的省份列表（排除已移除的配置条目）
     /// </summary>
     public List<string> GetDenyRegions()
     {
         lock (_dynamicListLock)
         {
-            var allDenyRegions = new List<string>(_options.GeoControl.DenyRegions);
+            var allDenyRegions = _options.GeoControl.DenyRegions
+                .Where(r => !_excludedDenyRegions.Contains(r))
+                .ToList();
             allDenyRegions.AddRange(_dynamicDenyRegions);
             return allDenyRegions.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
@@ -1168,7 +1257,7 @@ public class AccessControlService : IAccessControlService, IDisposable
     }
 
     /// <summary>
-    /// 移除允许访问的国家/地区
+    /// 移除允许访问的国家/地区（支持移除配置中的和动态添加的）
     /// </summary>
     public bool RemoveAllowCountry(string country)
     {
@@ -1179,7 +1268,24 @@ public class AccessControlService : IAccessControlService, IDisposable
 
         lock (_dynamicListLock)
         {
+            var removed = false;
+            
+            // 尝试从动态列表移除
             if (_dynamicAllowCountries.Remove(country))
+            {
+                removed = true;
+            }
+            
+            // 如果是配置中的条目，添加到排除列表
+            if (_options.GeoControl.AllowCountries.Contains(country, StringComparer.OrdinalIgnoreCase))
+            {
+                if (_excludedAllowCountries.Add(country))
+                {
+                    removed = true;
+                }
+            }
+            
+            if (removed)
             {
                 _logger.Info("已从允许列表移除国家/地区: {Country}", country);
                 return true;
@@ -1190,13 +1296,15 @@ public class AccessControlService : IAccessControlService, IDisposable
     }
 
     /// <summary>
-    /// 获取允许访问的国家/地区列表
+    /// 获取允许访问的国家/地区列表（排除已移除的配置条目）
     /// </summary>
     public List<string> GetAllowCountries()
     {
         lock (_dynamicListLock)
         {
-            var allAllowCountries = new List<string>(_options.GeoControl.AllowCountries);
+            var allAllowCountries = _options.GeoControl.AllowCountries
+                .Where(c => !_excludedAllowCountries.Contains(c))
+                .ToList();
             allAllowCountries.AddRange(_dynamicAllowCountries);
             return allAllowCountries.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
@@ -1225,7 +1333,7 @@ public class AccessControlService : IAccessControlService, IDisposable
     }
 
     /// <summary>
-    /// 移除允许访问的省份
+    /// 移除允许访问的省份（支持移除配置中的和动态添加的）
     /// </summary>
     public bool RemoveAllowRegion(string region)
     {
@@ -1236,7 +1344,24 @@ public class AccessControlService : IAccessControlService, IDisposable
 
         lock (_dynamicListLock)
         {
+            var removed = false;
+            
+            // 尝试从动态列表移除
             if (_dynamicAllowRegions.Remove(region))
+            {
+                removed = true;
+            }
+            
+            // 如果是配置中的条目，添加到排除列表
+            if (_options.GeoControl.AllowRegions.Contains(region, StringComparer.OrdinalIgnoreCase))
+            {
+                if (_excludedAllowRegions.Add(region))
+                {
+                    removed = true;
+                }
+            }
+            
+            if (removed)
             {
                 _logger.Info("已从允许列表移除省份: {Region}", region);
                 return true;
@@ -1247,13 +1372,15 @@ public class AccessControlService : IAccessControlService, IDisposable
     }
 
     /// <summary>
-    /// 获取允许访问的省份列表
+    /// 获取允许访问的省份列表（排除已移除的配置条目）
     /// </summary>
     public List<string> GetAllowRegions()
     {
         lock (_dynamicListLock)
         {
-            var allAllowRegions = new List<string>(_options.GeoControl.AllowRegions);
+            var allAllowRegions = _options.GeoControl.AllowRegions
+                .Where(r => !_excludedAllowRegions.Contains(r))
+                .ToList();
             allAllowRegions.AddRange(_dynamicAllowRegions);
             return allAllowRegions.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }

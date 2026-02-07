@@ -122,4 +122,15 @@ public static class SharedData
     public static readonly ExpiringSafeDictionary<string, ClientThrottledLimit> ClientThrottled =
                             new(defaultExpiration: TimeSpan.FromMinutes(10),
                                 cleanupInterval: TimeSpan.FromMinutes(20));
+
+    /// <summary>
+    /// API 耗时详细统计
+    /// Key: "METHOD:PATH" (如 "GET:/api/users")
+    /// Value: API 耗时统计信息
+    /// 用途: 记录每个 API 的详细耗时信息，用于性能分析
+    /// 过期时间: 60分钟，清理间隔: 30分钟
+    /// </summary>
+    public static readonly ExpiringSafeDictionary<string, ApiTimingStatistic> ApiTimings =
+                            new(defaultExpiration: TimeSpan.FromMinutes(60),
+                                cleanupInterval: TimeSpan.FromMinutes(30));
 }

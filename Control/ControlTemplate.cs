@@ -14,17 +14,19 @@ public static class ControlTemplate
 {
     // 缓存 HTML 模板
     private static string? _dashboardTemplate;
-    private static DateTime _templateLastModified;
+    private static DateTime _dashboardTemplateLastModified;
+    private static string? _apiTimingTemplate;
+    private static DateTime _apiTimingTemplateLastModified;
     
     /// <summary>
-    /// 获取 HTML 模板
+    /// 获取仪表板 HTML 模板
     /// </summary>
     public static string GetDashboardTemplate()
     {
-        var templatePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "dashboard.html");
+        var templatePath = Path.Combine(AppContext.BaseDirectory, "control_html", "dashboard.html");
         if (!File.Exists(templatePath))
         {
-            templatePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "dashboard.html");
+            templatePath = Path.Combine(Directory.GetCurrentDirectory(), "control_html", "dashboard.html");
         }
         
         if (!File.Exists(templatePath))
@@ -33,13 +35,39 @@ public static class ControlTemplate
         }
         
         var lastModified = File.GetLastWriteTime(templatePath);
-        if (_dashboardTemplate == null || lastModified > _templateLastModified)
+        if (_dashboardTemplate == null || lastModified > _dashboardTemplateLastModified)
         {
             _dashboardTemplate = File.ReadAllText(templatePath, Encoding.UTF8);
-            _templateLastModified = lastModified;
+            _dashboardTemplateLastModified = lastModified;
         }
         
         return _dashboardTemplate;
+    }
+    
+    /// <summary>
+    /// 获取 API 耗时统计 HTML 模板
+    /// </summary>
+    public static string GetApiTimingTemplate()
+    {
+        var templatePath = Path.Combine(AppContext.BaseDirectory, "control_html", "api-timing.html");
+        if (!File.Exists(templatePath))
+        {
+            templatePath = Path.Combine(Directory.GetCurrentDirectory(), "control_html", "api-timing.html");
+        }
+        
+        if (!File.Exists(templatePath))
+        {
+            return "<html><body><h1>API 耗时统计模板文件未找到</h1></body></html>";
+        }
+        
+        var lastModified = File.GetLastWriteTime(templatePath);
+        if (_apiTimingTemplate == null || lastModified > _apiTimingTemplateLastModified)
+        {
+            _apiTimingTemplate = File.ReadAllText(templatePath, Encoding.UTF8);
+            _apiTimingTemplateLastModified = lastModified;
+        }
+        
+        return _apiTimingTemplate;
     }
     
     /// <summary>

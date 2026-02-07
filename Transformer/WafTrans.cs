@@ -200,6 +200,9 @@ namespace LyWaf.Transformer
                     transformContext.HttpContext.Request.Headers[k] = v;
                 }
                 transformContext.HttpContext.Items.Add("ProxyDestUrl", transformContext.DestinationPrefix);
+                
+                // 记录发送到后端的时间点
+                transformContext.HttpContext.Items["BackendStartTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
                 // 处理 Forwarded 头
                 if (isOpen)
@@ -210,6 +213,14 @@ namespace LyWaf.Transformer
 
             transformBuildContext.AddResponseTransform(async transformContext =>
             {
+                // 记录后端响应时间
+                if (transformContext.HttpContext.Items.TryGetValue("BackendStartTime", out var startTimeObj) 
+                    && startTimeObj is long startTime)
+                {
+                    var backendTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - startTime;
+                    transformContext.HttpContext.Items["BackendTime"] = backendTime;
+                }
+                
                 foreach (var (k, v) in services.GetOptions().HeaderDowns)
                 {
                     transformContext.HttpContext.Response.Headers[k] = v;
