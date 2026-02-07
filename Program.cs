@@ -1188,6 +1188,8 @@ public class Program
             proxyApp.UseMiddleware<SimpleResMiddleware>();
             proxyApp.UseMiddleware<FileProviderMiddleware>();
             
+            // 启用负载均衡中间件（使用自定义代理管道时必须显式添加）
+            proxyApp.UseLoadBalancing();
         }).RequireHost(proxyPorts);
         app.Run();
     }

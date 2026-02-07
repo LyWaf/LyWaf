@@ -23,6 +23,7 @@ public class WeightedRoundRobinPolicy : ILoadBalancingPolicy
 
     public DestinationState? PickDestination(HttpContext context, ClusterState cluster, IReadOnlyList<DestinationState> availableDestinations)
     {
+        
         if (availableDestinations.Count == 0)
             return null;
 

@@ -329,10 +329,14 @@ public class StatisticLogMiddleware(RequestDelegate next)
 
         await StatisticUtil.DoStatisticRequest(context, (string?)destUrl ?? "", timestamp_end - timestamp_start);
         context.Request.Body.Position = 0;
-        Stream rawbody = new MemoryStream();
         var request = context.Request;
-        await request.Body.CopyToAsync(rawbody, 200);
-        var body = StreamUtil.ConvertToString(rawbody);
+        string? body = null;
+        try {
+            Stream rawbody = new MemoryStream();
+            await request.Body.CopyToAsync(rawbody, 200);
+            body = StreamUtil.ConvertToString(rawbody);
+        } catch(Exception) {
+        }
         var response = context.Response;
         var reqRaw = RequestUtil.RecordRuquest(request, body);
         _logger.Info("以下是curl指令:\n{}\n返回{},长度{}\n当前请求耗时: {} ms\n",
