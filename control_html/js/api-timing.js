@@ -1,6 +1,7 @@
 // API 耗时统计页面 JavaScript
 
 let apiData = [];
+let backendStats = [];
 let currentSort = { field: 'avgTotalTime', order: 'desc' };
 
 // 页面加载完成后初始化
@@ -12,6 +13,9 @@ $(document).ready(function() {
     
     // 方法筛选事件
     $('#method-filter').on('change', filterAndRender);
+    
+    // 后端筛选事件
+    $('#backend-filter').on('change', filterAndRender);
     
     // 排序选择事件
     $('#sort-by').on('change', function() {
@@ -46,7 +50,10 @@ function refreshData() {
         success: function(response) {
             if (response.success) {
                 apiData = response.data || [];
+                backendStats = response.backendStats || [];
                 updateSummary(response.summary);
+                updateBackendStats(backendStats);
+                updateBackendFilter();
                 filterAndRender();
                 $('#last-update').text(new Date().toLocaleTimeString());
             } else {
@@ -70,6 +77,73 @@ function updateSummary(summary) {
     $('#avg-gateway-time').text(formatTime(summary.avgGatewayTime));
 }
 
+// 更新后端统计
+function updateBackendStats(stats) {
+    const container = $('#backend-stats');
+    container.empty();
+    
+    if (!stats || stats.length === 0) {
+        container.html('<div class="empty-state" style="grid-column: 1/-1; padding: 30px;">暂无后端统计数据</div>');
+        return;
+    }
+    
+    stats.forEach(stat => {
+        const errorRateClass = getErrorRateClass(stat.errorRate);
+        const hasErrors = stat.errorRate > 0;
+        
+        const card = `
+            <div class="backend-card ${hasErrors ? 'has-errors' : ''}" onclick="filterByBackend('${escapeHtml(stat.backend)}')">
+                <div class="backend-header">
+                    <span class="backend-name" title="${escapeHtml(stat.backend)}">${formatBackendName(stat.backend)}</span>
+                    <span class="backend-error-rate ${errorRateClass}">${stat.errorRate}% 错误</span>
+                </div>
+                <div class="backend-metrics">
+                    <div class="backend-metric">
+                        <div class="backend-metric-value">${formatNumber(stat.totalRequests)}</div>
+                        <div class="backend-metric-label">请求数</div>
+                    </div>
+                    <div class="backend-metric">
+                        <div class="backend-metric-value">${formatTime(stat.avgBackendTime)}</div>
+                        <div class="backend-metric-label">平均耗时</div>
+                    </div>
+                    <div class="backend-metric">
+                        <div class="backend-metric-value">${stat.apiCount}</div>
+                        <div class="backend-metric-label">API数</div>
+                    </div>
+                </div>
+            </div>
+        `;
+        container.append(card);
+    });
+}
+
+// 更新后端筛选下拉框
+function updateBackendFilter() {
+    const select = $('#backend-filter');
+    const currentVal = select.val();
+    
+    // 保留第一个选项
+    select.find('option:not(:first)').remove();
+    
+    // 获取所有不重复的后端
+    const backends = [...new Set(apiData.map(x => x.backend).filter(x => x))];
+    
+    backends.sort().forEach(backend => {
+        select.append(`<option value="${escapeHtml(backend)}">${formatBackendName(backend)}</option>`);
+    });
+    
+    // 恢复之前的选择
+    if (currentVal && backends.includes(currentVal)) {
+        select.val(currentVal);
+    }
+}
+
+// 点击后端卡片筛选
+function filterByBackend(backend) {
+    $('#backend-filter').val(backend);
+    filterAndRender();
+}
+
 // 过滤和渲染数据
 function filterAndRender() {
     let filtered = [...apiData];
@@ -79,7 +153,8 @@ function filterAndRender() {
     if (searchTerm) {
         filtered = filtered.filter(item => 
             item.path.toLowerCase().includes(searchTerm) ||
-            item.method.toLowerCase().includes(searchTerm)
+            item.method.toLowerCase().includes(searchTerm) ||
+            (item.backend && item.backend.toLowerCase().includes(searchTerm))
         );
     }
     
@@ -89,15 +164,25 @@ function filterAndRender() {
         filtered = filtered.filter(item => item.method === methodFilter);
     }
     
+    // 后端过滤
+    const backendFilter = $('#backend-filter').val();
+    if (backendFilter) {
+        filtered = filtered.filter(item => item.backend === backendFilter);
+    }
+    
     // 排序
     filtered.sort((a, b) => {
         let aVal = a[currentSort.field];
         let bVal = b[currentSort.field];
         
+        // 处理 undefined/null
+        if (aVal === undefined || aVal === null) aVal = '';
+        if (bVal === undefined || bVal === null) bVal = '';
+        
         // 处理字符串排序
         if (typeof aVal === 'string') {
             aVal = aVal.toLowerCase();
-            bVal = bVal.toLowerCase();
+            bVal = (bVal || '').toLowerCase();
         }
         
         // 处理日期排序
@@ -128,15 +213,16 @@ function renderTable(data) {
     }
     
     data.forEach(item => {
+        const errorRateClass = getErrorRateClass(item.errorRate);
         const row = `
             <tr>
                 <td><span class="method-badge method-${item.method}">${item.method}</span></td>
                 <td><code>${escapeHtml(item.path)}</code></td>
+                <td>${item.backend ? `<span class="backend-badge" title="${escapeHtml(item.backend)}">${formatBackendName(item.backend)}</span>` : '<span style="color: var(--text-muted)">-</span>'}</td>
                 <td>${formatNumber(item.requestCount)}</td>
+                <td class="error-rate-cell ${errorRateClass}">${item.errorRate > 0 ? item.errorRate + '%' : '-'}</td>
                 <td class="time-value ${getTimeClass(item.avgTotalTime)}">${formatTime(item.avgTotalTime)}</td>
                 <td class="time-value ${getTimeClass(item.avgBackendTime)}">${formatTime(item.avgBackendTime)}</td>
-                <td class="time-value">${formatTime(item.avgGatewayTime)}</td>
-                <td class="time-value">${formatTime(item.minTotalTime)}</td>
                 <td class="time-value ${getTimeClass(item.maxTotalTime)}">${formatTime(item.maxTotalTime)}</td>
                 <td>${renderStatusCodes(item.statusCodeCounts)}</td>
                 <td>${formatLastRequest(item.lastRequestTime)}</td>
@@ -144,6 +230,30 @@ function renderTable(data) {
         `;
         tbody.append(row);
     });
+}
+
+// 格式化后端名称（显示 scheme + host）
+function formatBackendName(backend) {
+    if (!backend) return '-';
+    try {
+        const url = new URL(backend);
+        // 显示 scheme + host，区分 http 和 https
+        const scheme = url.protocol.replace(':', '');
+        return `${scheme}://${url.host}`;
+    } catch {
+        // 如果不是有效URL，截取显示
+        if (backend.length > 30) {
+            return backend.substring(0, 27) + '...';
+        }
+        return backend;
+    }
+}
+
+// 获取错误率样式类
+function getErrorRateClass(rate) {
+    if (rate === 0) return 'error-rate-good';
+    if (rate < 5) return 'error-rate-warn';
+    return 'error-rate-bad';
 }
 
 // 渲染状态码分布
@@ -263,6 +373,7 @@ function showMessage(message, type) {
 
 // HTML 转义
 function escapeHtml(text) {
+    if (!text) return '';
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;

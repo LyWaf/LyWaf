@@ -96,7 +96,10 @@ log = "logs/xx"
     respond "OK"
 }
 
-proxy http://httpbin.org
+proxy = {
+    to = ["http://httpbin.org@99", "https://httpbin.org@1"]
+    lb_policy = WeightedRoundRobin
+}
 #import res "aaa"
 #respond "hello world {HOST}:{PORT}"
 #status=201

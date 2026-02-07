@@ -238,6 +238,94 @@
             margin-top: 4px;
         }
         
+        .backend-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .backend-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 15px;
+            transition: all 0.3s ease;
+        }
+        
+        .backend-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+        
+        .backend-card.has-errors {
+            border-left: 3px solid var(--danger);
+        }
+        
+        .backend-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .backend-name {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9rem;
+            color: var(--accent-light);
+            word-break: break-all;
+        }
+        
+        .backend-error-rate {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        
+        .error-rate-good { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+        .error-rate-warn { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+        .error-rate-bad { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+        
+        .backend-metrics {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            font-size: 0.85rem;
+        }
+        
+        .backend-metric {
+            text-align: center;
+        }
+        
+        .backend-metric-value {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .backend-metric-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+        
+        .error-rate-cell {
+            font-weight: 600;
+        }
+        
+        .backend-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            background: rgba(59, 130, 246, 0.2);
+            color: var(--accent-light);
+            font-family: 'Consolas', 'Monaco', monospace;
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
         .table-container {
             overflow-x: auto;
             max-height: 600px;
@@ -346,6 +434,17 @@
             </div>
         </div>
         
+        <!-- 后端稳定性统计 -->
+        <div class="card">
+            <div class="card-title">
+                <span>🖥️ 后端稳定性</span>
+                <span style="font-size: 0.85rem; color: var(--text-muted);">按错误率排序</span>
+            </div>
+            <div class="backend-stats" id="backend-stats">
+                <div class="empty-state" style="grid-column: 1/-1; padding: 30px;">暂无后端统计数据</div>
+            </div>
+        </div>
+        
         <div class="card">
             <div class="card-title">
                 <span>🔍 API 详情</span>
@@ -361,9 +460,14 @@
                     <option value="DELETE">DELETE</option>
                     <option value="PATCH">PATCH</option>
                 </select>
+                <select id="backend-filter">
+                    <option value="">所有后端</option>
+                </select>
                 <select id="sort-by">
                     <option value="avgTotalTime-desc">平均耗时 (高→低)</option>
                     <option value="avgTotalTime-asc">平均耗时 (低→高)</option>
+                    <option value="errorRate-desc">错误率 (高→低)</option>
+                    <option value="errorRate-asc">错误率 (低→高)</option>
                     <option value="requestCount-desc">请求数 (高→低)</option>
                     <option value="requestCount-asc">请求数 (低→高)</option>
                     <option value="avgBackendTime-desc">后端耗时 (高→低)</option>
@@ -383,11 +487,11 @@
                         <tr>
                             <th data-sort="method">方法 <span class="sort-icon">↕</span></th>
                             <th data-sort="path">路径 <span class="sort-icon">↕</span></th>
+                            <th data-sort="backend">后端 <span class="sort-icon">↕</span></th>
                             <th data-sort="requestCount">请求数 <span class="sort-icon">↕</span></th>
+                            <th data-sort="errorRate">错误率 <span class="sort-icon">↕</span></th>
                             <th data-sort="avgTotalTime">平均总耗时 <span class="sort-icon">↕</span></th>
                             <th data-sort="avgBackendTime">平均后端耗时 <span class="sort-icon">↕</span></th>
-                            <th data-sort="avgGatewayTime">平均网关耗时 <span class="sort-icon">↕</span></th>
-                            <th data-sort="minTotalTime">最小耗时 <span class="sort-icon">↕</span></th>
                             <th data-sort="maxTotalTime">最大耗时 <span class="sort-icon">↕</span></th>
                             <th>状态码分布</th>
                             <th data-sort="lastRequestTime">最后请求 <span class="sort-icon">↕</span></th>

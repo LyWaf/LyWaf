@@ -1,541 +1,144 @@
-# 如果觉得好用，请收藏或则分享本站
-Logging:
-  LogLevel:
-    Default: Debug
-    Microsoft.AspNetCore: Warning
-AllowedHosts: '*'
+LyLog:
+  Enabled: true
+  Global:
+    Enabled: true
+    AccessLog: "access_${shortdate}.log"
+    ErrorLog: "error_${shortdate}.log"
+    Directory: logs
+    Level: Info
+    PerfLog: false
+  Domains:
+    localhost1:
+      Enabled: true
+      Output: logs/localhost
+      Level: Info
+      Format: Json
+      AlsoLogToGlobal: true
+      ExcludePaths:
+        - /health
+        - /favicon.ico
+    localhost:
+      Enabled: true
+      Output: logs/xx
+    0.0.0.0:
+      Enabled: true
+      Output: logs/xx
+    example.com:
+      Enabled: true
+      Output: logs/xx
+AccessControl:
+  RejectStatusCode: 403
+  IpControl:
+    Enabled: true
+    Blacklist:
+      - 127.0.0.11
+ErrorTemplate:
+  ShowReason: true
+  Enabled: true
+Plugins:
+  Enabled: true
+  PluginDirectory: plugins
+  DataDirectory: plugin_data
+  PluginConfigs:
+    request-logger:
+      enabled: true
+      log_headers: false
+      log_duration: true
+    image-process:
+      Enabled: true
+      SupportedFormats:
+        - jpg
+        - jpeg
+        - png
+        - webp
+        - gif
+        - bmp
+      DefaultOutputFormat: webp
+      DefaultQuality: 85
+      MaxWidth: 4096
+      MaxHeight: 4096
+      EnableUrlParams: true
+      CacheSeconds: 3600
+    custom-header:
+      enabled: true
+      headers:
+        X-Powered-By: LyWaf
+        X-Frame-Options: SAMEORIGIN
 WafInfos:
   Listens:
+    - Host: 127.0.0.1
+      Port: 5003
+      IsHttps: false
+    - Host: 127.0.0.1
+      Port: 5004
+      IsHttps: false
     - Host: 0.0.0.0
-      Port: 7031
-    - Port: 5002
-      Host: 0.0.0.0
-      # AutoHttpsPort: 443
+      Port: 5005
+      IsHttps: false
     - Host: 0.0.0.0
-      Port: 443
-      IsHttps: true
-  Certs:
-    - Host: "*.lx"
-      PemFile: .well-known/pri_key.pem
-      KeyFile: .well-known/pri_key.pem.key
-    - Host: "*."
-      PemFile: .well-known/pri_key.pem
-      KeyFile: .well-known/pri_key.pem.key
-  HeaderUps:
-    aa: bb
-    cc: dd
-  HeaderDowns:
-    ee: ff
-    gg: hh
-  Forwarded:
-    IsX: false
-    Method: append
-Statistic:
-  PathStas:
-    # 不带任何的就是需要完整匹配如 /api
-    # 后面带有星号的就是前缀匹配如 /api/*
-    # 中间带有大括号的则表示规则匹配  /api/{aaa}/bbb 则 /api/xxx/bbb 符合, /api/aass/dd/bbb不符合
-    # 匹配到任一规则后则不进行后续匹配, 未匹配到则按原请求进行统计
-    - /api/{aaa}/bbb
-    - /api/cc/dd/*
-    - /api1/*
-    - /file/*
-    - /api1/aaaa
-  WhitePaths:
-    - /api2/*
-    - /file/*
-  Config:
-    # 最小的检测数量, 访问数大于该数才进行检查是否合法, 请设置大于20的值
-    fbLimit: 30
-    # 上一条请求还未结束直接发下一条的请求
-    notWaitFbRatio: 0.9
-    # 默认的封禁时长, 单位为秒
-    defaultFbTime: 200
-    # 取最高频率的几项进行计算占比
-    maxFreqGetNums: 3
-    # 至少需要访问的次数
-    maxFreqMinReqs: 100
-    # 前几的占比超过该比例则封禁
-    maxFreqFbRatio: 0.8
-  LimitCc:
-    - Period: 60
-      LimitNum: 20
-      Path: /api1/*
-      FbTime: "00:03:00"
-Protect:
-
-  # 检查query里面的请求
-  OpenArgsCheck: true
-  # Post检查会预先读取body的内容, 会比较大的程度拖慢响应速度
-  OpenPostCheck: true
-  # 最大请求大小
-  MaxRequestBodySize: 10000
-  # 具体的检测参数正则配置
-  RegexArgsList:
-    - (?:aaa\/\W*passwd)
-  # 具体的检测参数正则配置
-  RegexPostList:
-    - (?:aaa\/\W*passwd)
-
-# =============== 自定义 DNS 配置 ===============
-# 允许将指定域名解析为指定的 IP 地址
-# 支持通配符匹配和多 IP 负载均衡（支持配置热更新）
-# 匹配规则（均为 O(1) hash 查找）：
-#   1. 先精确匹配域名
-#   2. 若未匹配，将域名第一段替换为 * 进行通配符匹配
-#      例如: www.example.com 会尝试匹配 *.example.com
-CustomDns:
-  # 是否启用自定义 DNS
-  Enabled: true
-  # DNS 解析缓存时间（秒），0 表示不缓存
-  CacheTtlSeconds: 300
-  # DNS 解析映射
-  Entries:
-    # 示例: 将 example.com 解析为指定 IP（随机选择）
-    example.com:
-      Addresses:
-        - 192.168.1.100
-        - 192.168.1.101
-        - 192.168.1.102
-      Policy: Random    # 随机选择，或 RoundRobin 轮询
-      TtlSeconds: 60    # 单条目缓存时间，-1 使用全局配置
-
-    # 示例: 通配符匹配
-    # "*.internal.example.com":
-    #   Addresses:
-    #     - 10.0.0.1
-    #     - 10.0.0.2
-    #   Policy: RoundRobin
-
-# =============== 正向代理服务配置 ===============
-# 支持 HTTP 代理、HTTPS 代理（CONNECT 隧道）和 SOCKS5 代理
-ProxyServer:
-  # 是否启用代理服务
-  Enabled: false
-  # 代理认证（可选）
-  # Username: proxyuser
-  # Password: proxypass
-  # 连接超时（秒）
-  ConnectTimeout: 30
-  # 数据传输超时（秒）
-  DataTimeout: 300
-  # 允许访问的目标主机（白名单，支持通配符）
-  AllowedHosts: []
-  # 禁止访问的目标主机（黑名单，支持通配符）
-  BlockedHosts: []
-  # 默认端口配置
-  Default:
-    EnableHttp: true
-    EnableHttps: true
-    EnableSocks5: false
-    RequireAuth: false
-  # 端口配置
-  # 支持两种格式:
-  #   - 纯端口号: "8080" (监听所有地址 0.0.0.0)
-  #   - host:port: "127.0.0.1:8080" (监听指定地址)
-  Ports:
-    # 示例：HTTP/HTTPS 代理端口（监听所有地址）
-    # "8080":
-    #   EnableHttp: true
-    #   EnableHttps: true
-    #   EnableSocks5: false
-    #   RequireAuth: false
-    # 示例：SOCKS5 代理端口（仅监听本地）
-    # "127.0.0.1:1080":
-    #   EnableHttp: false
-    #   EnableHttps: false
-    #   EnableSocks5: true
-    #   RequireAuth: true
-    # 示例：指定 IP 监听
-    # "0.0.0.0:3128":
-    #   EnableHttp: true
-    #   EnableHttps: true
-    #   EnableSocks5: true
-
-# =============== ACME/Let's Encrypt 证书配置 ===============
-# 自动申请和续期 Let's Encrypt 免费 HTTPS 证书
-Acme:
-  # 是否启用 ACME 自动证书管理
-  Enabled: false
-  # 联系邮箱（必填，用于 Let's Encrypt 通知）
-  Email: "admin@example.com"
-  # 是否同意 Let's Encrypt 服务条款（必须为 true 才能使用）
-  AcceptTermsOfService: false
-  # 需要申请证书的域名列表
-  Domains:
-    # - example.com
-    # - www.example.com
-  # 证书存储目录
-  CertificatePath: "certs"
-  # ACME 账户密钥文件路径
-  AccountKeyPath: "certs/account.pem"
-  # 证书有效期剩余天数小于此值时自动续期
-  RenewBeforeDays: 30
-  # 检查证书续期的间隔（小时）
-  CheckIntervalHours: 12
-  # 是否使用测试环境（staging）
-  # 测试时建议开启，避免触发 Let's Encrypt 速率限制
-  # 测试证书不被浏览器信任，仅用于调试
-  UseStaging: false
-  # ACME 服务器地址（可选，默认使用 Let's Encrypt）
-  # 生产环境: https://acme-v02.api.letsencrypt.org/directory
-  # 测试环境: https://acme-staging-v02.api.letsencrypt.org/directory
-  # DirectoryUrl: "https://acme-v02.api.letsencrypt.org/directory"
-
-# =============== 响应压缩配置 ===============
-# 对满足条件的响应进行 Gzip/Brotli 压缩
-Compress:
-  # 是否启用响应压缩
-  Enabled: true
-  # 是否启用 Brotli 压缩（优先于 Gzip，压缩率更高）
-  EnableBrotli: true
-  # 是否启用 Gzip 压缩
-  EnableGzip: true
-  # 压缩级别: Fastest, Optimal, NoCompression, SmallestSize
-  Level: Fastest
-  # 最小响应大小（字节），小于此值不压缩
-  # 默认 10240 (10KB)
-  MinSize: 1
-  # 是否启用 HTTPS 压缩（注意：HTTPS 压缩可能存在 BREACH 攻击风险）
-  EnableForHttps: true
-  # 需要压缩的 MIME 类型列表
-  MimeTypes:
-    # 文本类型
-    - text/plain
-    - text/html
-    - text/css
-    - text/xml
-    - text/javascript
-    - text/octet
-    # 应用类型
-    - application/json
-    - application/javascript
-    - application/xml
-    - application/xhtml+xml
-    - application/rss+xml
-    - application/atom+xml
-    # 字体类型
-    - font/woff
-    - font/woff2
-    - application/font-woff
-    - application/font-woff2
-    # 图像类型（SVG）
-    - image/svg+xml
-    # 其他
-    - application/x-javascript
-    - application/x-font-ttf
-    - application/vnd.ms-fontobject
-
-# =============== 访问控制配置 ===============
-# 整合 IP 访问控制、地理位置访问控制和连接限制
-# 白名单 IP 直接放行，不进行 GeoIp 检查
-# 每个子模块（IpControl、GeoControl、ConnectionLimit）都有独立的 Enabled 开关
-AccessControl:
-  # 拒绝访问时返回的 HTTP 状态码
-  RejectStatusCode: 403
-  # 拒绝访问时返回的消息
-  # 支持占位符: {ClientIp}, {Path}, {Method}, {Host}, {Time}, {Country}, {Region}, {City}, {Isp}
-  RejectMessage: "Access Denied: {ClientIp}"
-
-  # 全局 IP 白名单，支持 CIDR 格式
-  # 白名单中的 IP 直接放行，不受任何访问控制限制（包括 IpControl、GeoControl）
-  Whitelist:
-    # - 127.0.0.1
-    # - 10.0.0.0/8           # 10.x.x.x 内网
-    # - 172.16.0.0/12        # 172.16.x.x - 172.31.x.x 内网
-    # - 192.168.0.0/16       # 192.168.x.x 内网
-
-  # =============== IP 黑名单访问控制配置 ===============
-  IpControl:
-    # 是否启用 IP 黑名单访问控制
-    Enabled: true
-    # IP 黑名单，支持 CIDR 格式
-    # 黑名单中的 IP 将被拒绝访问
-    Blacklist:
-      # - 127.0.0.0/8
-      # - 1.2.3.4            # 单个 IP
-      # - 1.2.3.0/24         # 1.2.3.0 - 1.2.3.255 整个网段
-      # - 203.0.113.0/24     # 示例网段
-    # 基于路径的 IP 访问规则
-    PathRules:
-      # /admin/* 路径只允许内网访问
-      /admin/*:
-        Whitelist:
-          - 127.0.0.1
-          - 192.168.0.0/16
-        Blacklist: []
-      # /api/internal/* 路径拒绝外网访问
-      # /api/internal/*:
-      #   Whitelist:
-      #     - 10.0.0.0/8
-      #   Blacklist: []
-
-  # =============== 地理位置访问控制配置 ===============
-  # 基于 IP2Region 实现高性能 IP 地理位置查询
-  # 数据库下载: https://github.com/lionsoul2014/ip2region/tree/master/data
-  GeoControl:
-    # 是否启用地理位置访问控制
-    Enabled: True
-    # IP2Region 数据库文件路径（xdb 格式）
-    DatabasePath: "datas/ip2region.xdb"
-    # 访问控制模式: Allow(只允许列表中的国家) 或 Deny(禁止列表中的国家)
-    Mode: Deny
-    # 拒绝访问时返回的消息（覆盖全局配置）
-    # 支持占位符: {ClientIp}, {Country}, {Region}, {City}, {Isp}
-    RejectMessage: "Access denied from your region: {Country}"
-    # 允许访问的国家/地区列表（当 Mode 为 Allow 时生效）
-    # 支持: 国家名称、省份、城市
-    AllowCountries:
-      # - 中国
-      # - 美国
-      # - 日本
-    # 禁止访问的国家/地区列表（当 Mode 为 Deny 时生效）
-    DenyCountries:
-      - 中国
-      # - 朝鲜
-      # - 伊朗
-    # 基于路径的地理位置规则
-    PathRules:
-      # 示例: /admin/* 只允许中国访问
-      # /admin/*:
-      #   Whitelist:
-      #     - 中国
-      #   Blacklist: []
-      # 示例: /api/internal/* 禁止海外访问
-      # /api/internal/*:
-      #   Whitelist:
-      #     - 中国
-      #   Blacklist: []
-
-  # =============== 连接限制配置 ===============
-  ConnectionLimit:
-    # 是否启用连接限制
-    Enabled: false
-    # 每个客户端 IP 的最大并发连接数，0 表示不限制
-    MaxConnectionsPerIp: 100
-    # 每个后端服务器的最大并发连接数，0 表示不限制
-    MaxConnectionsPerDestination: 1000
-    # 全局最大并发连接数，0 表示不限制
-    MaxTotalConnections: 10000
-    # 超过连接限制时返回的 HTTP 状态码
-    RejectStatusCode: 503
-    # 超过连接限制时返回的消息
-    # 支持占位符: {ClientIp}, {Path}, {Method}, {Host}, {Time}
-    RejectMessage: "Too Many Connections: {ClientIp}"
-    # 基于路径的连接限制
-    # Key 为路径（支持通配符），Value 为最大连接数
-    PathLimits:
-      /api/heavy/*: 10
-      /download/*: 50
-
-SpeedLimit:
-  Limits:
-    # Fixed 固定窗口
-    # Sliding 滑动窗口
-    # Token 令牌桶
-    # Concurrency 并发限定
-    # https://learn.microsoft.com/zh-cn/aspnet/core/performance/rate-limit?view=aspnetcore-9.0
-    Global:
-      Name: Fixed
-      PermitLimit: 20
-      Window: "00:00:05"
-      QueueOrder: 0
-      QueueLimit: 10
-    Fixed:
-      Name: Fixed
-      PermitLimit: 20
-      Window: "00:00:05"
-      QueueOrder: 0
-      QueueLimit: 10
-    Sliding:
-      Name: Sliding
-      PermitLimit: 20
-      Window: "00:00:05"
-      SegmentsPerWindow: 10
-      QueueOrder: 0
-      QueueLimit: 10
-    Token:
-      Name: Token
-      PermitLimit: 20
-      ReplenishmentPeriod: "00:00:05"
-      TokensPerPeriod: 10
-      QueueOrder: 0
-      QueueLimit: 10
-    Concurrency:
-      Name: Concurrency
-      PermitLimit: 1
-      QueueOrder: 0
-      QueueLimit: 0
-  Default: Global
-  Throttled:
-    # 全局限速, 以下速度均为 K/s
-    Global: 0
-    Everys:
-      /api/*: 100
-      /file/*: 10
-    IpEverys:
-      127.0.0.1: 300
-
-FileProvider:
-  Everys:
-    127.0.0.1#/file:
-      BasePath: E:/caishen
-      MaxFileSize: 1024 #单位K
-      TryFiles:
-        - $path
-        - $path/
-        - caishen13.cn/$path
-  RemoveExtensions:
-    -
-      ".css1"
-  MimeExtensions:
-    ".png": "application/octet-stream"
+      Port: 5006
+      IsHttps: false
 ReverseProxy:
   Routes:
-    routetest:
-      ClusterId: cluster2
+    fileserver_1:
+      ClusterId: cluster1
       Match:
-        Path: /respond/{**catch-all}
-      DirectResponse:
-        StatusCode: 200
-        Content: "hello world"
-        ContentType: "text/plain"
-    # route1:
-    #   ClusterId: cluster1
-    #   Match:
-    #     Path: 'test1/{**catch-all}'
-    #   Transforms:
-    #     # Forwarded:proto=http;host="127.0.0.1:5002";for=192.168.1.117;by=_1ecb8ezFf
-    #     # -
-    #     #   Forwarded: by,for,host,proto
-    #     #   ForFormat: ip
-    #     #   ByFormat: Random
-    #     #   Action: Append
-    #     # 自动添加格式
-    #     # -
-    #     #   X-Forwarded: Set
-    #     #   For: Append
-    #     #   HeaderPrefix: X-Forwarded-
-    #     # -
-    #     #   RequestHeader: X-Forwarded-For
-    #     #   Append: '{RemoteIpAddress}'
-    # route2:
-    #   ClusterId: cluster2
-    #   Match:
-    #     Path: '/aaa/{**catch-all}'
-    #   Metadata:
-    #     Port: 5002
-    #     Type: HTTP
-    # route3:
-    #   ClusterId: cluster2
-    #   Match:
-    #     Path: 'file/{**file-all}'
-    #   Metadata:
-    #     Port: 5002
-    #     Type: HTTP
-    #     RateLimiter: Concurrency
-    # route4:
-    #   ClusterId: cluster2
-    #   Match:
-    #     Path: 'file/{**file-all}'
-    #   Metadata:
-    #     Port: 5003
-    #     Type: HTTP
-    #     RateLimiter: Concurrency
+        Path: "/static/{**file-all}"
+        Hosts:
+          - "localhost:5003"
+          - "localhost:5004"
+          - "0.0.0.0:5005"
+          - "example.com:5006"
+      Order: 10700
+    simpleres_1:
+      ClusterId: cluster1
+      Match:
+        Path: /health
+        Hosts:
+          - "localhost:5003"
+          - "localhost:5004"
+          - "0.0.0.0:5005"
+          - "example.com:5006"
+        Methods:
+          - POST
+      Order: 800
+    route1:
+      ClusterId: cluster1
+      LoadBalancingPolicy: WeightedRoundRobin
+      Match:
+        Path: "/{**catch-all}"
+        Hosts:
+          - "localhost:5003"
+          - "localhost:5004"
+          - "0.0.0.0:5005"
+          - "example.com:5006"
+      Order: 10800
   Clusters:
     cluster1:
-      # =============== HTTP客户端/连接池配置 ===============
-      # YARP 使用 HttpClient 连接池管理后端连接
-      HttpClient:
-        # 每个后端服务器的最大连接数（默认200）
-        # 建议根据后端服务器吞吐能力设置在100-500之间
-        MaxConnectionsPerServer: 200
-        # 请求超时时间（默认100秒，建议30秒）
-        # RequestTimeout: '00:00:30'
-        # SSL协议版本
-        # SslProtocols: 'Tls12, Tls13'
-        # 是否允许不受信任的SSL证书（生产环境应为false）
-        # DangerousAcceptAnyServerCertificate: false
-      
-      # =============== 负载均衡策略配置 ===============
-      # 支持的负载均衡策略:
-      #   RoundRobin        - 轮询 (默认): 按顺序分发请求
-      #   Random            - 随机: 随机选择服务器
-      #   LeastRequests     - 最少连接: 将请求发给当前连接数最少的服务器
-      #   PowerOfTwoChoices - 二选一: 随机选两个，取负载低的那个
-      #   First             - 总是第一个: 始终选择第一个可用的目标
-      #   ---------- 自定义策略 ----------
-      #   WeightedRoundRobin     - 加权轮询: 根据服务器权重分配请求
-      #   WeightedLeastConnections - 加权最少连接: 考虑权重的连接数最少算法
-      #   IpHash                 - IP哈希: 基于客户端IP分配，确保同一用户访问同一服务器
-      #   GenericHash            - 通用哈希: 基于自定义变量（如URL、参数）进行哈希
-      #   WeightedRandom         - 加权随机: 根据权重随机选择服务器
-      #   ConsistentHash         - 一致性哈希: 使用一致性哈希环，节点变化时最小化请求迁移
       LoadBalancingPolicy: WeightedRoundRobin
-      HealthCheck:
-        Active:
-          Enabled: true
-          Interval: '00:00:10'
-          Timeout: '00:00:10'
-          Policy: LyxActiveHealth
-          Path: /api/health
-          Query: aa=bb
-      Metadata:
-        # 连续失败两次则标记不健康, 超过次数则清除成功标记, 并标为不健康
-        LyxActiveHealth.Fails: 2
-        # 连续成功两次则标记健康, 超过次数则清除失败标记, 并标为不健康
-        LyxActiveHealth.Passes: 2
-        # 请求方法, 默认GET, 如果为POST将会取LyxActiveHealth.Body做为请求内容
-        LyxActiveHealth.Method: GET
-        # 如果可转化成JSON则自动用JSON格式请求
-        # 如果不行则用application/x-www-form-urlencoded请求
-        LyxActiveHealth.Body: '{"aa": "bb"}'
-        # 用逗号隔开2xx则表示2开头的都行, 可以指定编码
-        LyxActiveHealth.AvalidCode: 2xx,3xx,4xx
-        # 默认包含:Contains, 全部匹配Match, 
-        # JSON验证则为JSON,将会将内容转成JSON进行匹配, 表示包含
-        # JSONM则表示完全匹配
-        LyxActiveHealth.ContentCheck: "Match"
-        LyxActiveHealth.AvalidContent: "WebSocket"
-        LyxActiveHealth.AvalidHeaders: Transfer-Encoding=chunked
-        # =============== GenericHash/ConsistentHash 哈希键配置 ===============
-        # 支持的变量:
-        #   {Path}        - 请求路径
-        #   {Query}       - 完整查询字符串
-        #   {Query.xxx}   - 指定查询参数
-        #   {Header.xxx}  - 指定请求头
-        #   {Cookie.xxx}  - 指定Cookie
-        #   {IP}          - 客户端IP
-        # 示例: HashKey: "{IP}"                    # 按IP分配 (默认)
-        # 示例: HashKey: "{Path}"                  # 按路径分配
-        # 示例: HashKey: "{Query.user_id}"         # 按用户ID参数分配
-        # 示例: HashKey: "{Header.Authorization}"  # 按认证头分配
-        # 示例: HashKey: "{Cookie.session_id}"     # 按会话ID分配
-        # HashKey: "{IP}"
-
       Destinations:
-        destination1:
-          Address: 'http://127.0.0.1:8080/'
+        dest1:
+          Address: "http://httpbin.org"
           Metadata:
-            # 权重配置: 用于 WeightedRoundRobin, WeightedLeastConnections, WeightedRandom
-            # 权重越高，被分配的请求越多
-            Weight: "3"
-            # 虚拟节点数: 用于 ConsistentHash, 默认150
-            # VirtualNodes: "150"
-        destination2:
-          Address: 'https://httpbin.org/ip/'
+            Weight: "99"
+        dest2:
+          Address: "https://httpbin.org"
           Metadata:
             Weight: "1"
-    cluster2:
-      # 使用 IP 哈希策略
-      LoadBalancingPolicy: IpHash
+    cluster_unuse:
       Destinations:
-        destination1:
-          Address: 'http://127.0.0.1:8080/'
-    cluster3:
-      # 使用 IP 哈希策略
-      LoadBalancingPolicy: IpHash
-      Destinations:
-        destination1:
-          # Address: 'http://127.0.0.1:8080/'
-          Address: 'https://0.0.0.0'
+        dest1:
+          Address: "http://0.0.0.0"
+FileServer:
+  Items:
+    fileserver_1:
+      Prefix: /static/
+      Browse: true
+      BasePath: ./wwwroot
+SimpleRes:
+  Items:
+    simpleres_1:
+      Body: OK
+      ContentType: text/plain
+      StatusCode: 200
+      Charset: utf-8

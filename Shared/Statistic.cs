@@ -157,6 +157,12 @@ public class ApiTimingStatistic : ICloneable
     public string Method { get; set; } = "";
 
     /// <summary>
+    /// 后端地址（如 http://backend1:8080）
+    /// 用于区分不同后端的稳定性
+    /// </summary>
+    public string Backend { get; set; } = "";
+
+    /// <summary>
     /// 请求总次数
     /// </summary>
     public int RequestCount { get; set; } = 0;
@@ -246,6 +252,7 @@ public class ApiTimingStatistic : ICloneable
         {
             Path = Path,
             Method = Method,
+            Backend = Backend,
             RequestCount = RequestCount,
             TotalTime = TotalTime,
             BackendTime = BackendTime,

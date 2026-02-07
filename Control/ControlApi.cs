@@ -94,6 +94,7 @@ public static class ControlApi
                     {
                         path = item.Path,
                         method = item.Method,
+                        backend = item.Backend,
                         requestCount = item.RequestCount,
                         avgTotalTime = Math.Round(item.AvgTotalTime, 2),
                         avgBackendTime = Math.Round(item.AvgBackendTime, 2),
@@ -105,7 +106,13 @@ public static class ControlApi
                         totalTime = item.TotalTime,
                         backendTime = item.BackendTime,
                         statusCodeCounts = item.StatusCodeCounts,
-                        lastRequestTime = item.LastRequestTime
+                        lastRequestTime = item.LastRequestTime,
+                        // 计算错误率（4xx + 5xx）
+                        errorRate = item.RequestCount > 0 
+                            ? Math.Round(item.StatusCodeCounts
+                                .Where(kv => kv.Key >= 400)
+                                .Sum(kv => kv.Value) * 100.0 / item.RequestCount, 2)
+                            : 0
                     })
                     .ToList();
                 
@@ -120,10 +127,35 @@ public static class ControlApi
                     : 0;
                 var avgGatewayTime = avgTotalTime - avgBackendTime;
                 
+                // 按后端地址统计
+                var backendStats = data
+                    .Where(x => !string.IsNullOrEmpty(x.backend))
+                    .GroupBy(x => x.backend)
+                    .Select(g => new
+                    {
+                        backend = g.Key,
+                        apiCount = g.Count(),
+                        totalRequests = g.Sum(x => x.requestCount),
+                        avgTotalTime = g.Sum(x => x.requestCount) > 0 
+                            ? Math.Round(g.Sum(x => x.totalTime) / (double)g.Sum(x => x.requestCount), 2) 
+                            : 0,
+                        avgBackendTime = g.Sum(x => x.requestCount) > 0 
+                            ? Math.Round(g.Sum(x => x.backendTime) / (double)g.Sum(x => x.requestCount), 2) 
+                            : 0,
+                        errorCount = g.Sum(x => x.statusCodeCounts.Where(kv => kv.Key >= 400).Sum(kv => kv.Value)),
+                        errorRate = g.Sum(x => x.requestCount) > 0 
+                            ? Math.Round(g.Sum(x => x.statusCodeCounts.Where(kv => kv.Key >= 400).Sum(kv => kv.Value)) * 100.0 / g.Sum(x => x.requestCount), 2) 
+                            : 0
+                    })
+                    .OrderByDescending(x => x.errorRate)
+                    .ThenByDescending(x => x.avgBackendTime)
+                    .ToList();
+                
                 return Results.Json(new
                 {
                     success = true,
                     data,
+                    backendStats,
                     summary = new
                     {
                         totalApis,

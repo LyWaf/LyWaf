@@ -78,10 +78,20 @@ public class StatisticUtil
             backendTime = bt;
         }
         
-        var key = $"{method}:{path}";
+        // 获取后端地址
+        string backend = "";
+        if (context.Items.TryGetValue("ProxyDestUrl", out var destUrlObj) && destUrlObj is string destUrl)
+        {
+            backend = destUrl;
+        }
+        
+        // Key 包含后端地址，区分不同后端的统计
+        var key = string.IsNullOrEmpty(backend) 
+            ? $"{method}:{path}" 
+            : $"{method}:{path}@{backend}";
         
         SharedData.ApiTimings.DoLockKeyFunc(key, 
-            (k) => new ApiTimingStatistic { Path = path, Method = method },
+            (k) => new ApiTimingStatistic { Path = path, Method = method, Backend = backend },
             (val) =>
             {
                 val.RecordRequest(totalTime, backendTime, statusCode);

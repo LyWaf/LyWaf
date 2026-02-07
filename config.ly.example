@@ -163,10 +163,27 @@ localhost:4000 {
     proxy http://127.0.0.1:4000
 }
 
+# proxy 支持多种格式
+localhost:4001 {
+    # 方式1: 空格分隔的字符串（多个后端）
+    proxy "http://127.0.0.1:4001 https://127.0.0.1:4002"
+}
+
+localhost:4002 {
+    # 方式2: 数组格式（推荐，清晰易读）
+    proxy = ["http://127.0.0.1:4001", "https://127.0.0.1:4002"]
+}
+
+localhost:4003 {
+    # 方式3: 单个后端的数组格式
+    proxy = ["https://api.example.com"]
+}
+
 # proxy 也支持完整配置格式
 localhost:5000 {
     proxy {
-        to = "http://127.0.0.1:5001 http://127.0.0.1:5002"
+        # to 支持字符串或数组格式
+        to = ["http://127.0.0.1:5001", "http://127.0.0.1:5002"]
         lb_policy = "RoundRobin"
         timeout = "00:00:30"
         max_connections = 100
