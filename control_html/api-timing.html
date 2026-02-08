@@ -56,6 +56,17 @@
             display: flex;
             align-items: center;
             gap: 12px;
+            transition: background 0.2s;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        
+        .sidebar-header:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        .sidebar-header:hover .sidebar-title {
+            color: var(--accent);
         }
         
         .sidebar-logo {
@@ -104,6 +115,8 @@
         }
         
         .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; color: var(--text-secondary); }
+        .breadcrumb a { color: var(--text-secondary); text-decoration: none; transition: color 0.2s; cursor: pointer; }
+        .breadcrumb a:hover { color: var(--accent); }
         .breadcrumb-sep { color: var(--text-muted); }
         .breadcrumb-current { color: var(--text-primary); font-weight: 500; }
         
@@ -323,10 +336,10 @@
     <div class="layout">
         <!-- 左侧边栏 -->
         <aside class="sidebar">
-            <div class="sidebar-header">
+            <a href="/" class="sidebar-header" style="text-decoration: none;">
                 <div class="sidebar-logo">W</div>
                 <span class="sidebar-title">LyWaf</span>
-            </div>
+            </a>
             <nav class="sidebar-nav">
                 <a href="/" class="nav-item">
                     <span class="nav-icon">📊</span>
@@ -370,7 +383,7 @@
         <main class="main-content">
             <header class="topbar">
                 <div class="breadcrumb">
-                    <span>LyWaf</span>
+                    <a href="/">LyWaf</a>
                     <span class="breadcrumb-sep">›</span>
                     <span class="breadcrumb-current">API 耗时统计</span>
                 </div>
