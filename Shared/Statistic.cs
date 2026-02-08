@@ -141,6 +141,225 @@ public class ReqestShortMsg(HttpContext context, string path, long costTime)
 }
 
 /// <summary>
+/// 流量统计类
+/// 记录请求次数、独立IP、拦截次数、错误统计等
+/// </summary>
+public class TrafficStatistic
+{
+    private readonly object _lock = new();
+    
+    /// <summary>
+    /// 总请求次数
+    /// </summary>
+    public long TotalRequests { get; private set; } = 0;
+    
+    /// <summary>
+    /// 页面访问次数 (PV) - 非静态资源请求
+    /// </summary>
+    public long PageViews { get; private set; } = 0;
+    
+    /// <summary>
+    /// 独立访客数 (UV) - 基于Cookie或其他标识
+    /// </summary>
+    public HashSet<string> UniqueVisitors { get; } = [];
+    
+    /// <summary>
+    /// 独立IP数
+    /// </summary>
+    public HashSet<string> UniqueIps { get; } = [];
+    
+    /// <summary>
+    /// 拦截次数 (WAF/CC/IP黑名单等)
+    /// </summary>
+    public long InterceptCount { get; private set; } = 0;
+    
+    /// <summary>
+    /// 攻击IP集合
+    /// </summary>
+    public HashSet<string> AttackIps { get; } = [];
+    
+    /// <summary>
+    /// 4xx 错误数
+    /// </summary>
+    public long Error4xxCount { get; private set; } = 0;
+    
+    /// <summary>
+    /// 4xx 拦截数 (WAF主动拦截导致的4xx)
+    /// </summary>
+    public long Intercept4xxCount { get; private set; } = 0;
+    
+    /// <summary>
+    /// 5xx 错误数
+    /// </summary>
+    public long Error5xxCount { get; private set; } = 0;
+    
+    /// <summary>
+    /// 统计开始时间
+    /// </summary>
+    public DateTime StartTime { get; private set; } = DateTime.UtcNow;
+    
+    /// <summary>
+    /// 记录一次请求
+    /// </summary>
+    /// <param name="clientIp">客户端IP</param>
+    /// <param name="statusCode">响应状态码</param>
+    /// <param name="isPageView">是否为页面访问</param>
+    /// <param name="visitorId">访客标识(可选)</param>
+    /// <param name="isIntercept">是否为主动拦截</param>
+    /// <param name="isAttack">是否为攻击请求</param>
+    public void RecordRequest(string clientIp, int statusCode, bool isPageView = false, 
+        string? visitorId = null, bool isIntercept = false, bool isAttack = false)
+    {
+        lock (_lock)
+        {
+            TotalRequests++;
+            
+            if (isPageView)
+                PageViews++;
+            
+            UniqueIps.Add(clientIp);
+            
+            if (!string.IsNullOrEmpty(visitorId))
+                UniqueVisitors.Add(visitorId);
+            
+            if (isIntercept)
+            {
+                InterceptCount++;
+                if (statusCode >= 400 && statusCode < 500)
+                    Intercept4xxCount++;
+            }
+            
+            if (isAttack)
+                AttackIps.Add(clientIp);
+            
+            if (statusCode >= 400 && statusCode < 500)
+                Error4xxCount++;
+            else if (statusCode >= 500)
+                Error5xxCount++;
+        }
+    }
+    
+    /// <summary>
+    /// 记录一次拦截
+    /// </summary>
+    public void RecordIntercept(string clientIp, int statusCode, bool isAttack = false)
+    {
+        lock (_lock)
+        {
+            TotalRequests++;
+            InterceptCount++;
+            UniqueIps.Add(clientIp);
+            
+            if (isAttack)
+                AttackIps.Add(clientIp);
+            
+            if (statusCode >= 400 && statusCode < 500)
+            {
+                Error4xxCount++;
+                Intercept4xxCount++;
+            }
+            else if (statusCode >= 500)
+            {
+                Error5xxCount++;
+            }
+        }
+    }
+    
+    /// <summary>
+    /// 4xx 错误率
+    /// </summary>
+    public double Error4xxRate => TotalRequests > 0 ? (double)Error4xxCount / TotalRequests * 100 : 0;
+    
+    /// <summary>
+    /// 4xx 拦截率 (拦截数占总4xx的比率)
+    /// </summary>
+    public double Intercept4xxRate => Error4xxCount > 0 ? (double)Intercept4xxCount / Error4xxCount * 100 : 0;
+    
+    /// <summary>
+    /// 5xx 错误率
+    /// </summary>
+    public double Error5xxRate => TotalRequests > 0 ? (double)Error5xxCount / TotalRequests * 100 : 0;
+    
+    /// <summary>
+    /// 重置统计
+    /// </summary>
+    public void Reset()
+    {
+        lock (_lock)
+        {
+            TotalRequests = 0;
+            PageViews = 0;
+            UniqueVisitors.Clear();
+            UniqueIps.Clear();
+            InterceptCount = 0;
+            AttackIps.Clear();
+            Error4xxCount = 0;
+            Intercept4xxCount = 0;
+            Error5xxCount = 0;
+            StartTime = DateTime.UtcNow;
+        }
+    }
+    
+    /// <summary>
+    /// 记录攻击IP（仅添加到攻击IP集合，不增加请求计数）
+    /// 用于 DoFbIp 等封禁操作时记录攻击来源
+    /// </summary>
+    public void RecordAttackIp(string clientIp)
+    {
+        lock (_lock)
+        {
+            AttackIps.Add(clientIp);
+        }
+    }
+    
+    /// <summary>
+    /// 获取快照（线程安全）
+    /// </summary>
+    public TrafficStatisticSnapshot GetSnapshot()
+    {
+        lock (_lock)
+        {
+            return new TrafficStatisticSnapshot
+            {
+                TotalRequests = TotalRequests,
+                PageViews = PageViews,
+                UniqueVisitors = UniqueVisitors.Count,
+                UniqueIps = UniqueIps.Count,
+                InterceptCount = InterceptCount,
+                AttackIps = AttackIps.Count,
+                Error4xxCount = Error4xxCount,
+                Intercept4xxCount = Intercept4xxCount,
+                Error5xxCount = Error5xxCount,
+                Error4xxRate = Error4xxRate,
+                Intercept4xxRate = Intercept4xxRate,
+                Error5xxRate = Error5xxRate,
+                StartTime = StartTime
+            };
+        }
+    }
+}
+
+/// <summary>
+/// 流量统计快照（不可变）
+/// </summary>
+public class TrafficStatisticSnapshot
+{
+    public long TotalRequests { get; init; }
+    public long PageViews { get; init; }
+    public int UniqueVisitors { get; init; }
+    public int UniqueIps { get; init; }
+    public long InterceptCount { get; init; }
+    public int AttackIps { get; init; }
+    public long Error4xxCount { get; init; }
+    public long Intercept4xxCount { get; init; }
+    public long Error5xxCount { get; init; }
+    public double Error4xxRate { get; init; }
+    public double Intercept4xxRate { get; init; }
+    public double Error5xxRate { get; init; }
+    public DateTime StartTime { get; init; }
+}
+
+/// <summary>
 /// API 耗时详细统计
 /// 包含总耗时（客户端→网关→客户端）和后端耗时（网关→后端→网关）
 /// </summary>

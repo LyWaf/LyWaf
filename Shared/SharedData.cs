@@ -133,4 +133,10 @@ public static class SharedData
     public static readonly ExpiringSafeDictionary<string, ApiTimingStatistic> ApiTimings =
                             new(defaultExpiration: TimeSpan.FromMinutes(60),
                                 cleanupInterval: TimeSpan.FromMinutes(30));
+
+    /// <summary>
+    /// 全局流量统计
+    /// 用途: 记录总请求数、独立IP、拦截次数、错误统计等
+    /// </summary>
+    public static readonly TrafficStatistic Traffic = new();
 }

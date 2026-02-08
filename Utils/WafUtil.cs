@@ -25,7 +25,7 @@ public class WafUtil
         return StringUtil.FormatTemplate(message, context, extraValues);
     }
 
-    public static void DoFbIp(string ip, string reason, TimeSpan? timeout = null)
+    public static void DoFbIp(string ip, string reason, TimeSpan? timeout = null, bool isAttack = true)
     {
         if (timeout == null)
         {
@@ -40,6 +40,12 @@ public class WafUtil
             }
         }
         SharedData.ClientFb.AddOrUpdate(ip, reason, timeout);
+        
+        // 记录攻击IP（封禁的IP视为攻击来源）
+        if (isAttack)
+        {
+            SharedData.Traffic.RecordAttackIp(ip);
+        }
     }
 
     public static string? GetFbReason(string ip)
@@ -51,8 +57,8 @@ public class WafUtil
     /// <summary>
     /// 写入 403 Forbidden 错误响应
     /// </summary>
-    public static Task WriteFbOutput(HttpContext context, Dictionary<string, string?>? extraValues = null)
-        => WriteErrorOutput(context, 403, extraValues);
+    public static Task WriteFbOutput(HttpContext context, Dictionary<string, string?>? extraValues = null, bool isAttack = false)
+        => WriteErrorOutput(context, 403, extraValues, isIntercept: true, isAttack: isAttack);
 
     /// <summary>
     /// 写入指定状态码的错误响应（统一入口）
@@ -60,8 +66,17 @@ public class WafUtil
     /// <param name="context">HTTP 上下文</param>
     /// <param name="statusCode">HTTP 状态码</param>
     /// <param name="extraValues">额外的占位符值（支持 reason 等任意参数）</param>
-    public static async Task WriteErrorOutput(HttpContext context, int statusCode, Dictionary<string, string?>? extraValues = null)
+    /// <param name="isIntercept">是否为主动拦截（用于流量统计）</param>
+    /// <param name="isAttack">是否为攻击请求（用于流量统计）</param>
+    public static async Task WriteErrorOutput(HttpContext context, int statusCode, 
+        Dictionary<string, string?>? extraValues = null, bool isIntercept = true, bool isAttack = false)
     {
+        // 记录拦截统计
+        if (isIntercept)
+        {
+            StatisticUtil.RecordIntercept(context, statusCode, isAttack);
+        }
+        
         var templateService = ServiceLocator.GetService<IErrorTemplateService>();
         if (templateService != null)
         {

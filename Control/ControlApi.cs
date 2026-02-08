@@ -186,6 +186,20 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // 重置流量统计数据
+        app.MapPost("/api/traffic/reset", (HttpContext ctx) =>
+        {
+            try
+            {
+                SharedData.Traffic.Reset();
+                return Results.Json(new { success = true, message = "流量统计数据已重置" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = ex.Message });
+            }
+        }).RequireHost($"*:{controlPort}");
+
         app.MapGet("/api/status", (HttpContext ctx) =>
         {
             return Results.Json(new

@@ -331,6 +331,153 @@
             from { transform: translateX(100%); opacity: 0; }
             to { transform: translateX(0); opacity: 1; }
         }
+        
+        /* 流量分析样式 */
+        .traffic-section {
+            background: linear-gradient(135deg, #1a1f2e 0%, #0f1419 100%);
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid var(--border);
+            margin-bottom: 20px;
+        }
+        
+        .traffic-tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 12px;
+        }
+        
+        .traffic-tab {
+            padding: 8px 16px;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 0.9rem;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        
+        .traffic-tab:hover {
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+        
+        .traffic-tab.active {
+            background: var(--accent);
+            color: white;
+        }
+        
+        .traffic-row {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        
+        .traffic-row.error-row {
+            margin-bottom: 0;
+        }
+        
+        @media (max-width: 1200px) {
+            .traffic-row {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .traffic-row {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+        
+        .traffic-card {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            padding: 16px 20px;
+            transition: all 0.3s;
+        }
+        
+        .traffic-card:hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+        
+        .traffic-card.small {
+            padding: 12px 16px;
+        }
+        
+        .traffic-label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .traffic-icon {
+            font-size: 0.75rem;
+            opacity: 0.7;
+        }
+        
+        .traffic-icon.ip {
+            background: rgba(59, 130, 246, 0.3);
+            color: var(--accent-light);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: bold;
+        }
+        
+        .traffic-icon.shield {
+            color: var(--accent-light);
+        }
+        
+        .traffic-icon.danger {
+            background: rgba(239, 68, 68, 0.3);
+            color: var(--danger);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: bold;
+        }
+        
+        .traffic-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #d4a574;
+        }
+        
+        .traffic-card.small .traffic-value {
+            font-size: 1.4rem;
+        }
+        
+        .traffic-value.accent {
+            color: var(--accent-light);
+        }
+        
+        .traffic-value.warn {
+            color: #e74c3c;
+        }
+        
+        .traffic-value.danger {
+            color: var(--danger);
+        }
+        
+        .traffic-warn, .traffic-danger {
+            color: #e74c3c;
+            font-size: 0.85rem;
+        }
+        
+        .traffic-info {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+        }
     </style>
 </head>
 <body>
@@ -352,6 +499,21 @@
     </header>
     
     <div class="container">
+        <!-- 流量分析 -->
+        <div class="traffic-section">
+            <div class="traffic-tabs">
+                <button class="traffic-tab active">流量分析</button>
+                <button class="traffic-tab">安全态势</button>
+                <button class="traffic-tab">防护报告 <span style="color: var(--success);">✓</span></button>
+                <button class="traffic-tab">防护大屏 <span style="color: var(--success);">✓</span></button>
+            </div>
+            {{TRAFFIC_ANALYSIS_CONTENT}}
+            <div class="traffic-info">
+                统计开始时间: {{TRAFFIC_START_TIME}} | 
+                <button class="btn btn-sm" style="padding: 4px 12px; font-size: 0.75rem;" onclick="resetTrafficStats()">重置统计</button>
+            </div>
+        </div>
+        
         <!-- 概览卡片 -->
         <div class="grid">
             <div class="card">

@@ -61,7 +61,8 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             var reason = WafUtil.GetFbReason(clientIp);
             if (reason != null)
             {
-                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason });
+                // 被封禁的 IP 访问，不标记为攻击（可能是 CC 等原因被封禁）
+                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason }, isAttack: false);
                 return;
             }
             if (await WhitePathCheck(context))
@@ -71,12 +72,14 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             }
             if ((reason = await CheckArgsAttck(context)) != null)
             {
-                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason });
+                // WAF Args 攻击检测，标记为攻击
+                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason }, isAttack: true);
                 return;
             }
             if ((reason = await CheckPostAttck(context)) != null)
             {
-                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason });
+                // WAF Post 攻击检测，标记为攻击
+                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason }, isAttack: true);
                 return;
             }
             await _next(context);

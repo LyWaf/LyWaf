@@ -428,6 +428,23 @@ function clearBlockedIps() {
         .fail(handleApiError);
 }
 
+// ==================== 流量统计管理 ====================
+
+function resetTrafficStats() {
+    if (!confirm('确定要重置所有流量统计数据吗？此操作不可恢复。')) return;
+    
+    callApi('POST', '/api/traffic/reset', {})
+        .done(function(res) {
+            if (res.success) {
+                showMessage('success', '流量统计已重置');
+                reloadAfterDelay();
+            } else {
+                showMessage('error', '重置失败: ' + res.message);
+            }
+        })
+        .fail(handleApiError);
+}
+
 // ==================== A/B 测试管理 ====================
 
 function toggleABTest(testId, currentEnabled) {

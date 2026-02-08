@@ -47,6 +47,12 @@ public class StatisticUtil
         var client_ip = RequestUtil.GetClientIp(context.Request);
         SharedData.ClientStas.DoLockKeyFunc(client_ip, (key) => new(), (val) => func(client_ip, val, updateLastAccess: true));
         
+        // 记录流量统计
+        var statusCode = context.Response.StatusCode;
+        var isPageView = IsPageView(context.Request.Path);
+        var visitorId = GetVisitorId(context);
+        SharedData.Traffic.RecordRequest(client_ip, statusCode, isPageView, visitorId);
+        
         // 白名单, 不进行后续的分析统计
         if(statisticService.IsWhitePath(path)) {
             return;
@@ -104,5 +110,87 @@ public class StatisticUtil
             time = DateTime.UtcNow;
         }
         return (int)((time.Value - DateTime.UnixEpoch).TotalSeconds / period);
+    }
+    
+    /// <summary>
+    /// 记录拦截事件（WAF/CC/IP黑名单等）
+    /// </summary>
+    public static void RecordIntercept(HttpContext context, int statusCode, bool isAttack = false)
+    {
+        var clientIp = RequestUtil.GetClientIp(context.Request);
+        SharedData.Traffic.RecordIntercept(clientIp, statusCode, isAttack);
+    }
+    
+    /// <summary>
+    /// 记录攻击IP（用于标记检测到的攻击者）
+    /// </summary>
+    public static void RecordAttackIp(string clientIp)
+    {
+        SharedData.Traffic.RecordIntercept(clientIp, 403, isAttack: true);
+    }
+    
+    /// <summary>
+    /// 判断是否为页面访问（非静态资源）
+    /// </summary>
+    private static bool IsPageView(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return true;
+        
+        var lower = path.ToLowerInvariant();
+        // 排除静态资源
+        var staticExtensions = new[] { ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".woff", ".woff2", ".ttf", ".eot", ".map" };
+        return !staticExtensions.Any(ext => lower.EndsWith(ext));
+    }
+    
+    /// <summary>
+    /// 获取访客标识（基于Cookie或其他方式）
+    /// </summary>
+    private static string? GetVisitorId(HttpContext context)
+    {
+        // 常见的 Session/Visitor Cookie 名称
+        var sessionCookieNames = new[]
+        {
+            // LyWaf 自定义
+            "_lywaf_vid",
+            // ASP.NET
+            "ASP.NET_SessionId", ".AspNetCore.Session",
+            // PHP
+            "PHPSESSID",
+            // Java
+            "JSESSIONID",
+            // Python
+            "session", "sessionid",
+            // Node.js
+            "connect.sid",
+            // 通用
+            "sid", "session_id", "visitor_id", "vid",
+        };
+        
+        // 尝试从已知的 session cookie 中获取访客ID
+        foreach (var cookieName in sessionCookieNames)
+        {
+            if (context.Request.Cookies.TryGetValue(cookieName, out var value) && !string.IsNullOrEmpty(value))
+            {
+                return value;
+            }
+        }
+        
+        // 如果没有已知的 session cookie，尝试使用任意看起来像 session 的 cookie
+        foreach (var cookie in context.Request.Cookies)
+        {
+            var name = cookie.Key.ToLowerInvariant();
+            // 检查是否包含 session/sid/visitor 等关键词
+            if (name.Contains("session") || name.Contains("sid") || name.Contains("visitor") || name.Contains("token"))
+            {
+                if (!string.IsNullOrEmpty(cookie.Value) && cookie.Value.Length >= 8)
+                {
+                    return cookie.Value;
+                }
+            }
+        }
+        
+        // 如果没有任何可用的 cookie，返回 null（不计入 UV）
+        return null;
     }
 }
