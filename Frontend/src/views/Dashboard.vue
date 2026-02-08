@@ -9,7 +9,8 @@ import GeoAccess from '@/components/dashboard/GeoAccess.vue'
 import WafRules from '@/components/dashboard/WafRules.vue'
 import CcProtection from '@/components/dashboard/CcProtection.vue'
 import BlockedIps from '@/components/dashboard/BlockedIps.vue'
-import { featureApi, trafficApi } from '@/api'
+import RecentClients from '@/components/dashboard/RecentClients.vue'
+import { featureApi, trafficApi, dashboardApi } from '@/api'
 import { useToast } from '@/composables/useToast'
 import type { FeatureStatus, TrafficStats, SystemStatus } from '@/types'
 
@@ -33,6 +34,13 @@ const system = ref<SystemStatus>({
   processStartTime: '-',
 })
 
+// 最近访问的客户端
+const recentClients = ref<Array<{ ip: string; lastAccessTime: string }>>([])
+
+// 当前封禁的 IP
+const blockedIps = ref<Array<{ ip: string; reason: string; remainingSeconds?: number }>>([])
+
+
 // 自动刷新
 let refreshTimer: number | null = null
 
@@ -50,8 +58,35 @@ onUnmounted(() => {
 const loadData = async () => {
   loading.value = true
   try {
-    // 这里应该调用后端 API 获取数据
-    // 目前使用模拟数据
+    const data = await dashboardApi.getData()
+    if (data.success) {
+      // 更新系统状态
+      system.value = {
+        uptime: data.system.uptime,
+        memory: data.system.memory,
+        totalConnections: data.system.totalConnections,
+        blockedIpCount: data.system.blockedIpCount,
+        processStartTime: data.system.processStartTime,
+      }
+      
+      // 更新功能状态
+      features.value = {
+        ipControl: data.features.ipControl,
+        geoControl: data.features.geoControl,
+        wafArgs: data.features.wafArgs,
+        wafPost: data.features.wafPost,
+        ccProtection: data.features.ccProtection,
+      }
+      
+      // 更新流量统计
+      traffic.value = data.traffic
+      
+      // 更新最近访问的客户端
+      recentClients.value = data.recentClients || []
+      
+      // 更新封禁的 IP
+      blockedIps.value = data.blockedIps || []
+    }
   } catch (error) {
     console.error('加载数据失败:', error)
   } finally {
@@ -180,7 +215,10 @@ const resetTraffic = async () => {
     <!-- CC 防护 -->
     <CcProtection />
     
+    <!-- 最近访问 -->
+    <RecentClients :clients="recentClients" />
+    
     <!-- 封禁列表 -->
-    <BlockedIps />
+    <BlockedIps :initial-data="blockedIps" @refresh="loadData" />
   </div>
 </template>

@@ -17,7 +17,7 @@ const formatNumber = (num: number) => {
 }
 
 const formatRate = (rate: number) => {
-  return (rate * 100).toFixed(2) + '%'
+  return rate.toFixed(2) + '%'
 }
 
 const cards = [

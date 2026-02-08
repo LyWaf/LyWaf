@@ -1,13 +1,50 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import Section from '@/components/common/Section.vue'
 import { ipApi } from '@/api'
 import { useToast } from '@/composables/useToast'
-import type { IpInfo } from '@/types'
 
+interface BlockedIpInfo {
+  ip: string
+  reason: string
+  remainingSeconds?: number
+}
+
+interface Props {
+  initialData?: BlockedIpInfo[]
+}
+
+const props = defineProps<Props>()
 const { showSuccess, showError } = useToast()
 
-const blockedIps = ref<IpInfo[]>([])
+const blockedIps = ref<BlockedIpInfo[]>([])
+
+// 监听父组件传入的数据
+watch(() => props.initialData, (newData) => {
+  if (newData) {
+    blockedIps.value = newData
+  }
+}, { immediate: true })
+
+// 格式化剩余时间
+const formatRemainingTime = (seconds?: number) => {
+  if (seconds === undefined || seconds === null) return '永久'
+  if (seconds <= 0) return '已过期'
+  
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const secs = Math.floor(seconds % 60)
+  
+  if (days > 0) return `${days}天${hours}时`
+  if (hours > 0) return `${hours}时${minutes}分`
+  if (minutes > 0) return `${minutes}分${secs}秒`
+  return `${secs}秒`
+}
+
+const emit = defineEmits<{
+  (e: 'refresh'): void
+}>()
 
 const blockIp = async () => {
   const ip = prompt('请输入要封禁的 IP:')
@@ -23,9 +60,10 @@ const blockIp = async () => {
       blockedIps.value.push({
         ip,
         reason: reason || '手动封禁',
-        duration: duration ? `${duration}秒` : '永久',
+        remainingSeconds: duration || undefined,
       })
       showSuccess(`已封禁: ${ip}`)
+      emit('refresh')
     }
   } catch {
     showError('封禁失败')
@@ -40,6 +78,7 @@ const unblockIp = async (ip: string) => {
     if (res.success) {
       blockedIps.value = blockedIps.value.filter(i => i.ip !== ip)
       showSuccess(`已解封: ${ip}`)
+      emit('refresh')
     }
   } catch {
     showError('解封失败')
@@ -54,6 +93,7 @@ const clearAll = async () => {
     if (res.success) {
       blockedIps.value = []
       showSuccess('已清空封禁列表')
+      emit('refresh')
     }
   } catch {
     showError('清空失败')
@@ -85,9 +125,9 @@ const clearAll = async () => {
             <span class="text-gray-400 text-sm">原因</span>
             <div class="text-gray-300">{{ item.reason }}</div>
           </div>
-          <div v-if="item.duration">
+          <div>
             <span class="text-gray-400 text-sm">剩余时间</span>
-            <div class="text-yellow-400">{{ item.duration }}</div>
+            <div class="text-yellow-400">{{ formatRemainingTime(item.remainingSeconds) }}</div>
           </div>
         </div>
         <button 

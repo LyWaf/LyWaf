@@ -65,31 +65,35 @@ export const ipApi = {
   removeBlacklist: (ipOrCidr: string) =>
     api.post<ApiResponse>('/ac/blacklist/remove', { ipOrCidr }),
     
-  // 封禁管理
-  blockIp: (ip: string, reason?: string, duration?: number) =>
-    api.post<ApiResponse>('/ac/block', { ip, reason, duration }),
+  // 封禁管理 (duration 为 TimeSpan 格式，如 "00:10:00" 表示10分钟)
+  blockIp: (ip: string, reason?: string, durationSeconds?: number) =>
+    api.post<ApiResponse>('/blocked-ips/add', { 
+      ip, 
+      reason, 
+      duration: durationSeconds ? `00:${Math.floor(durationSeconds / 60).toString().padStart(2, '0')}:${(durationSeconds % 60).toString().padStart(2, '0')}` : undefined 
+    }),
     
   unblockIp: (ip: string) =>
-    api.post<ApiResponse>('/ac/unblock', { ip }),
+    api.post<ApiResponse>('/blocked-ips/remove', { ip }),
     
   clearBlockedIps: () =>
-    api.post<ApiResponse>('/ac/blocked/clear'),
+    api.post<ApiResponse>('/blocked-ips/clear'),
 }
 
 // ==================== 地理访问 API ====================
 
 export const geoApi = {
   addDenyCountry: (country: string) =>
-    api.post<ApiResponse>('/geo/deny-country/add', { country }),
+    api.post<ApiResponse>('/geo/deny-countries/add', { country }),
     
   removeDenyCountry: (country: string) =>
-    api.post<ApiResponse>('/geo/deny-country/remove', { country }),
+    api.post<ApiResponse>('/geo/deny-countries/remove', { country }),
     
   addDenyRegion: (region: string) =>
-    api.post<ApiResponse>('/geo/deny-region/add', { region }),
+    api.post<ApiResponse>('/geo/deny-regions/add', { region }),
     
   removeDenyRegion: (region: string) =>
-    api.post<ApiResponse>('/geo/deny-region/remove', { region }),
+    api.post<ApiResponse>('/geo/deny-regions/remove', { region }),
     
   addAllowCountry: (country: string) =>
     api.post<ApiResponse>('/geo/allow-countries/add', { country }),
@@ -98,10 +102,10 @@ export const geoApi = {
     api.post<ApiResponse>('/geo/allow-countries/remove', { country }),
     
   addAllowRegion: (region: string) =>
-    api.post<ApiResponse>('/geo/allow-region/add', { region }),
+    api.post<ApiResponse>('/geo/allow-regions/add', { region }),
     
   removeAllowRegion: (region: string) =>
-    api.post<ApiResponse>('/geo/allow-region/remove', { region }),
+    api.post<ApiResponse>('/geo/allow-regions/remove', { region }),
 }
 
 // ==================== WAF 规则 API ====================
@@ -124,10 +128,10 @@ export const wafApi = {
 
 export const ccApi = {
   addRule: (path: string, limitNum: number, period: number, fbTime: number) =>
-    api.post<ApiResponse>('/cc/rule/add', { path, limitNum, period, fbTime }),
+    api.post<ApiResponse>('/cc/rules/add', { path, limitNum, period, fbTime }),
     
   removeRule: (path: string) =>
-    api.post<ApiResponse>('/cc/rule/remove', { path }),
+    api.post<ApiResponse>('/cc/rules/remove', { path }),
 }
 
 // ==================== 流量统计 API ====================
@@ -152,6 +156,39 @@ export const securityApi = {
 
 // ==================== API 耗时统计 ====================
 
+// 后端返回的原始格式
+interface TimingRawResponse {
+  success: boolean
+  data: Array<{
+    path: string
+    method: string
+    backend: string
+    requestCount: number
+    avgTotalTime: number
+    avgBackendTime: number
+    avgGatewayTime: number
+    minTotalTime: number
+    maxTotalTime: number
+    minBackendTime: number
+    maxBackendTime: number
+    totalTime: number
+    backendTime: number
+    statusCodeCounts: Record<string, number>
+    lastRequestTime: string
+    errorRate: number
+  }>
+  backendStats: Array<{
+    backend: string
+    apiCount: number
+    totalRequests: number
+    avgTotalTime: number
+    avgBackendTime: number
+    errorCount: number
+    errorRate: number
+  }>
+  summary: ApiTimingSummary
+}
+
 export interface TimingListResponse {
   summary: ApiTimingSummary
   items: ApiTimingStat[]
@@ -159,8 +196,44 @@ export interface TimingListResponse {
 }
 
 export const timingApi = {
-  getList: () =>
-    api.get<TimingListResponse>('/timing/list'),
+  getList: async (): Promise<TimingListResponse> => {
+    const raw = await api.get<TimingRawResponse>('/timing/list')
+    
+    // 转换数据格式
+    const items: ApiTimingStat[] = (raw.data || []).map(item => ({
+      path: item.path,
+      method: item.method,
+      backend: item.backend,
+      requestCount: item.requestCount,
+      avgTotalTime: item.avgTotalTime,
+      avgBackendTime: item.avgBackendTime,
+      avgGatewayTime: item.avgGatewayTime,
+      minTotalTime: item.minTotalTime,
+      maxTotalTime: item.maxTotalTime,
+      minBackendTime: item.minBackendTime,
+      maxBackendTime: item.maxBackendTime,
+      lastRequestTime: item.lastRequestTime,
+      statusCodes: item.statusCodeCounts,
+      errorRate: item.errorRate,
+    }))
+    
+    // 按后端分组
+    const backends: Record<string, ApiTimingStat[]> = {}
+    for (const item of items) {
+      if (item.backend) {
+        if (!backends[item.backend]) {
+          backends[item.backend] = []
+        }
+        backends[item.backend].push(item)
+      }
+    }
+    
+    return {
+      summary: raw.summary,
+      items,
+      backends,
+    }
+  },
     
   clear: () =>
     api.post<ApiResponse>('/timing/clear'),
@@ -170,10 +243,54 @@ export const timingApi = {
 
 export const abTestApi = {
   toggle: (id: string, enabled: boolean) =>
-    api.post<ApiResponse>(`/abtest/${id}/toggle`, { enabled }),
+    api.post<ApiResponse>(`/abtest/configs/${id}/toggle`, { enabled }),
     
   getStats: (id: string) =>
-    api.get<ApiResponse>(`/abtest/${id}/stats`),
+    api.get<ApiResponse>(`/abtest/stats/${id}`),
+}
+
+// ==================== 仪表板 API ====================
+
+export interface DashboardResponse {
+  success: boolean
+  system: {
+    uptime: string
+    memory: number
+    totalConnections: number
+    blockedIpCount: number
+    processStartTime: string
+    uniqueIps: number
+  }
+  traffic: TrafficStats
+  features: {
+    ipControl: boolean
+    geoControl: boolean
+    wafArgs: boolean
+    wafPost: boolean
+    ccProtection: boolean
+  }
+  recentClients: Array<{ ip: string; lastAccessTime: string }>
+  whitelist: string[]
+  blacklist: string[]
+  geoAccess: {
+    allowCountries: string[]
+    allowRegions: string[]
+    denyCountries: string[]
+    denyRegions: string[]
+  }
+  wafRules: {
+    args: string[]
+    post: string[]
+  }
+  ccRules: Array<{ path: string; period: number; limitNum: number; fbTime: number }>
+  blockedIps: Array<{ ip: string; reason: string; remainingSeconds?: number }>
+  abTests: Array<{ testId: string; name: string; enabled: boolean; mode: string; variants: Record<string, number> }>
+  timestamp: string
+}
+
+export const dashboardApi = {
+  getData: () =>
+    api.get<DashboardResponse>('/dashboard'),
 }
 
 export default http

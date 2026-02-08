@@ -7,6 +7,7 @@ using LyWaf.Services.SpeedLimit;
 using LyWaf.Services.Statistic;
 using LyWaf.Services.WafInfo;
 using LyWaf.Shared;
+using Microsoft.Extensions.FileProviders;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -20,6 +21,56 @@ public static class ControlApi
         "SpeedLimit", "Statistic", "WafInfos"
     };
     
+    // 缓存前端静态文件
+    private static string? _indexHtmlCache;
+    private static DateTime _indexHtmlLastModified;
+    
+    /// <summary>
+    /// 获取前端静态文件目录
+    /// </summary>
+    private static string GetFrontendDistPath()
+    {
+        // 首先尝试 control_html 目录（构建后输出目录）
+        var controlHtmlPath = Path.Combine(Directory.GetCurrentDirectory(), "control_html");
+        if (Directory.Exists(controlHtmlPath)) return controlHtmlPath;
+        
+        // 然后尝试 Frontend/dist 目录（开发环境）
+        var devPath = Path.Combine(Directory.GetCurrentDirectory(), "Frontend", "dist");
+        if (Directory.Exists(devPath)) return devPath;
+        
+        // 然后尝试 BaseDirectory 下的 control_html（发布环境）
+        var releasePath = Path.Combine(AppContext.BaseDirectory, "control_html");
+        if (Directory.Exists(releasePath)) return releasePath;
+        
+        // 最后返回 BaseDirectory 下的 frontend
+        return Path.Combine(AppContext.BaseDirectory, "frontend");
+    }
+    
+    /// <summary>
+    /// 获取 index.html 内容
+    /// </summary>
+    private static string GetIndexHtml()
+    {
+        var distPath = GetFrontendDistPath();
+        var indexPath = Path.Combine(distPath, "index.html");
+        
+        if (!File.Exists(indexPath))
+        {
+            return @"<!DOCTYPE html>
+<html><head><meta charset=""UTF-8""><title>LyWaf 控制台</title></head>
+<body><h1>前端文件未找到</h1><p>请先构建前端: cd Frontend && npm run build</p></body></html>";
+        }
+        
+        var lastModified = File.GetLastWriteTime(indexPath);
+        if (_indexHtmlCache == null || lastModified > _indexHtmlLastModified)
+        {
+            _indexHtmlCache = File.ReadAllText(indexPath, Encoding.UTF8);
+            _indexHtmlLastModified = lastModified;
+        }
+        
+        return _indexHtmlCache;
+    }
+    
     /// <summary>
     /// 注册控制台 API 路由
     /// </summary>
@@ -28,58 +79,61 @@ public static class ControlApi
         var controlListen = wafInfos.GetControlListen();
         var controlPort = controlListen.Port;
         
-        // 概览页面（HTML）
-        app.MapGet("/", (HttpContext ctx, 
-            IAccessControlService accessControlService,
-            IStatisticService statisticService,
-            IProtectService protectService,
-            IABTestService abTestService) =>
+        // =============== 前端静态文件服务 ===============
+        
+        var distPath = GetFrontendDistPath();
+        if (Directory.Exists(distPath))
         {
-            var process = Process.GetCurrentProcess();
-            var uptime = DateTime.Now - process.StartTime;
-            var connectionStats = accessControlService.GetConnectionStats();
-            var blockedIps = SharedData.ClientFb;
-            var abTests = abTestService.GetAllConfigs();
-            
-            var html = ControlTemplate.GenerateDashboardHtml(
-                process, uptime, connectionStats, blockedIps, 
-                accessControlService, statisticService, protectService, abTests);
-            
-            return Results.Content(html, "text/html; charset=utf-8");
+            // 静态资源文件服务（JS/CSS/图片等）
+            var fileProvider = new PhysicalFileProvider(distPath);
+            app.UseStaticFiles(new StaticFileOptions
+            {
+                FileProvider = fileProvider,
+                RequestPath = "",
+                ServeUnknownFileTypes = false
+            });
+        }
+        
+        // SPA 入口 - 所有非 API 请求返回 index.html
+        app.MapGet("/", (HttpContext ctx) =>
+        {
+            return Results.Content(GetIndexHtml(), "text/html; charset=utf-8");
         }).RequireHost($"*:{controlPort}");
-
-        // 静态 JS 文件服务
-        app.MapGet("/js/{filename}", (HttpContext ctx, string filename) =>
+        
+        // SPA 子路由支持（security, api-timing 等）
+        app.MapGet("/{*path}", (HttpContext ctx, string? path) =>
         {
-            // 安全检查：只允许 .js 文件
-            if (!filename.EndsWith(".js", StringComparison.OrdinalIgnoreCase) ||
-                filename.Contains("..") || filename.Contains('/') || filename.Contains('\\'))
+            // 如果是 API 跳过
+            if (path != null && path.StartsWith("api/"))
             {
                 return Results.NotFound();
             }
             
-            var jsPath = Path.Combine(AppContext.BaseDirectory, "control_html", "js", filename);
-            
-            // 如果在 BaseDirectory 下找不到，尝试在当前目录下找
-            if (!File.Exists(jsPath))
+            // 检查是否是静态文件
+            if (path != null)
             {
-                jsPath = Path.Combine(Directory.GetCurrentDirectory(), "control_html", "js", filename);
+                var distDir = GetFrontendDistPath();
+                var filePath = Path.Combine(distDir, path);
+                if (File.Exists(filePath))
+                {
+                    var ext = Path.GetExtension(filePath).ToLowerInvariant();
+                    var contentType = ext switch
+                    {
+                        ".js" => "application/javascript",
+                        ".css" => "text/css",
+                        ".svg" => "image/svg+xml",
+                        ".png" => "image/png",
+                        ".jpg" or ".jpeg" => "image/jpeg",
+                        ".ico" => "image/x-icon",
+                        ".woff" or ".woff2" => "font/woff2",
+                        _ => "application/octet-stream"
+                    };
+                    return Results.File(filePath, contentType);
+                }
             }
             
-            if (!File.Exists(jsPath))
-            {
-                return Results.NotFound();
-            }
-            
-            var content = File.ReadAllText(jsPath);
-            return Results.Content(content, "application/javascript; charset=utf-8");
-        }).RequireHost($"*:{controlPort}");
-
-        // API 耗时统计页面
-        app.MapGet("/api-timing", (HttpContext ctx) =>
-        {
-            var html = ControlTemplate.GetApiTimingTemplate();
-            return Results.Content(html, "text/html; charset=utf-8");
+            // 返回 SPA index.html
+            return Results.Content(GetIndexHtml(), "text/html; charset=utf-8");
         }).RequireHost($"*:{controlPort}");
 
         // API 耗时统计数据列表
@@ -200,11 +254,165 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
-        // 安全态势页面
-        app.MapGet("/security", (HttpContext ctx) =>
+        // =============== 仪表板数据 API ===============
+        
+        // 获取仪表板概览数据
+        app.MapGet("/api/dashboard", (HttpContext ctx, 
+            IAccessControlService accessControlService,
+            IStatisticService statisticService,
+            IProtectService protectService,
+            IABTestService abTestService) =>
         {
-            var html = ControlTemplate.GetSecurityTemplate();
-            return Results.Content(html, "text/html; charset=utf-8");
+            try
+            {
+                var process = Process.GetCurrentProcess();
+                var uptime = DateTime.Now - process.StartTime;
+                var connectionStats = accessControlService.GetConnectionStats();
+                
+                // 获取配置选项
+                var acOptions = accessControlService.GetOptions();
+                var protectOptions = protectService.GetOptions();
+                var statisticOptions = statisticService.GetOption();
+                
+                // 获取流量统计
+                var trafficSnapshot = SharedData.Traffic.GetSnapshot();
+                
+                // 获取被封禁的IP
+                var blockedIpList = SharedData.ClientFb.GetValidItemsWithExpiry()
+                    .Select(x => new
+                    {
+                        ip = x.Key,
+                        reason = x.Value,
+                        remainingSeconds = x.RemainingTime?.TotalSeconds
+                    })
+                    .ToList();
+                
+                // 获取最近5分钟内的客户端
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var threshold = now - (5 * 60 * 1000);
+                var recentClients = SharedData.ClientStas.GetSnapshot()
+                    .Where(kv => kv.Value.LastAccessTime >= threshold)
+                    .Select(kv => new
+                    {
+                        ip = kv.Key,
+                        lastAccessTime = DateTimeOffset.FromUnixTimeMilliseconds(kv.Value.LastAccessTime).LocalDateTime
+                    })
+                    .OrderByDescending(x => x.lastAccessTime)
+                    .Take(50)
+                    .ToList();
+                
+                // 格式化运行时间
+                var uptimeStr = uptime.Days > 0 
+                    ? $"{uptime.Days}天 {uptime.Hours}小时 {uptime.Minutes}分钟" 
+                    : uptime.Hours > 0 
+                        ? $"{uptime.Hours}小时 {uptime.Minutes}分钟 {uptime.Seconds}秒"
+                        : $"{uptime.Minutes}分钟 {uptime.Seconds}秒";
+
+                return Results.Json(new
+                {
+                    success = true,
+                    system = new
+                    {
+                        uptime = uptimeStr,
+                        memory = process.WorkingSet64 / (1024 * 1024),
+                        totalConnections = connectionStats.TotalConnections,
+                        blockedIpCount = blockedIpList.Count,
+                        processStartTime = process.StartTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                        uniqueIps = connectionStats.ConnectionsPerIp.Count
+                    },
+                    traffic = new
+                    {
+                        totalRequests = trafficSnapshot.TotalRequests,
+                        pageViews = trafficSnapshot.PageViews,
+                        uniqueVisitors = trafficSnapshot.UniqueVisitors,
+                        uniqueIps = trafficSnapshot.UniqueIps,
+                        interceptCount = trafficSnapshot.InterceptCount,
+                        attackIps = trafficSnapshot.AttackIps,
+                        error4xxCount = trafficSnapshot.Error4xxCount,
+                        error4xxRate = trafficSnapshot.Error4xxRate,
+                        intercept4xxCount = trafficSnapshot.Intercept4xxCount,
+                        intercept4xxRate = trafficSnapshot.Intercept4xxRate,
+                        error5xxCount = trafficSnapshot.Error5xxCount,
+                        error5xxRate = trafficSnapshot.Error5xxRate,
+                        startTime = trafficSnapshot.StartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                    },
+                    features = new
+                    {
+                        ipControl = acOptions.IpControl.Enabled,
+                        geoControl = acOptions.GeoControl.Enabled,
+                        wafArgs = protectOptions.OpenArgsCheck,
+                        wafPost = protectOptions.OpenPostCheck,
+                        ccProtection = statisticOptions.LimitCc.Count > 0 || statisticService.GetLimitCcRules().Count > 0
+                    },
+                    recentClients,
+                    whitelist = accessControlService.GetWhitelist(),
+                    blacklist = accessControlService.GetBlacklist(),
+                    geoAccess = new
+                    {
+                        allowCountries = accessControlService.GetAllowCountries(),
+                        allowRegions = accessControlService.GetAllowRegions(),
+                        denyCountries = accessControlService.GetDenyCountries(),
+                        denyRegions = accessControlService.GetDenyRegions()
+                    },
+                    wafRules = new
+                    {
+                        args = protectService.GetArgsRegexList(),
+                        post = protectService.GetPostRegexList()
+                    },
+                    ccRules = statisticService.GetLimitCcRules().Select(r => new
+                    {
+                        path = r.Path,
+                        period = r.Period,
+                        limitNum = r.LimitNum,
+                        fbTime = r.FbTime.TotalSeconds
+                    }),
+                    blockedIps = blockedIpList,
+                    abTests = abTestService.GetAllConfigs().Select(c => new
+                    {
+                        testId = c.Key,
+                        name = c.Value.Name,
+                        enabled = c.Value.Enabled,
+                        mode = c.Value.Mode.ToString(),
+                        variants = c.Value.Variants
+                    }),
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 获取流量统计数据
+        app.MapGet("/api/traffic/stats", (HttpContext ctx) =>
+        {
+            try
+            {
+                var trafficSnapshot = SharedData.Traffic.GetSnapshot();
+                return Results.Json(new
+                {
+                    success = true,
+                    totalRequests = trafficSnapshot.TotalRequests,
+                    pageViews = trafficSnapshot.PageViews,
+                    uniqueVisitors = trafficSnapshot.UniqueVisitors,
+                    uniqueIps = trafficSnapshot.UniqueIps,
+                    interceptCount = trafficSnapshot.InterceptCount,
+                    attackIps = trafficSnapshot.AttackIps,
+                    error4xxCount = trafficSnapshot.Error4xxCount,
+                    error4xxRate = trafficSnapshot.Error4xxRate,
+                    intercept4xxCount = trafficSnapshot.Intercept4xxCount,
+                    intercept4xxRate = trafficSnapshot.Intercept4xxRate,
+                    error5xxCount = trafficSnapshot.Error5xxCount,
+                    error5xxRate = trafficSnapshot.Error5xxRate,
+                    startTime = trafficSnapshot.StartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
+            }
         }).RequireHost($"*:{controlPort}");
 
         // 安全态势统计数据
