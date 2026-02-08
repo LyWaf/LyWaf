@@ -5,4 +5,5 @@ bin
 .well-known
 *.pid
 datas/*
+node_modules
 # wwwroot/*

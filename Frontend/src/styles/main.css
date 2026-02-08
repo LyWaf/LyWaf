@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #0a0e17;
+  --bg-secondary: #111827;
+  --bg-card: #1a2332;
+  --bg-card-hover: #232d3f;
+  --bg-sidebar: #0d1117;
+  --accent: #e8a854;
+  --accent-light: #f0c078;
+  --accent-dark: #d49540;
+  --accent-blue: #3b82f6;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border: #2d3748;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  line-height: 1.6;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* 通用组件样式 */
+@layer components {
+  .card {
+    @apply bg-dark-card rounded-xl border border-dark-border p-6 transition-all duration-200;
+  }
+  
+  .card:hover {
+    @apply bg-dark-card-hover;
+  }
+  
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 cursor-pointer border-none;
+  }
+  
+  .btn-primary {
+    @apply bg-primary-500 text-gray-900 hover:bg-primary-400;
+  }
+  
+  .btn-secondary {
+    @apply bg-dark-card text-gray-300 border border-dark-border hover:bg-dark-card-hover;
+  }
+  
+  .btn-danger {
+    @apply bg-red-500/20 text-red-400 hover:bg-red-500/30;
+  }
+  
+  .btn-sm {
+    @apply px-3 py-1.5 text-sm;
+  }
+  
+  .input {
+    @apply w-full px-4 py-2 rounded-lg bg-dark-card border border-dark-border text-gray-200 placeholder-gray-500 focus:outline-none focus:border-primary-500 transition-colors;
+  }
+  
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  
+  .badge-success {
+    @apply bg-green-500/20 text-green-400;
+  }
+  
+  .badge-warning {
+    @apply bg-yellow-500/20 text-yellow-400;
+  }
+  
+  .badge-danger {
+    @apply bg-red-500/20 text-red-400;
+  }
+  
+  .badge-info {
+    @apply bg-blue-500/20 text-blue-400;
+  }
+}
+
+/* 动画 */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
