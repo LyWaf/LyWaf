@@ -16,7 +16,7 @@ const addArgsRule = async () => {
   if (!pattern) return
   
   try {
-    const res = await wafApi.addArgsRule(pattern) as { success: boolean }
+    const res = await wafApi.addArgsRule(pattern)
     if (res.success) {
       argsRules.value.push({ id: Date.now().toString(), pattern, type: 'args' })
       showSuccess('Args 规则已添加')
@@ -30,7 +30,7 @@ const removeArgsRule = async (rule: WafRule) => {
   if (!confirm('确定要删除此规则吗？')) return
   
   try {
-    const res = await wafApi.removeArgsRule(rule.pattern) as { success: boolean }
+    const res = await wafApi.removeArgsRule(rule.pattern)
     if (res.success) {
       argsRules.value = argsRules.value.filter(r => r.id !== rule.id)
       showSuccess('规则已删除')
@@ -46,7 +46,7 @@ const addPostRule = async () => {
   if (!pattern) return
   
   try {
-    const res = await wafApi.addPostRule(pattern) as { success: boolean }
+    const res = await wafApi.addPostRule(pattern)
     if (res.success) {
       postRules.value.push({ id: Date.now().toString(), pattern, type: 'post' })
       showSuccess('Post 规则已添加')
@@ -60,7 +60,7 @@ const removePostRule = async (rule: WafRule) => {
   if (!confirm('确定要删除此规则吗？')) return
   
   try {
-    const res = await wafApi.removePostRule(rule.pattern) as { success: boolean }
+    const res = await wafApi.removePostRule(rule.pattern)
     if (res.success) {
       postRules.value = postRules.value.filter(r => r.id !== rule.id)
       showSuccess('规则已删除')

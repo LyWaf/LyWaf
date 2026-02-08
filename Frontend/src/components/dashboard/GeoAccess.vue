@@ -17,7 +17,7 @@ const operations = {
     const value = prompt('请输入允许访问的国家代码:')
     if (!value) return
     try {
-      const res = await geoApi.addAllowCountry(value) as { success: boolean }
+      const res = await geoApi.addAllowCountry(value)
       if (res.success) {
         allowCountries.value.push(value)
         showSuccess(`已添加允许国家: ${value}`)
@@ -27,7 +27,7 @@ const operations = {
   removeAllowCountry: async (value: string) => {
     if (!confirm(`确定要移除 ${value} 吗？`)) return
     try {
-      const res = await geoApi.removeAllowCountry(value) as { success: boolean }
+      const res = await geoApi.removeAllowCountry(value)
       if (res.success) {
         allowCountries.value = allowCountries.value.filter(i => i !== value)
         showSuccess(`已移除: ${value}`)
@@ -38,7 +38,7 @@ const operations = {
     const value = prompt('请输入允许访问的地区:')
     if (!value) return
     try {
-      const res = await geoApi.addAllowRegion(value) as { success: boolean }
+      const res = await geoApi.addAllowRegion(value)
       if (res.success) {
         allowRegions.value.push(value)
         showSuccess(`已添加允许地区: ${value}`)
@@ -48,7 +48,7 @@ const operations = {
   removeAllowRegion: async (value: string) => {
     if (!confirm(`确定要移除 ${value} 吗？`)) return
     try {
-      const res = await geoApi.removeAllowRegion(value) as { success: boolean }
+      const res = await geoApi.removeAllowRegion(value)
       if (res.success) {
         allowRegions.value = allowRegions.value.filter(i => i !== value)
         showSuccess(`已移除: ${value}`)
@@ -59,7 +59,7 @@ const operations = {
     const value = prompt('请输入禁止访问的国家代码:')
     if (!value) return
     try {
-      const res = await geoApi.addDenyCountry(value) as { success: boolean }
+      const res = await geoApi.addDenyCountry(value)
       if (res.success) {
         denyCountries.value.push(value)
         showSuccess(`已添加禁止国家: ${value}`)
@@ -69,7 +69,7 @@ const operations = {
   removeDenyCountry: async (value: string) => {
     if (!confirm(`确定要移除 ${value} 吗？`)) return
     try {
-      const res = await geoApi.removeDenyCountry(value) as { success: boolean }
+      const res = await geoApi.removeDenyCountry(value)
       if (res.success) {
         denyCountries.value = denyCountries.value.filter(i => i !== value)
         showSuccess(`已移除: ${value}`)
@@ -80,7 +80,7 @@ const operations = {
     const value = prompt('请输入禁止访问的地区:')
     if (!value) return
     try {
-      const res = await geoApi.addDenyRegion(value) as { success: boolean }
+      const res = await geoApi.addDenyRegion(value)
       if (res.success) {
         denyRegions.value.push(value)
         showSuccess(`已添加禁止地区: ${value}`)
@@ -90,7 +90,7 @@ const operations = {
   removeDenyRegion: async (value: string) => {
     if (!confirm(`确定要移除 ${value} 吗？`)) return
     try {
-      const res = await geoApi.removeDenyRegion(value) as { success: boolean }
+      const res = await geoApi.removeDenyRegion(value)
       if (res.success) {
         denyRegions.value = denyRegions.value.filter(i => i !== value)
         showSuccess(`已移除: ${value}`)

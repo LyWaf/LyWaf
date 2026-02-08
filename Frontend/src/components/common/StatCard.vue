@@ -7,13 +7,13 @@ interface Props {
   tooltip?: string
 }
 
-const props = withDefaults(defineProps<Props>(), {
+withDefaults(defineProps<Props>(), {
   color: 'default',
   icon: '',
   tooltip: '',
 })
 
-const colorClasses = {
+const colorClasses: Record<string, string> = {
   default: 'text-gray-100',
   blue: 'text-blue-400',
   green: 'text-green-400',

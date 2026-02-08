@@ -23,7 +23,7 @@ const addRule = async () => {
   const fbTime = parseInt(fbTimeStr || '3600')
   
   try {
-    const res = await ccApi.addRule(path, limitNum, period, fbTime) as { success: boolean }
+    const res = await ccApi.addRule(path, limitNum, period, fbTime)
     if (res.success) {
       rules.value.push({
         id: Date.now().toString(),
@@ -43,7 +43,7 @@ const removeRule = async (rule: CcRule) => {
   if (!confirm(`确定要删除规则 ${rule.path} 吗？`)) return
   
   try {
-    const res = await ccApi.removeRule(rule.path) as { success: boolean }
+    const res = await ccApi.removeRule(rule.path)
     if (res.success) {
       rules.value = rules.value.filter(r => r.id !== rule.id)
       showSuccess('规则已删除')

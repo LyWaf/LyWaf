@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import StatCard from '@/components/common/StatCard.vue'
-import { timingApi } from '@/api'
+import { timingApi, type TimingListResponse } from '@/api'
 import { useToast } from '@/composables/useToast'
 import type { ApiTimingStat, ApiTimingSummary } from '@/types'
 
@@ -58,11 +58,7 @@ const filteredItems = computed(() => {
 const loadData = async () => {
   loading.value = true
   try {
-    const data = await timingApi.getList() as { 
-      summary: ApiTimingSummary
-      items: ApiTimingStat[]
-      backends: Record<string, ApiTimingStat[]>
-    }
+    const data: TimingListResponse = await timingApi.getList()
     summary.value = data.summary
     items.value = data.items || []
     backends.value = data.backends || {}
@@ -81,7 +77,7 @@ const clearData = async () => {
     await timingApi.clear()
     showSuccess('API 耗时统计已清空')
     loadData()
-  } catch (error) {
+  } catch {
     showError('清空失败')
   }
 }
@@ -116,6 +112,15 @@ const getStatusColor = (code: string) => {
   if (code.startsWith('4')) return 'text-yellow-400'
   if (code.startsWith('5')) return 'text-red-400'
   return 'text-gray-400'
+}
+
+// 获取状态码背景色
+const getStatusBgColor = (code: string) => {
+  if (code.startsWith('2')) return 'bg-green-500/20'
+  if (code.startsWith('3')) return 'bg-blue-500/20'
+  if (code.startsWith('4')) return 'bg-yellow-500/20'
+  if (code.startsWith('5')) return 'bg-red-500/20'
+  return 'bg-gray-500/20'
 }
 
 // 格式化后端名称
@@ -199,8 +204,8 @@ onUnmounted(() => {
           :class="{ 'ring-2 ring-primary-500': filterBackend === backendName }"
         >
           <div class="flex items-center justify-between mb-2">
-            <span class="text-sm text-gray-400 truncate" :title="backendName">
-              {{ formatBackend(backendName) }}
+            <span class="text-sm text-gray-400 truncate" :title="String(backendName)">
+              {{ formatBackend(String(backendName)) }}
             </span>
             <span class="badge badge-info">{{ backendStats.length }} APIs</span>
           </div>
@@ -316,9 +321,8 @@ onUnmounted(() => {
                 <div class="flex justify-center gap-1 flex-wrap">
                   <span 
                     v-for="(count, code) in item.statusCodes" 
-                    :key="code"
-                    :class="['px-1.5 py-0.5 rounded text-xs', getStatusColor(code)]"
-                    :style="{ backgroundColor: getStatusColor(code).replace('text-', 'bg-').replace('-400', '-500/20') }"
+                    :key="String(code)"
+                    :class="['px-1.5 py-0.5 rounded text-xs', getStatusColor(String(code)), getStatusBgColor(String(code))]"
                   >
                     {{ code }}: {{ count }}
                   </span>

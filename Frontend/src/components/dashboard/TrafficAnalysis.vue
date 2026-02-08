@@ -5,7 +5,7 @@ interface Props {
   traffic: TrafficStats | null
 }
 
-const props = defineProps<Props>()
+defineProps<Props>()
 const emit = defineEmits<{
   (e: 'reset'): void
 }>()
@@ -27,16 +27,21 @@ const cards = [
   { key: 'uniqueIps', label: '独立 IP', icon: '🌐', color: 'text-blue-500', tooltip: '不同来源 IP 地址数量' },
   { key: 'interceptCount', label: '拦截次数', icon: '🛡️', color: 'text-blue-400', tooltip: '被防护规则拦截的请求数' },
   { key: 'attackIps', label: '攻击 IP', icon: '⚠️', color: 'text-red-500', tooltip: '触发防护规则的独立 IP 数' },
-]
+] as const
 
 const errorCards = [
-  { key: 'error4xxCount', label: '4xx 错误数', color: 'text-yellow-500', tooltip: '客户端错误响应数量' },
+  { key: 'error4xxCount', label: '4xx 错误数', color: 'text-yellow-500', isRate: false, tooltip: '客户端错误响应数量' },
   { key: 'error4xxRate', label: '4xx 错误率', color: 'text-yellow-500', isRate: true, tooltip: '4xx 错误占总请求的比例' },
-  { key: 'intercept4xxCount', label: '4xx 拦截数', color: 'text-yellow-500', tooltip: '被拦截的 4xx 请求数量' },
+  { key: 'intercept4xxCount', label: '4xx 拦截数', color: 'text-yellow-500', isRate: false, tooltip: '被拦截的 4xx 请求数量' },
   { key: 'intercept4xxRate', label: '4xx 拦截率', color: 'text-yellow-500', isRate: true, tooltip: '4xx 拦截占总请求的比例' },
-  { key: 'error5xxCount', label: '5xx 错误数', color: 'text-red-500', tooltip: '服务端错误响应数量' },
+  { key: 'error5xxCount', label: '5xx 错误数', color: 'text-red-500', isRate: false, tooltip: '服务端错误响应数量' },
   { key: 'error5xxRate', label: '5xx 错误率', color: 'text-red-500', isRate: true, tooltip: '5xx 错误占总请求的比例' },
-]
+] as const
+
+const getValue = (traffic: TrafficStats | null, key: string): number => {
+  if (!traffic) return 0
+  return (traffic as unknown as Record<string, number>)[key] ?? 0
+}
 </script>
 
 <template>
@@ -54,7 +59,7 @@ const errorCards = [
           <span>{{ card.label }}</span>
         </div>
         <div :class="['text-2xl font-bold', card.color]">
-          {{ traffic ? formatNumber((traffic as Record<string, number>)[card.key]) : '0' }}
+          {{ formatNumber(getValue(traffic, card.key)) }}
         </div>
       </div>
     </div>
@@ -72,11 +77,9 @@ const errorCards = [
           <span>{{ card.label }}</span>
         </div>
         <div :class="['text-xl font-bold', card.color]">
-          {{ traffic 
-            ? (card.isRate 
-                ? formatRate((traffic as Record<string, number>)[card.key]) 
-                : formatNumber((traffic as Record<string, number>)[card.key]))
-            : (card.isRate ? '0.00%' : '0') 
+          {{ card.isRate 
+              ? formatRate(getValue(traffic, card.key)) 
+              : formatNumber(getValue(traffic, card.key))
           }}
         </div>
       </div>

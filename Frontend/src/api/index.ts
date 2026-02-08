@@ -15,7 +15,7 @@ const http = axios.create({
   },
 })
 
-// 响应拦截器
+// 响应拦截器 - 直接返回 data
 http.interceptors.response.use(
   (response) => response.data,
   (error) => {
@@ -24,20 +24,28 @@ http.interceptors.response.use(
   }
 )
 
+// 定义已解包的请求方法类型
+type UnwrappedAxios = {
+  get: <T>(url: string, config?: object) => Promise<T>
+  post: <T>(url: string, data?: object, config?: object) => Promise<T>
+}
+
+const api = http as unknown as UnwrappedAxios
+
 // ==================== 功能开关 API ====================
 
 export const featureApi = {
   toggleIpControl: (enabled: boolean) =>
-    http.post<ApiResponse>('/feature/ip-control/toggle', { enabled }),
+    api.post<ApiResponse>('/feature/ip-control/toggle', { enabled }),
     
   toggleGeoControl: (enabled: boolean) =>
-    http.post<ApiResponse>('/feature/geo-control/toggle', { enabled }),
+    api.post<ApiResponse>('/feature/geo-control/toggle', { enabled }),
     
   toggleWafArgs: (enabled: boolean) =>
-    http.post<ApiResponse>('/feature/waf-args/toggle', { enabled }),
+    api.post<ApiResponse>('/feature/waf-args/toggle', { enabled }),
     
   toggleWafPost: (enabled: boolean) =>
-    http.post<ApiResponse>('/feature/waf-post/toggle', { enabled }),
+    api.post<ApiResponse>('/feature/waf-post/toggle', { enabled }),
 }
 
 // ==================== IP 管理 API ====================
@@ -45,121 +53,127 @@ export const featureApi = {
 export const ipApi = {
   // 白名单
   addWhitelist: (ipOrCidr: string) =>
-    http.post<ApiResponse>('/ac/whitelist/add', { ipOrCidr }),
+    api.post<ApiResponse>('/ac/whitelist/add', { ipOrCidr }),
     
   removeWhitelist: (ipOrCidr: string) =>
-    http.post<ApiResponse>('/ac/whitelist/remove', { ipOrCidr }),
+    api.post<ApiResponse>('/ac/whitelist/remove', { ipOrCidr }),
     
   // 黑名单
   addBlacklist: (ipOrCidr: string) =>
-    http.post<ApiResponse>('/ac/blacklist/add', { ipOrCidr }),
+    api.post<ApiResponse>('/ac/blacklist/add', { ipOrCidr }),
     
   removeBlacklist: (ipOrCidr: string) =>
-    http.post<ApiResponse>('/ac/blacklist/remove', { ipOrCidr }),
+    api.post<ApiResponse>('/ac/blacklist/remove', { ipOrCidr }),
     
   // 封禁管理
   blockIp: (ip: string, reason?: string, duration?: number) =>
-    http.post<ApiResponse>('/ac/block', { ip, reason, duration }),
+    api.post<ApiResponse>('/ac/block', { ip, reason, duration }),
     
   unblockIp: (ip: string) =>
-    http.post<ApiResponse>('/ac/unblock', { ip }),
+    api.post<ApiResponse>('/ac/unblock', { ip }),
     
   clearBlockedIps: () =>
-    http.post<ApiResponse>('/ac/blocked/clear'),
+    api.post<ApiResponse>('/ac/blocked/clear'),
 }
 
 // ==================== 地理访问 API ====================
 
 export const geoApi = {
   addDenyCountry: (country: string) =>
-    http.post<ApiResponse>('/geo/deny-country/add', { country }),
+    api.post<ApiResponse>('/geo/deny-country/add', { country }),
     
   removeDenyCountry: (country: string) =>
-    http.post<ApiResponse>('/geo/deny-country/remove', { country }),
+    api.post<ApiResponse>('/geo/deny-country/remove', { country }),
     
   addDenyRegion: (region: string) =>
-    http.post<ApiResponse>('/geo/deny-region/add', { region }),
+    api.post<ApiResponse>('/geo/deny-region/add', { region }),
     
   removeDenyRegion: (region: string) =>
-    http.post<ApiResponse>('/geo/deny-region/remove', { region }),
+    api.post<ApiResponse>('/geo/deny-region/remove', { region }),
     
   addAllowCountry: (country: string) =>
-    http.post<ApiResponse>('/geo/allow-countries/add', { country }),
+    api.post<ApiResponse>('/geo/allow-countries/add', { country }),
     
   removeAllowCountry: (country: string) =>
-    http.post<ApiResponse>('/geo/allow-countries/remove', { country }),
+    api.post<ApiResponse>('/geo/allow-countries/remove', { country }),
     
   addAllowRegion: (region: string) =>
-    http.post<ApiResponse>('/geo/allow-region/add', { region }),
+    api.post<ApiResponse>('/geo/allow-region/add', { region }),
     
   removeAllowRegion: (region: string) =>
-    http.post<ApiResponse>('/geo/allow-region/remove', { region }),
+    api.post<ApiResponse>('/geo/allow-region/remove', { region }),
 }
 
 // ==================== WAF 规则 API ====================
 
 export const wafApi = {
   addArgsRule: (pattern: string) =>
-    http.post<ApiResponse>('/waf/args/add', { pattern }),
+    api.post<ApiResponse>('/waf/args/add', { pattern }),
     
   removeArgsRule: (pattern: string) =>
-    http.post<ApiResponse>('/waf/args/remove', { pattern }),
+    api.post<ApiResponse>('/waf/args/remove', { pattern }),
     
   addPostRule: (pattern: string) =>
-    http.post<ApiResponse>('/waf/post/add', { pattern }),
+    api.post<ApiResponse>('/waf/post/add', { pattern }),
     
   removePostRule: (pattern: string) =>
-    http.post<ApiResponse>('/waf/post/remove', { pattern }),
+    api.post<ApiResponse>('/waf/post/remove', { pattern }),
 }
 
 // ==================== CC 防护 API ====================
 
 export const ccApi = {
   addRule: (path: string, limitNum: number, period: number, fbTime: number) =>
-    http.post<ApiResponse>('/cc/rule/add', { path, limitNum, period, fbTime }),
+    api.post<ApiResponse>('/cc/rule/add', { path, limitNum, period, fbTime }),
     
   removeRule: (path: string) =>
-    http.post<ApiResponse>('/cc/rule/remove', { path }),
+    api.post<ApiResponse>('/cc/rule/remove', { path }),
 }
 
 // ==================== 流量统计 API ====================
 
 export const trafficApi = {
   getStats: () =>
-    http.get<TrafficStats>('/traffic/stats'),
+    api.get<TrafficStats>('/traffic/stats'),
     
   reset: () =>
-    http.post<ApiResponse>('/traffic/reset'),
+    api.post<ApiResponse>('/traffic/reset'),
 }
 
 // ==================== 安全统计 API ====================
 
 export const securityApi = {
   getStats: (hours = 24) =>
-    http.get<SecurityStats>('/security/stats', { params: { hours } }),
+    api.get<SecurityStats>('/security/stats', { params: { hours } }),
     
   reset: () =>
-    http.post<ApiResponse>('/security/reset'),
+    api.post<ApiResponse>('/security/reset'),
 }
 
 // ==================== API 耗时统计 ====================
 
+export interface TimingListResponse {
+  summary: ApiTimingSummary
+  items: ApiTimingStat[]
+  backends: Record<string, ApiTimingStat[]>
+}
+
 export const timingApi = {
   getList: () =>
-    http.get<{ summary: ApiTimingSummary; items: ApiTimingStat[]; backends: Record<string, ApiTimingStat[]> }>('/timing/list'),
+    api.get<TimingListResponse>('/timing/list'),
     
   clear: () =>
-    http.post<ApiResponse>('/timing/clear'),
+    api.post<ApiResponse>('/timing/clear'),
 }
 
 // ==================== A/B 测试 API ====================
 
 export const abTestApi = {
   toggle: (id: string, enabled: boolean) =>
-    http.post<ApiResponse>(`/abtest/${id}/toggle`, { enabled }),
+    api.post<ApiResponse>(`/abtest/${id}/toggle`, { enabled }),
     
   getStats: (id: string) =>
-    http.get<ApiResponse>(`/abtest/${id}/stats`),
+    api.get<ApiResponse>(`/abtest/${id}/stats`),
 }
 
 export default http

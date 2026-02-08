@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 
 interface Toast {
   id: number
@@ -29,14 +29,14 @@ const remove = (id: number) => {
 // 暴露给外部使用
 defineExpose({ show })
 
-const iconMap = {
+const iconMap: Record<string, string> = {
   success: '✓',
   error: '✕',
   warning: '⚠',
   info: 'ℹ',
 }
 
-const colorMap = {
+const colorMap: Record<string, string> = {
   success: 'bg-green-500/20 border-green-500/30 text-green-400',
   error: 'bg-red-500/20 border-red-500/30 text-red-400',
   warning: 'bg-yellow-500/20 border-yellow-500/30 text-yellow-400',

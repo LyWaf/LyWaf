@@ -87,7 +87,8 @@ localhost:5003, localhost:5004, 0.0.0.0:5005, example.com:5006
 log = "logs/xx"
 /static/ {
     file_server {
-        root = "./wwwroot"
+        root = "./control_html"
+        try_files = "$path"
         browse = true
     }
 }

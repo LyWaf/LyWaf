@@ -4,6 +4,7 @@ import { resolve } from 'path'
 
 export default defineConfig({
   plugins: [vue()],
+  base: './', // 使用相对路径，支持非根目录部署
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
@@ -22,12 +23,6 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     sourcemap: false,
-    minify: 'terser',
-    terserOptions: {
-      compress: {
-        drop_console: true,
-        drop_debugger: true,
-      },
-    },
+    minify: 'esbuild', // 使用内置的 esbuild 压缩
   },
 })

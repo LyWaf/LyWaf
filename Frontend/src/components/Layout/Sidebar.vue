@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 interface MenuItem {
   path?: string
   name: string
-  icon: string
+  icon?: string
   children?: MenuItem[]
   action?: string
 }
@@ -59,10 +58,6 @@ const scrollToSection = (sectionId: string) => {
     element.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 }
-
-const expandedMenus = computed(() => {
-  return menuItems.filter(item => item.children).map(item => item.name)
-})
 </script>
 
 <template>

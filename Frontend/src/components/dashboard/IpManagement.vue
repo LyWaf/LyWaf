@@ -15,14 +15,14 @@ const addWhitelistIp = async () => {
   if (!ip) return
   
   try {
-    const res = await ipApi.addWhitelist(ip) as { success: boolean; message?: string }
+    const res = await ipApi.addWhitelist(ip)
     if (res.success) {
       whitelist.value.push(ip)
       showSuccess(`已添加到白名单: ${ip}`)
     } else {
       showError(res.message || '添加失败')
     }
-  } catch (error) {
+  } catch {
     showError('添加失败')
   }
 }
@@ -31,14 +31,14 @@ const removeWhitelistIp = async (ip: string) => {
   if (!confirm(`确定要从白名单移除 ${ip} 吗？`)) return
   
   try {
-    const res = await ipApi.removeWhitelist(ip) as { success: boolean; message?: string }
+    const res = await ipApi.removeWhitelist(ip)
     if (res.success) {
       whitelist.value = whitelist.value.filter(i => i !== ip)
       showSuccess(`已从白名单移除: ${ip}`)
     } else {
       showError(res.message || '移除失败')
     }
-  } catch (error) {
+  } catch {
     showError('移除失败')
   }
 }
@@ -49,14 +49,14 @@ const addBlacklistIp = async () => {
   if (!ip) return
   
   try {
-    const res = await ipApi.addBlacklist(ip) as { success: boolean; message?: string }
+    const res = await ipApi.addBlacklist(ip)
     if (res.success) {
       blacklist.value.push(ip)
       showSuccess(`已添加到黑名单: ${ip}`)
     } else {
       showError(res.message || '添加失败')
     }
-  } catch (error) {
+  } catch {
     showError('添加失败')
   }
 }
@@ -65,14 +65,14 @@ const removeBlacklistIp = async (ip: string) => {
   if (!confirm(`确定要从黑名单移除 ${ip} 吗？`)) return
   
   try {
-    const res = await ipApi.removeBlacklist(ip) as { success: boolean; message?: string }
+    const res = await ipApi.removeBlacklist(ip)
     if (res.success) {
       blacklist.value = blacklist.value.filter(i => i !== ip)
       showSuccess(`已从黑名单移除: ${ip}`)
     } else {
       showError(res.message || '移除失败')
     }
-  } catch (error) {
+  } catch {
     showError('移除失败')
   }
 }

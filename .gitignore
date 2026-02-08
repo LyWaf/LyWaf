@@ -6,4 +6,5 @@ bin
 *.pid
 datas/*
 node_modules
+dist/*
 # wwwroot/*

@@ -18,7 +18,7 @@ const blockIp = async () => {
   const duration = parseInt(durationStr || '3600')
   
   try {
-    const res = await ipApi.blockIp(ip, reason || undefined, duration || undefined) as { success: boolean }
+    const res = await ipApi.blockIp(ip, reason || undefined, duration || undefined)
     if (res.success) {
       blockedIps.value.push({
         ip,
@@ -36,7 +36,7 @@ const unblockIp = async (ip: string) => {
   if (!confirm(`确定要解封 ${ip} 吗？`)) return
   
   try {
-    const res = await ipApi.unblockIp(ip) as { success: boolean }
+    const res = await ipApi.unblockIp(ip)
     if (res.success) {
       blockedIps.value = blockedIps.value.filter(i => i.ip !== ip)
       showSuccess(`已解封: ${ip}`)
@@ -50,7 +50,7 @@ const clearAll = async () => {
   if (!confirm('确定要清空所有封禁 IP 吗？')) return
   
   try {
-    const res = await ipApi.clearBlockedIps() as { success: boolean }
+    const res = await ipApi.clearBlockedIps()
     if (res.success) {
       blockedIps.value = []
       showSuccess('已清空封禁列表')

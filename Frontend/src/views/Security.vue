@@ -50,7 +50,7 @@ const totalStats = computed(() => {
 const loadData = async () => {
   loading.value = true
   try {
-    const data = await securityApi.getStats(selectedHours.value) as SecurityStats
+    const data = await securityApi.getStats(selectedHours.value)
     stats.value = data
     updateCharts()
   } catch (error) {
@@ -123,7 +123,7 @@ const resetStats = async () => {
     await securityApi.reset()
     showSuccess('安全统计已重置')
     loadData()
-  } catch (error) {
+  } catch {
     showError('重置失败')
   }
 }
