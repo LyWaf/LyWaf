@@ -139,4 +139,10 @@ public static class SharedData
     /// 用途: 记录总请求数、独立IP、拦截次数、错误统计等
     /// </summary>
     public static readonly TrafficStatistic Traffic = new();
+
+    /// <summary>
+    /// 安全态势统计
+    /// 用途: 记录各类安全事件的历史数据、攻击源统计、趋势分析
+    /// </summary>
+    public static readonly SecurityStatistic Security = new();
 }

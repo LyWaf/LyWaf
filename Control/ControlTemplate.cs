@@ -17,6 +17,8 @@ public static class ControlTemplate
     private static DateTime _dashboardTemplateLastModified;
     private static string? _apiTimingTemplate;
     private static DateTime _apiTimingTemplateLastModified;
+    private static string? _securityTemplate;
+    private static DateTime _securityTemplateLastModified;
     
     /// <summary>
     /// 获取仪表板 HTML 模板
@@ -68,6 +70,32 @@ public static class ControlTemplate
         }
         
         return _apiTimingTemplate;
+    }
+    
+    /// <summary>
+    /// 获取安全态势 HTML 模板
+    /// </summary>
+    public static string GetSecurityTemplate()
+    {
+        var templatePath = Path.Combine(AppContext.BaseDirectory, "control_html", "security.html");
+        if (!File.Exists(templatePath))
+        {
+            templatePath = Path.Combine(Directory.GetCurrentDirectory(), "control_html", "security.html");
+        }
+        
+        if (!File.Exists(templatePath))
+        {
+            return "<html><body><h1>安全态势模板文件未找到</h1></body></html>";
+        }
+        
+        var lastModified = File.GetLastWriteTime(templatePath);
+        if (_securityTemplate == null || lastModified > _securityTemplateLastModified)
+        {
+            _securityTemplate = File.ReadAllText(templatePath, Encoding.UTF8);
+            _securityTemplateLastModified = lastModified;
+        }
+        
+        return _securityTemplate;
     }
     
     /// <summary>
@@ -521,82 +549,85 @@ public static class ControlTemplate
         var sb = new StringBuilder();
         
         // 主要指标行
-        sb.AppendLine("<div class=\"traffic-row\">");
+        sb.AppendLine("<div class=\"stat-row\">");
         
         // 请求次数
-        sb.AppendLine($"    <div class=\"traffic-card\" title=\"统计所有到达网关的HTTP请求总数，包括正常请求和被拦截的请求\">");
-        sb.AppendLine($"        <div class=\"traffic-label\">请求次数 <span class=\"traffic-icon\">👤</span></div>");
-        sb.AppendLine($"        <div class=\"traffic-value\">{FormatNumber(traffic.TotalRequests)}</div>");
+        sb.AppendLine($"    <div class=\"stat-card\" title=\"统计所有到达网关的HTTP请求总数，包括正常请求和被拦截的请求\">");
+        sb.AppendLine($"        <div class=\"stat-label\"><span class=\"stat-icon\">👤</span> 请求次数</div>");
+        sb.AppendLine($"        <div class=\"stat-value\">{FormatNumber(traffic.TotalRequests)}</div>");
         sb.AppendLine($"    </div>");
         
         // PV
-        sb.AppendLine($"    <div class=\"traffic-card\" title=\"页面访问次数（Page Views）：排除静态资源（JS/CSS/图片等）后的请求数\">");
-        sb.AppendLine($"        <div class=\"traffic-label\">访问次数（PV）<span class=\"traffic-icon\">📄</span></div>");
-        sb.AppendLine($"        <div class=\"traffic-value\">{FormatNumber(traffic.PageViews)}</div>");
+        sb.AppendLine($"    <div class=\"stat-card\" title=\"页面访问次数（Page Views）：排除静态资源（JS/CSS/图片等）后的请求数\">");
+        sb.AppendLine($"        <div class=\"stat-label\"><span class=\"stat-icon\">📄</span> 访问次数（PV）</div>");
+        sb.AppendLine($"        <div class=\"stat-value\">{FormatNumber(traffic.PageViews)}</div>");
         sb.AppendLine($"    </div>");
         
         // UV
-        sb.AppendLine($"    <div class=\"traffic-card\" title=\"独立访客数（Unique Visitors）：通过 Session Cookie 统计的独立访客数量，需要客户端携带 session/sid 等 Cookie\">");
-        sb.AppendLine($"        <div class=\"traffic-label\">独立访客（UV）<span class=\"traffic-icon\">👥</span></div>");
-        sb.AppendLine($"        <div class=\"traffic-value\">{FormatNumber(traffic.UniqueVisitors)}</div>");
+        sb.AppendLine($"    <div class=\"stat-card\" title=\"独立访客数（Unique Visitors）：通过 Session Cookie 统计的独立访客数量\">");
+        sb.AppendLine($"        <div class=\"stat-label\"><span class=\"stat-icon\">👥</span> 独立访客（UV）</div>");
+        sb.AppendLine($"        <div class=\"stat-value\">{FormatNumber(traffic.UniqueVisitors)}</div>");
         sb.AppendLine($"    </div>");
         
         // 独立 IP
-        sb.AppendLine($"    <div class=\"traffic-card\" title=\"独立客户端 IP 地址数量，通过 X-Forwarded-For、X-Real-IP 或直连 IP 获取\">");
-        sb.AppendLine($"        <div class=\"traffic-label\">独立 IP <span class=\"traffic-icon ip\">IP</span></div>");
-        sb.AppendLine($"        <div class=\"traffic-value\">{FormatNumber(traffic.UniqueIps)}</div>");
+        sb.AppendLine($"    <div class=\"stat-card\" title=\"独立客户端 IP 地址数量\">");
+        sb.AppendLine($"        <div class=\"stat-label\"><span class=\"stat-badge ip\">IP</span> 独立 IP</div>");
+        sb.AppendLine($"        <div class=\"stat-value\">{FormatNumber(traffic.UniqueIps)}</div>");
         sb.AppendLine($"    </div>");
         
         // 拦截次数
-        sb.AppendLine($"    <div class=\"traffic-card\" title=\"WAF 主动拦截的请求次数，包括：WAF规则拦截、CC攻击拦截、IP黑名单拦截、地理位置拦截等\">");
-        sb.AppendLine($"        <div class=\"traffic-label\">拦截次数 <span class=\"traffic-icon shield\">🛡</span></div>");
-        sb.AppendLine($"        <div class=\"traffic-value accent\">{FormatNumber(traffic.InterceptCount)}</div>");
+        sb.AppendLine($"    <div class=\"stat-card\" title=\"WAF 主动拦截的请求次数\">");
+        sb.AppendLine($"        <div class=\"stat-label\"><span class=\"stat-icon\">🛡️</span> 拦截次数</div>");
+        sb.AppendLine($"        <div class=\"stat-value blue\">{FormatNumber(traffic.InterceptCount)}</div>");
         sb.AppendLine($"    </div>");
         
         // 攻击 IP
-        sb.AppendLine($"    <div class=\"traffic-card\" title=\"触发安全规则被封禁的独立攻击来源 IP 数量，包括：WAF攻击检测、CC攻击检测、异常行为分析触发封禁的IP\">");
-        sb.AppendLine($"        <div class=\"traffic-label\">攻击 IP <span class=\"traffic-icon danger\">IP</span></div>");
-        sb.AppendLine($"        <div class=\"traffic-value danger\">{traffic.AttackIps}</div>");
+        sb.AppendLine($"    <div class=\"stat-card\" title=\"触发安全规则被封禁的独立攻击来源 IP 数量\">");
+        sb.AppendLine($"        <div class=\"stat-label\"><span class=\"stat-badge ip\">IP</span> 攻击 IP</div>");
+        sb.AppendLine($"        <div class=\"stat-value red\">{traffic.AttackIps}</div>");
         sb.AppendLine($"    </div>");
         sb.AppendLine("</div>");
         
         // 错误统计行
-        sb.AppendLine("<div class=\"traffic-row error-row\">");
+        sb.AppendLine("<div class=\"stat-row error-row\">");
         
         // 4xx 错误数
-        sb.AppendLine($"    <div class=\"traffic-card small\" title=\"HTTP 4xx 客户端错误响应总数，包括 400/401/403/404/429 等状态码\">");
-        sb.AppendLine($"        <div class=\"traffic-label\">4xx 错误数 <span class=\"traffic-warn\">⚠</span></div>");
-        sb.AppendLine($"        <div class=\"traffic-value warn\">{FormatNumber(traffic.Error4xxCount)}</div>");
+        sb.AppendLine($"    <div class=\"stat-card\" title=\"HTTP 4xx 客户端错误响应总数\">");
+        sb.AppendLine($"        <div class=\"stat-label\">4xx 错误数 <span style=\"color:#e74c3c;\">⚠</span></div>");
+        sb.AppendLine($"        <div class=\"stat-value red\">{FormatNumber(traffic.Error4xxCount)}</div>");
         sb.AppendLine($"    </div>");
         
         // 4xx 错误率
-        sb.AppendLine($"    <div class=\"traffic-card small\" title=\"4xx 错误数占总请求数的百分比：{traffic.Error4xxCount} / {traffic.TotalRequests}\">");
-        sb.AppendLine($"        <div class=\"traffic-label\">4xx 错误率 <span class=\"traffic-warn\">⚠</span></div>");
-        sb.AppendLine($"        <div class=\"traffic-value warn\">{traffic.Error4xxRate:F2}%</div>");
+        sb.AppendLine($"    <div class=\"stat-card\" title=\"4xx 错误数占总请求数的百分比\">");
+        sb.AppendLine($"        <div class=\"stat-label\">4xx 错误率 <span style=\"color:#e74c3c;\">⚠</span></div>");
+        sb.AppendLine($"        <div class=\"stat-value red\">{traffic.Error4xxRate:F2}%</div>");
         sb.AppendLine($"    </div>");
         
         // 4xx 拦截数
-        sb.AppendLine($"    <div class=\"traffic-card small\" title=\"WAF 主动拦截导致的 4xx 错误数量（403 Forbidden、429 Too Many Requests 等）\">");
-        sb.AppendLine($"        <div class=\"traffic-label\">4xx 拦截数 <span class=\"traffic-warn\">⚠</span></div>");
-        sb.AppendLine($"        <div class=\"traffic-value warn\">{FormatNumber(traffic.Intercept4xxCount)}</div>");
+        sb.AppendLine($"    <div class=\"stat-card\" title=\"WAF 主动拦截导致的 4xx 错误数量\">");
+        sb.AppendLine($"        <div class=\"stat-label\">4xx 拦截数 <span style=\"color:#e74c3c;\">⚠</span></div>");
+        sb.AppendLine($"        <div class=\"stat-value red\">{FormatNumber(traffic.Intercept4xxCount)}</div>");
         sb.AppendLine($"    </div>");
         
         // 4xx 拦截率
-        sb.AppendLine($"    <div class=\"traffic-card small\" title=\"主动拦截占 4xx 错误的百分比：{traffic.Intercept4xxCount} / {traffic.Error4xxCount}，值越高表示更多 4xx 是 WAF 主动防护产生的\">");
-        sb.AppendLine($"        <div class=\"traffic-label\">4xx 拦截率 <span class=\"traffic-warn\">⚠</span></div>");
-        sb.AppendLine($"        <div class=\"traffic-value warn\">{traffic.Intercept4xxRate:F2}%</div>");
+        sb.AppendLine($"    <div class=\"stat-card\" title=\"主动拦截占 4xx 错误的百分比\">");
+        sb.AppendLine($"        <div class=\"stat-label\">4xx 拦截率 <span style=\"color:#e74c3c;\">⚠</span></div>");
+        sb.AppendLine($"        <div class=\"stat-value red\">{traffic.Intercept4xxRate:F2}%</div>");
         sb.AppendLine($"    </div>");
+        sb.AppendLine("</div>");
         
+        // 5xx 错误统计
+        sb.AppendLine("<div class=\"stat-row error-row\">");
         // 5xx 错误数
-        sb.AppendLine($"    <div class=\"traffic-card small\" title=\"HTTP 5xx 服务端错误响应总数，包括 500/502/503/504 等状态码，通常表示后端服务异常\">");
-        sb.AppendLine($"        <div class=\"traffic-label\">5xx 错误数 <span class=\"traffic-danger\">⚠</span></div>");
-        sb.AppendLine($"        <div class=\"traffic-value danger\">{FormatNumber(traffic.Error5xxCount)}</div>");
+        sb.AppendLine($"    <div class=\"stat-card\" title=\"HTTP 5xx 服务端错误响应总数\">");
+        sb.AppendLine($"        <div class=\"stat-label\">5xx 错误数 <span style=\"color:#e74c3c;\">⚠</span></div>");
+        sb.AppendLine($"        <div class=\"stat-value red\">{FormatNumber(traffic.Error5xxCount)}</div>");
         sb.AppendLine($"    </div>");
         
         // 5xx 错误率
-        sb.AppendLine($"    <div class=\"traffic-card small\" title=\"5xx 错误数占总请求数的百分比：{traffic.Error5xxCount} / {traffic.TotalRequests}，值越低表示后端服务越稳定\">");
-        sb.AppendLine($"        <div class=\"traffic-label\">5xx 错误率 <span class=\"traffic-danger\">⚠</span></div>");
-        sb.AppendLine($"        <div class=\"traffic-value danger\">{traffic.Error5xxRate:F2}%</div>");
+        sb.AppendLine($"    <div class=\"stat-card\" title=\"5xx 错误数占总请求数的百分比\">");
+        sb.AppendLine($"        <div class=\"stat-label\">5xx 错误率 <span style=\"color:#e74c3c;\">⚠</span></div>");
+        sb.AppendLine($"        <div class=\"stat-value red\">{traffic.Error5xxRate:F2}%</div>");
         sb.AppendLine($"    </div>");
         sb.AppendLine("</div>");
         

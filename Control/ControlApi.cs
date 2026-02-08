@@ -200,6 +200,85 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // 安全态势页面
+        app.MapGet("/security", (HttpContext ctx) =>
+        {
+            var html = ControlTemplate.GetSecurityTemplate();
+            return Results.Content(html, "text/html; charset=utf-8");
+        }).RequireHost($"*:{controlPort}");
+
+        // 安全态势统计数据
+        app.MapGet("/api/security/stats", (HttpContext ctx) =>
+        {
+            try
+            {
+                var hoursStr = ctx.Request.Query["hours"].FirstOrDefault();
+                var hours = int.TryParse(hoursStr, out var h) ? h : 24;
+                
+                var snapshot = SharedData.Security.GetSnapshot();
+                var timeSlots = SharedData.Security.GetTimeSlots(hours);
+                var topAttackSources = SharedData.Security.GetTopAttackSources(10);
+                
+                // 各类型的 Top IP
+                var topWafSources = SharedData.Security.GetTopAttackSourcesByType(SecurityEventType.WafIntercept, 5);
+                var topCcSources = SharedData.Security.GetTopAttackSourcesByType(SecurityEventType.CcAttack, 5);
+                var topBlacklistSources = SharedData.Security.GetTopAttackSourcesByType(SecurityEventType.BlacklistBlock, 5);
+                var topGeoSources = SharedData.Security.GetTopAttackSourcesByType(SecurityEventType.GeoBlock, 5);
+                var topCrawlerSources = SharedData.Security.GetTopAttackSourcesByType(SecurityEventType.CrawlerDetect, 5);
+                
+                return Results.Json(new
+                {
+                    snapshot = new
+                    {
+                        startTime = snapshot.StartTime,
+                        wafInterceptCount = snapshot.WafInterceptCount,
+                        blacklistBlockCount = snapshot.BlacklistBlockCount,
+                        ccAttackCount = snapshot.CcAttackCount,
+                        crawlerDetectCount = snapshot.CrawlerDetectCount,
+                        geoBlockCount = snapshot.GeoBlockCount,
+                        rateLimitCount = snapshot.RateLimitCount,
+                        totalInterceptCount = snapshot.TotalInterceptCount,
+                        uniqueAttackIps = snapshot.UniqueAttackIps
+                    },
+                    timeSlots = timeSlots.Select(s => new
+                    {
+                        time = s.Time,
+                        wafIntercept = s.WafIntercept,
+                        blacklistBlock = s.BlacklistBlock,
+                        ccAttack = s.CcAttack,
+                        crawlerDetect = s.CrawlerDetect,
+                        geoBlock = s.GeoBlock,
+                        rateLimit = s.RateLimit,
+                        total = s.Total
+                    }),
+                    topAttackSources = topAttackSources.Select(s => new { ip = s.Ip, count = s.Count }),
+                    topWafSources = topWafSources.Select(s => new { ip = s.Item1, count = s.Item2 }),
+                    topCcSources = topCcSources.Select(s => new { ip = s.Item1, count = s.Item2 }),
+                    topBlacklistSources = topBlacklistSources.Select(s => new { ip = s.Item1, count = s.Item2 }),
+                    topGeoSources = topGeoSources.Select(s => new { ip = s.Item1, count = s.Item2 }),
+                    topCrawlerSources = topCrawlerSources.Select(s => new { ip = s.Item1, count = s.Item2 })
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = ex.Message });
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 重置安全态势统计数据
+        app.MapPost("/api/security/reset", (HttpContext ctx) =>
+        {
+            try
+            {
+                SharedData.Security.Reset();
+                return Results.Json(new { success = true, message = "安全态势统计数据已重置" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = ex.Message });
+            }
+        }).RequireHost($"*:{controlPort}");
+
         app.MapGet("/api/status", (HttpContext ctx) =>
         {
             return Results.Json(new

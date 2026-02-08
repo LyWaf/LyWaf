@@ -240,7 +240,8 @@ public class AnalysisPlugin : LyWafPluginBase
                     if (count > limit.LimitNum)
                     {
                         isFb = true;
-                        WafUtil.DoFbIp(ip, $"超过{limit.Path}的CC的访问限制频率", limit.FbTime);
+                        WafUtil.DoFbIp(ip, $"超过{limit.Path}的CC的访问限制频率", limit.FbTime, 
+                            eventType: Shared.SecurityEventType.CcAttack);
                         break;
                     }
                 }
@@ -258,7 +259,8 @@ public class AnalysisPlugin : LyWafPluginBase
         var ratio = option.GetNotWaitFbRatio();
         if (notWaitCount * 1.0 / allCount > ratio)
         {
-            WafUtil.DoFbIp(ip, $"同一条请求未完成又重复请求占比 {notWaitCount * 1.0 / allCount}, 总次数 {allCount}");
+            WafUtil.DoFbIp(ip, $"同一条请求未完成又重复请求占比 {notWaitCount * 1.0 / allCount}, 总次数 {allCount}",
+                eventType: Shared.SecurityEventType.AbnormalBehavior);
             return;
         }
 
@@ -297,7 +299,8 @@ public class AnalysisPlugin : LyWafPluginBase
         var maxRatio = allMaxTimes * 1.0 / allVisitTimes;
         if (allVisitTimes > option.GetMaxFreqMinReqs() && maxRatio > option.GetMaxFreqFbRatio())
         {
-            WafUtil.DoFbIp(ip, $"前{maxFreqGetNums}种请求({allMaxTimes * 1.0 / allVisitTimes}) 请求占比超过{maxRatio}");
+            WafUtil.DoFbIp(ip, $"前{maxFreqGetNums}种请求({allMaxTimes * 1.0 / allVisitTimes}) 请求占比超过{maxRatio}",
+                eventType: Shared.SecurityEventType.CcAttack);
             SharedData.ClientStas.Remove(ip);
         }
     }

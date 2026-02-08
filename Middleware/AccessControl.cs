@@ -1,4 +1,5 @@
 using LyWaf.Services.AccessControl;
+using LyWaf.Shared;
 using LyWaf.Utils;
 using NLog;
 using Yarp.ReverseProxy.Model;
@@ -87,14 +88,14 @@ public class AccessControlMiddleware(
     {
         var geoInfo = checkResult.GeoInfo;
 
-        // 构建拒绝原因描述
-        var reasonDesc = checkResult.DenyReason switch
+        // 构建拒绝原因描述和安全事件类型
+        var (reasonDesc, eventType) = checkResult.DenyReason switch
         {
-            AccessDenyReason.IpDenied => "IP黑名单",
-            AccessDenyReason.PathIpDenied => "路径IP限制",
-            AccessDenyReason.GeoDenied => $"地理位置限制({geoInfo?.Country}/{geoInfo?.Region})",
-            AccessDenyReason.PathGeoDenied => $"路径地理位置限制({geoInfo?.Country}/{geoInfo?.Region})",
-            _ => "访问被拒绝"
+            AccessDenyReason.IpDenied => ("IP黑名单", SecurityEventType.BlacklistBlock),
+            AccessDenyReason.PathIpDenied => ("路径IP限制", SecurityEventType.BlacklistBlock),
+            AccessDenyReason.GeoDenied => ($"地理位置限制({geoInfo?.Country}/{geoInfo?.Region})", SecurityEventType.GeoBlock),
+            AccessDenyReason.PathGeoDenied => ($"路径地理位置限制({geoInfo?.Country}/{geoInfo?.Region})", SecurityEventType.GeoBlock),
+            _ => ("访问被拒绝", SecurityEventType.BlacklistBlock)
         };
 
         switch (checkResult.DenyReason)
@@ -122,9 +123,13 @@ public class AccessControlMiddleware(
         // 如果 RejectMessage 为空，使用 WafUtil 的模板
         if (string.IsNullOrEmpty(checkResult.RejectMessage))
         {
-            await WafUtil.WriteErrorOutput(context, checkResult.RejectStatusCode, extraValues);
+            await WafUtil.WriteErrorOutput(context, checkResult.RejectStatusCode, extraValues, 
+                isIntercept: true, isAttack: false, eventType: eventType);
             return;
         }
+
+        // 记录安全事件
+        SharedData.Security.RecordEvent(eventType, clientIp);
 
         // 使用自定义消息
         context.Response.StatusCode = checkResult.RejectStatusCode;

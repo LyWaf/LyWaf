@@ -484,3 +484,302 @@ public class ApiTimingStatistic : ICloneable
         };
     }
 }
+
+/// <summary>
+/// 安全事件类型枚举
+/// </summary>
+public enum SecurityEventType
+{
+    /// <summary>WAF攻击拦截（SQL注入、XSS等）</summary>
+    WafIntercept,
+    /// <summary>黑名单拦截</summary>
+    BlacklistBlock,
+    /// <summary>CC攻击拦截</summary>
+    CcAttack,
+    /// <summary>爬虫检测</summary>
+    CrawlerDetect,
+    /// <summary>地理位置拦截</summary>
+    GeoBlock,
+    /// <summary>频率限制</summary>
+    RateLimit,
+    /// <summary>异常行为</summary>
+    AbnormalBehavior
+}
+
+/// <summary>
+/// 安全态势时间片数据
+/// </summary>
+public class SecurityTimeSlot
+{
+    public DateTime Time { get; set; }
+    public long WafIntercept { get; set; }
+    public long BlacklistBlock { get; set; }
+    public long CcAttack { get; set; }
+    public long CrawlerDetect { get; set; }
+    public long GeoBlock { get; set; }
+    public long RateLimit { get; set; }
+    public long Total => WafIntercept + BlacklistBlock + CcAttack + CrawlerDetect + GeoBlock + RateLimit;
+}
+
+/// <summary>
+/// 攻击源IP统计
+/// </summary>
+public class AttackSourceStat
+{
+    public string Ip { get; set; } = "";
+    public long Count { get; set; }
+    public SecurityEventType LastEventType { get; set; }
+    public DateTime LastAttackTime { get; set; }
+}
+
+/// <summary>
+/// 安全态势统计类
+/// 记录各类安全事件的历史数据和攻击源统计
+/// </summary>
+public class SecurityStatistic
+{
+    private readonly object _lock = new();
+    private const int MaxTimeSlots = 288; // 保留24小时数据（每5分钟一个点）
+    private const int TimeSlotMinutes = 5;
+    
+    /// <summary>统计开始时间</summary>
+    public DateTime StartTime { get; private set; } = DateTime.UtcNow;
+    
+    // 各类安全事件计数
+    public long WafInterceptCount { get; private set; }
+    public long BlacklistBlockCount { get; private set; }
+    public long CcAttackCount { get; private set; }
+    public long CrawlerDetectCount { get; private set; }
+    public long GeoBlockCount { get; private set; }
+    public long RateLimitCount { get; private set; }
+    
+    /// <summary>历史时间片数据</summary>
+    private readonly LinkedList<SecurityTimeSlot> _timeSlots = new();
+    private SecurityTimeSlot? _currentSlot;
+    private DateTime _currentSlotTime;
+    
+    /// <summary>攻击源IP统计 (IP -> 攻击次数)</summary>
+    private readonly Dictionary<string, AttackSourceStat> _attackSources = new();
+    
+    /// <summary>各类型攻击源IP统计</summary>
+    private readonly Dictionary<SecurityEventType, Dictionary<string, long>> _typedAttackSources = new();
+    
+    public SecurityStatistic()
+    {
+        foreach (SecurityEventType type in Enum.GetValues<SecurityEventType>())
+        {
+            _typedAttackSources[type] = new Dictionary<string, long>();
+        }
+    }
+    
+    /// <summary>
+    /// 获取当前时间片
+    /// </summary>
+    private SecurityTimeSlot GetOrCreateCurrentSlot()
+    {
+        var now = DateTime.UtcNow;
+        var slotTime = new DateTime(now.Year, now.Month, now.Day, now.Hour, 
+            (now.Minute / TimeSlotMinutes) * TimeSlotMinutes, 0, DateTimeKind.Utc);
+        
+        if (_currentSlot == null || slotTime > _currentSlotTime)
+        {
+            // 保存旧的时间片
+            if (_currentSlot != null)
+            {
+                _timeSlots.AddLast(_currentSlot);
+                // 保持最大数量
+                while (_timeSlots.Count > MaxTimeSlots)
+                {
+                    _timeSlots.RemoveFirst();
+                }
+            }
+            
+            // 创建新时间片
+            _currentSlot = new SecurityTimeSlot { Time = slotTime };
+            _currentSlotTime = slotTime;
+        }
+        
+        return _currentSlot;
+    }
+    
+    /// <summary>
+    /// 记录安全事件
+    /// </summary>
+    public void RecordEvent(SecurityEventType eventType, string clientIp)
+    {
+        lock (_lock)
+        {
+            var slot = GetOrCreateCurrentSlot();
+            
+            // 更新计数
+            switch (eventType)
+            {
+                case SecurityEventType.WafIntercept:
+                    WafInterceptCount++;
+                    slot.WafIntercept++;
+                    break;
+                case SecurityEventType.BlacklistBlock:
+                    BlacklistBlockCount++;
+                    slot.BlacklistBlock++;
+                    break;
+                case SecurityEventType.CcAttack:
+                    CcAttackCount++;
+                    slot.CcAttack++;
+                    break;
+                case SecurityEventType.CrawlerDetect:
+                    CrawlerDetectCount++;
+                    slot.CrawlerDetect++;
+                    break;
+                case SecurityEventType.GeoBlock:
+                    GeoBlockCount++;
+                    slot.GeoBlock++;
+                    break;
+                case SecurityEventType.RateLimit:
+                case SecurityEventType.AbnormalBehavior:
+                    RateLimitCount++;
+                    slot.RateLimit++;
+                    break;
+            }
+            
+            // 更新攻击源统计
+            if (!_attackSources.TryGetValue(clientIp, out var stat))
+            {
+                stat = new AttackSourceStat { Ip = clientIp };
+                _attackSources[clientIp] = stat;
+            }
+            stat.Count++;
+            stat.LastEventType = eventType;
+            stat.LastAttackTime = DateTime.UtcNow;
+            
+            // 更新分类攻击源统计
+            if (!_typedAttackSources[eventType].TryGetValue(clientIp, out var count))
+            {
+                count = 0;
+            }
+            _typedAttackSources[eventType][clientIp] = count + 1;
+        }
+    }
+    
+    /// <summary>
+    /// 获取历史时间片数据
+    /// </summary>
+    public List<SecurityTimeSlot> GetTimeSlots(int hours = 24)
+    {
+        lock (_lock)
+        {
+            var result = new List<SecurityTimeSlot>();
+            var cutoff = DateTime.UtcNow.AddHours(-hours);
+            
+            foreach (var slot in _timeSlots)
+            {
+                if (slot.Time >= cutoff)
+                {
+                    result.Add(slot);
+                }
+            }
+            
+            // 添加当前时间片
+            if (_currentSlot != null && _currentSlot.Time >= cutoff)
+            {
+                result.Add(_currentSlot);
+            }
+            
+            return result;
+        }
+    }
+    
+    /// <summary>
+    /// 获取攻击源Top N
+    /// </summary>
+    public List<AttackSourceStat> GetTopAttackSources(int topN = 10)
+    {
+        lock (_lock)
+        {
+            return _attackSources.Values
+                .OrderByDescending(x => x.Count)
+                .Take(topN)
+                .ToList();
+        }
+    }
+    
+    /// <summary>
+    /// 获取指定类型的攻击源Top N
+    /// </summary>
+    public List<(string Ip, long Count)> GetTopAttackSourcesByType(SecurityEventType eventType, int topN = 5)
+    {
+        lock (_lock)
+        {
+            if (!_typedAttackSources.TryGetValue(eventType, out var sources))
+                return new List<(string, long)>();
+            
+            return sources
+                .OrderByDescending(x => x.Value)
+                .Take(topN)
+                .Select(x => (x.Key, x.Value))
+                .ToList();
+        }
+    }
+    
+    /// <summary>
+    /// 获取统计快照
+    /// </summary>
+    public SecurityStatisticSnapshot GetSnapshot()
+    {
+        lock (_lock)
+        {
+            return new SecurityStatisticSnapshot
+            {
+                StartTime = StartTime,
+                WafInterceptCount = WafInterceptCount,
+                BlacklistBlockCount = BlacklistBlockCount,
+                CcAttackCount = CcAttackCount,
+                CrawlerDetectCount = CrawlerDetectCount,
+                GeoBlockCount = GeoBlockCount,
+                RateLimitCount = RateLimitCount,
+                TotalInterceptCount = WafInterceptCount + BlacklistBlockCount + CcAttackCount + 
+                    CrawlerDetectCount + GeoBlockCount + RateLimitCount,
+                UniqueAttackIps = _attackSources.Count
+            };
+        }
+    }
+    
+    /// <summary>
+    /// 重置统计
+    /// </summary>
+    public void Reset()
+    {
+        lock (_lock)
+        {
+            StartTime = DateTime.UtcNow;
+            WafInterceptCount = 0;
+            BlacklistBlockCount = 0;
+            CcAttackCount = 0;
+            CrawlerDetectCount = 0;
+            GeoBlockCount = 0;
+            RateLimitCount = 0;
+            _timeSlots.Clear();
+            _currentSlot = null;
+            _attackSources.Clear();
+            foreach (var dict in _typedAttackSources.Values)
+            {
+                dict.Clear();
+            }
+        }
+    }
+}
+
+/// <summary>
+/// 安全态势统计快照
+/// </summary>
+public class SecurityStatisticSnapshot
+{
+    public DateTime StartTime { get; init; }
+    public long WafInterceptCount { get; init; }
+    public long BlacklistBlockCount { get; init; }
+    public long CcAttackCount { get; init; }
+    public long CrawlerDetectCount { get; init; }
+    public long GeoBlockCount { get; init; }
+    public long RateLimitCount { get; init; }
+    public long TotalInterceptCount { get; init; }
+    public int UniqueAttackIps { get; init; }
+}

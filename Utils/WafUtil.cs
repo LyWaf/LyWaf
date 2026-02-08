@@ -25,7 +25,8 @@ public class WafUtil
         return StringUtil.FormatTemplate(message, context, extraValues);
     }
 
-    public static void DoFbIp(string ip, string reason, TimeSpan? timeout = null, bool isAttack = true)
+    public static void DoFbIp(string ip, string reason, TimeSpan? timeout = null, bool isAttack = true, 
+        SecurityEventType? eventType = null)
     {
         if (timeout == null)
         {
@@ -46,6 +47,10 @@ public class WafUtil
         {
             SharedData.Traffic.RecordAttackIp(ip);
         }
+        
+        // 记录安全事件
+        var secEventType = eventType ?? SecurityEventType.CcAttack;
+        SharedData.Security.RecordEvent(secEventType, ip);
     }
 
     public static string? GetFbReason(string ip)
@@ -57,8 +62,9 @@ public class WafUtil
     /// <summary>
     /// 写入 403 Forbidden 错误响应
     /// </summary>
-    public static Task WriteFbOutput(HttpContext context, Dictionary<string, string?>? extraValues = null, bool isAttack = false)
-        => WriteErrorOutput(context, 403, extraValues, isIntercept: true, isAttack: isAttack);
+    public static Task WriteFbOutput(HttpContext context, Dictionary<string, string?>? extraValues = null, 
+        bool isAttack = false, SecurityEventType? eventType = null)
+        => WriteErrorOutput(context, 403, extraValues, isIntercept: true, isAttack: isAttack, eventType: eventType);
 
     /// <summary>
     /// 写入指定状态码的错误响应（统一入口）
@@ -68,13 +74,22 @@ public class WafUtil
     /// <param name="extraValues">额外的占位符值（支持 reason 等任意参数）</param>
     /// <param name="isIntercept">是否为主动拦截（用于流量统计）</param>
     /// <param name="isAttack">是否为攻击请求（用于流量统计）</param>
+    /// <param name="eventType">安全事件类型（用于安全态势统计）</param>
     public static async Task WriteErrorOutput(HttpContext context, int statusCode, 
-        Dictionary<string, string?>? extraValues = null, bool isIntercept = true, bool isAttack = false)
+        Dictionary<string, string?>? extraValues = null, bool isIntercept = true, bool isAttack = false,
+        SecurityEventType? eventType = null)
     {
         // 记录拦截统计
         if (isIntercept)
         {
             StatisticUtil.RecordIntercept(context, statusCode, isAttack);
+            
+            // 记录安全事件
+            if (eventType.HasValue)
+            {
+                var clientIp = RequestUtil.GetClientIp(context.Request);
+                SharedData.Security.RecordEvent(eventType.Value, clientIp);
+            }
         }
         
         var templateService = ServiceLocator.GetService<IErrorTemplateService>();
