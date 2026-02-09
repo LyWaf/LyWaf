@@ -134,6 +134,79 @@ export const ccApi = {
     api.post<ApiResponse>('/cc/rules/remove', { path }),
 }
 
+// ==================== 高级 CC 规则 API ====================
+
+import type { AdvancedCcRule } from '@/types'
+
+interface AdvancedCcRulesResponse {
+  success: boolean
+  count: number
+  rules: AdvancedCcRule[]
+}
+
+interface AdvancedCcRuleResponse {
+  success: boolean
+  rule: AdvancedCcRule
+}
+
+interface CcEnumsResponse {
+  success: boolean
+  matchTargets: { name: string; value: string }[]
+  matchOperators: { name: string; value: string }[]
+  ruleTypes: { name: string; value: string }[]
+  actions: { name: string; value: string }[]
+}
+
+export interface CreateAdvancedCcRuleRequest {
+  name: string
+  enabled?: boolean
+  type?: string
+  conditions?: Array<{
+    target: string
+    operator: string
+    values: string[]
+  }>
+  period?: number
+  threshold?: number
+  action?: string
+  actionDuration?: number
+  priority?: number
+}
+
+export const advancedCcApi = {
+  // 获取所有高级 CC 规则
+  getRules: () =>
+    api.get<AdvancedCcRulesResponse>('/cc/advanced'),
+    
+  // 按类型获取规则
+  getRulesByType: (type: string) =>
+    api.get<AdvancedCcRulesResponse>(`/cc/advanced/type/${type}`),
+    
+  // 获取单个规则
+  getRule: (ruleId: string) =>
+    api.get<AdvancedCcRuleResponse>(`/cc/advanced/${ruleId}`),
+    
+  // 添加规则
+  addRule: (rule: CreateAdvancedCcRuleRequest) =>
+    api.post<ApiResponse & { ruleId: string }>('/cc/advanced/add', rule),
+    
+  // 更新规则
+  updateRule: (rule: CreateAdvancedCcRuleRequest & { id: string }) =>
+    api.post<ApiResponse & { ruleId: string }>('/cc/advanced/update', rule),
+    
+  // 删除规则
+  removeRule: (ruleId: string) =>
+    api.post<ApiResponse>('/cc/advanced/remove', { ruleId }),
+    
+  // 启用/禁用规则
+  toggleRule: (ruleId: string, enabled?: boolean) =>
+    api.post<ApiResponse & { enabled: boolean }>('/cc/advanced/toggle', { ruleId, enabled }),
+    
+  // 获取枚举值
+  getEnums: () =>
+    api.get<CcEnumsResponse>('/cc/advanced/enums'),
+}
+
 // ==================== 流量统计 API ====================
 
 export const trafficApi = {

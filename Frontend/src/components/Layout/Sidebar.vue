@@ -18,14 +18,7 @@ const menuItems: MenuItem[] = [
   { name: '防护应用', icon: '⚙️', action: 'feature-status' },
   { name: '攻击防护', icon: '🔒', action: 'waf-rules' },
   { name: '黑白名单', icon: '📋', action: 'ip-control' },
-  { 
-    name: 'CC 防护', 
-    icon: '⚡',
-    children: [
-      { name: '防护规则', action: 'cc-rules' },
-      { name: '封禁列表', action: 'blocked-ips' },
-    ]
-  },
+  { path: '/cc-protection', name: 'CC 防护', icon: '⚡' },
   { name: '地理访问', icon: '🌍', action: 'geo-access' },
   { path: '/api-timing', name: 'API 耗时', icon: '⏱️' },
 ]

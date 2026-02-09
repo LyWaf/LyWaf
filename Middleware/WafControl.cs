@@ -9,13 +9,14 @@ using NLog;
 
 namespace LyWaf.Middleware;
 
-public class WafControlMiddleware(RequestDelegate next, IStatisticService statisticService, IProtectService protectService, ILyLogService logService)
+public class WafControlMiddleware(RequestDelegate next, IStatisticService statisticService, IProtectService protectService, ILyLogService logService, ICcRuleChecker ccRuleChecker)
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly RequestDelegate _next = next;
     private readonly IStatisticService statisticService = statisticService;
     private readonly IProtectService protectService = protectService;
     private readonly ILyLogService _logService = logService;
+    private readonly ICcRuleChecker _ccRuleChecker = ccRuleChecker;
     public async Task<bool> WhitePathCheck(HttpContext context)
     {
         var path = await statisticService.GetMatchPath(context.Request.Path);
@@ -74,6 +75,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             if ((reason = await CheckArgsAttck(context)) != null)
             {
                 // WAF Args 攻击检测，标记为攻击
+                _ccRuleChecker.RecordAttackEvent(clientIp); // 记录攻击事件用于 CC 高频攻击检测
                 await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason }, 
                     isAttack: true, eventType: Shared.SecurityEventType.WafIntercept);
                 return;
@@ -81,6 +83,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             if ((reason = await CheckPostAttck(context)) != null)
             {
                 // WAF Post 攻击检测，标记为攻击
+                _ccRuleChecker.RecordAttackEvent(clientIp); // 记录攻击事件用于 CC 高频攻击检测
                 await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason }, 
                     isAttack: true, eventType: Shared.SecurityEventType.WafIntercept);
                 return;

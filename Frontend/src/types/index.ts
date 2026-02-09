@@ -57,6 +57,76 @@ export interface CcRule {
   fbTime: number
 }
 
+// =============== 高级 CC 规则类型 ===============
+
+// 匹配目标
+export type CcMatchTarget = 
+  | 'UrlPath' 
+  | 'FullUrl' 
+  | 'Method' 
+  | 'ContentType' 
+  | 'UserAgent' 
+  | 'Referer' 
+  | 'Header' 
+  | 'QueryParam' 
+  | 'Cookie' 
+  | 'ClientIp'
+  | 'StatusCode'
+
+// 匹配操作符
+export type CcMatchOperator = 
+  | 'Equal' 
+  | 'NotEqual' 
+  | 'Contains' 
+  | 'NotContains' 
+  | 'StartsWith' 
+  | 'EndsWith' 
+  | 'Regex' 
+  | 'Exists' 
+  | 'NotExists'
+
+// 规则类型
+export type CcRuleType = 'FrequentAccess' | 'FrequentAttack' | 'FrequentError'
+
+// 触发动作
+export type CcAction = 'Captcha' | 'Block' | 'Reject' | 'RateLimit' | 'LogOnly'
+
+// CC 条件
+export interface CcCondition {
+  target: CcMatchTarget
+  operator: CcMatchOperator
+  values: string[]
+}
+
+// 高级 CC 规则
+export interface AdvancedCcRule {
+  id: string
+  name: string
+  enabled: boolean
+  type: CcRuleType
+  conditions: CcCondition[]
+  period: number
+  threshold: number
+  action: CcAction
+  actionDuration: number
+  priority: number
+  createdAt: string
+}
+
+// 枚举值选项
+export interface EnumOption {
+  name: string
+  value: string
+}
+
+// CC 枚举值
+export interface CcEnums {
+  matchTargets: EnumOption[]
+  matchOperators: EnumOption[]
+  ruleTypes: EnumOption[]
+  actions: EnumOption[]
+}
+
 // WAF 规则
 export interface WafRule {
   id: string

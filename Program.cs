@@ -1030,6 +1030,7 @@ public class Program
         builder.Services.AddSingleton<ISpeedLimitService, SpeedLimitService>();
         builder.Services.AddSingleton<IProtectService, ProtectService>();
         builder.Services.AddSingleton<IStatisticService, StatisticService>();
+        builder.Services.AddSingleton<ICcRuleChecker, CcRuleChecker>();
         builder.Services.AddSingleton<IAccessControlService, AccessControlService>();
         builder.Services.AddSingleton<IWafInfoService, WafInfoService>();
         builder.Services.AddSingleton<IAcmeService, AcmeService>();
@@ -1178,8 +1179,10 @@ public class Program
             // 自动 HTTPS 重定向
             proxyApp.UseMiddleware<AutoHttpsMiddleware>();
             proxyApp.UseMiddleware<WafControlMiddleware>();
+            proxyApp.UseMiddleware<CcProtectionMiddleware>();
             proxyApp.UseMiddleware<ThrottledMiddleware>();
             proxyApp.UseMiddleware<SpeedLimitMiddleware>();
+            proxyApp.UseMiddleware<CcResponseMonitorMiddleware>();
             
             // 普通及低优先级插件（Normal, Low, Lowest）- 在核心中间件之后
             proxyApp.UseLyWafPluginsInProxyNormal();

@@ -1331,6 +1331,300 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // =============== 高级 CC 规则管理 API ===============
+        
+        // 获取所有高级 CC 规则
+        app.MapGet("/api/cc/advanced", (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            var rules = statisticService.GetAdvancedCcRules();
+            return Results.Json(new
+            {
+                success = true,
+                count = rules.Count,
+                rules = rules.Select(r => new
+                {
+                    id = r.Id,
+                    name = r.Name,
+                    enabled = r.Enabled,
+                    type = r.Type.ToString(),
+                    conditions = r.Conditions.Select(c => new
+                    {
+                        target = c.Target.ToString(),
+                        @operator = c.Operator.ToString(),
+                        values = c.Values
+                    }),
+                    period = r.Period,
+                    threshold = r.Threshold,
+                    action = r.Action.ToString(),
+                    actionDuration = r.ActionDuration,
+                    priority = r.Priority,
+                    createdAt = r.CreatedAt
+                }),
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 按类型获取高级 CC 规则
+        app.MapGet("/api/cc/advanced/type/{type}", (HttpContext ctx, IStatisticService statisticService, string type) =>
+        {
+            if (!Enum.TryParse<CcRuleType>(type, true, out var ruleType))
+            {
+                return Results.Json(new { success = false, message = "无效的规则类型" }, statusCode: 400);
+            }
+            
+            var rules = statisticService.GetAdvancedCcRulesByType(ruleType);
+            return Results.Json(new
+            {
+                success = true,
+                type = ruleType.ToString(),
+                count = rules.Count,
+                rules = rules.Select(r => new
+                {
+                    id = r.Id,
+                    name = r.Name,
+                    enabled = r.Enabled,
+                    type = r.Type.ToString(),
+                    conditions = r.Conditions.Select(c => new
+                    {
+                        target = c.Target.ToString(),
+                        @operator = c.Operator.ToString(),
+                        values = c.Values
+                    }),
+                    period = r.Period,
+                    threshold = r.Threshold,
+                    action = r.Action.ToString(),
+                    actionDuration = r.ActionDuration,
+                    priority = r.Priority,
+                    createdAt = r.CreatedAt
+                }),
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 获取单个高级 CC 规则
+        app.MapGet("/api/cc/advanced/{ruleId}", (HttpContext ctx, IStatisticService statisticService, string ruleId) =>
+        {
+            var rule = statisticService.GetAdvancedCcRule(ruleId);
+            if (rule == null)
+            {
+                return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
+            }
+            
+            return Results.Json(new
+            {
+                success = true,
+                rule = new
+                {
+                    id = rule.Id,
+                    name = rule.Name,
+                    enabled = rule.Enabled,
+                    type = rule.Type.ToString(),
+                    conditions = rule.Conditions.Select(c => new
+                    {
+                        target = c.Target.ToString(),
+                        @operator = c.Operator.ToString(),
+                        values = c.Values
+                    }),
+                    period = rule.Period,
+                    threshold = rule.Threshold,
+                    action = rule.Action.ToString(),
+                    actionDuration = rule.ActionDuration,
+                    priority = rule.Priority,
+                    createdAt = rule.CreatedAt
+                },
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 添加高级 CC 规则
+        app.MapPost("/api/cc/advanced/add", async (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddAdvancedCcRuleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Name))
+                {
+                    return Results.Json(new { success = false, message = "规则名称不能为空" }, statusCode: 400);
+                }
+
+                var rule = new AdvancedCcRule
+                {
+                    Name = request.Name,
+                    Enabled = request.Enabled ?? true,
+                    Type = Enum.TryParse<CcRuleType>(request.Type, true, out var t) ? t : CcRuleType.FrequentAccess,
+                    Period = request.Period ?? 10,
+                    Threshold = request.Threshold ?? 100,
+                    Action = Enum.TryParse<CcAction>(request.Action, true, out var a) ? a : CcAction.Captcha,
+                    ActionDuration = request.ActionDuration ?? 10,
+                    Priority = request.Priority ?? 100,
+                    Conditions = request.Conditions?.Select(c => new CcCondition
+                    {
+                        Target = Enum.TryParse<CcMatchTarget>(c.Target, true, out var ct) ? ct : CcMatchTarget.UrlPath,
+                        Operator = Enum.TryParse<CcMatchOperator>(c.Operator, true, out var co) ? co : CcMatchOperator.Equal,
+                        Values = c.Values ?? []
+                    }).ToList() ?? []
+                };
+
+                if (statisticService.AddAdvancedCcRule(rule))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已添加高级 CC 规则: {rule.Name}",
+                        ruleId = rule.Id,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "添加失败" }, statusCode: 400);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 更新高级 CC 规则
+        app.MapPost("/api/cc/advanced/update", async (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<UpdateAdvancedCcRuleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Id))
+                {
+                    return Results.Json(new { success = false, message = "规则 ID 不能为空" }, statusCode: 400);
+                }
+
+                var existingRule = statisticService.GetAdvancedCcRule(request.Id);
+                if (existingRule == null)
+                {
+                    return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
+                }
+
+                var rule = new AdvancedCcRule
+                {
+                    Id = request.Id,
+                    Name = request.Name ?? existingRule.Name,
+                    Enabled = request.Enabled ?? existingRule.Enabled,
+                    Type = request.Type != null && Enum.TryParse<CcRuleType>(request.Type, true, out var t) ? t : existingRule.Type,
+                    Period = request.Period ?? existingRule.Period,
+                    Threshold = request.Threshold ?? existingRule.Threshold,
+                    Action = request.Action != null && Enum.TryParse<CcAction>(request.Action, true, out var a) ? a : existingRule.Action,
+                    ActionDuration = request.ActionDuration ?? existingRule.ActionDuration,
+                    Priority = request.Priority ?? existingRule.Priority,
+                    Conditions = request.Conditions?.Select(c => new CcCondition
+                    {
+                        Target = Enum.TryParse<CcMatchTarget>(c.Target, true, out var ct) ? ct : CcMatchTarget.UrlPath,
+                        Operator = Enum.TryParse<CcMatchOperator>(c.Operator, true, out var co) ? co : CcMatchOperator.Equal,
+                        Values = c.Values ?? []
+                    }).ToList() ?? existingRule.Conditions
+                };
+
+                if (statisticService.UpdateAdvancedCcRule(rule))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = $"已更新高级 CC 规则: {rule.Name}",
+                        ruleId = rule.Id,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "更新失败" }, statusCode: 400);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"更新失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除高级 CC 规则
+        app.MapPost("/api/cc/advanced/remove", async (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveAdvancedCcRuleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.RuleId))
+                {
+                    return Results.Json(new { success = false, message = "规则 ID 不能为空" }, statusCode: 400);
+                }
+
+                if (statisticService.RemoveAdvancedCcRule(request.RuleId))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = "已删除高级 CC 规则",
+                        ruleId = request.RuleId,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "删除失败：规则不存在" }, statusCode: 404);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 启用/禁用高级 CC 规则
+        app.MapPost("/api/cc/advanced/toggle", async (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<ToggleAdvancedCcRuleRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.RuleId))
+                {
+                    return Results.Json(new { success = false, message = "规则 ID 不能为空" }, statusCode: 400);
+                }
+
+                var rule = statisticService.GetAdvancedCcRule(request.RuleId);
+                var newState = request.Enabled ?? !(rule?.Enabled ?? false);
+
+                if (statisticService.ToggleAdvancedCcRule(request.RuleId, newState))
+                {
+                    return Results.Json(new
+                    {
+                        success = true,
+                        message = newState ? "已启用规则" : "已禁用规则",
+                        ruleId = request.RuleId,
+                        enabled = newState,
+                        timestamp = DateTime.Now
+                    });
+                }
+                else
+                {
+                    return Results.Json(new { success = false, message = "操作失败：规则不存在" }, statusCode: 404);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"操作失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 获取可用的匹配目标、操作符、动作等枚举值
+        app.MapGet("/api/cc/advanced/enums", (HttpContext ctx) =>
+        {
+            return Results.Json(new
+            {
+                success = true,
+                matchTargets = Enum.GetNames<CcMatchTarget>().Select(n => new { name = n, value = n }),
+                matchOperators = Enum.GetNames<CcMatchOperator>().Select(n => new { name = n, value = n }),
+                ruleTypes = Enum.GetNames<CcRuleType>().Select(n => new { name = n, value = n }),
+                actions = Enum.GetNames<CcAction>().Select(n => new { name = n, value = n }),
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
         // =============== 地理位置黑名单管理 API ===============
         
         // 获取地理位置黑名单
@@ -2074,6 +2368,53 @@ public class AddCcRuleRequest
 public class RemoveCcRuleRequest
 {
     public string Path { get; set; } = "";
+}
+
+// =============== 高级 CC 规则请求模型 ===============
+
+public class CcConditionRequest
+{
+    public string Target { get; set; } = "UrlPath";
+    public string Operator { get; set; } = "Equal";
+    public List<string>? Values { get; set; }
+}
+
+public class AddAdvancedCcRuleRequest
+{
+    public string Name { get; set; } = "";
+    public bool? Enabled { get; set; }
+    public string? Type { get; set; }
+    public List<CcConditionRequest>? Conditions { get; set; }
+    public int? Period { get; set; }
+    public int? Threshold { get; set; }
+    public string? Action { get; set; }
+    public int? ActionDuration { get; set; }
+    public int? Priority { get; set; }
+}
+
+public class UpdateAdvancedCcRuleRequest
+{
+    public string Id { get; set; } = "";
+    public string? Name { get; set; }
+    public bool? Enabled { get; set; }
+    public string? Type { get; set; }
+    public List<CcConditionRequest>? Conditions { get; set; }
+    public int? Period { get; set; }
+    public int? Threshold { get; set; }
+    public string? Action { get; set; }
+    public int? ActionDuration { get; set; }
+    public int? Priority { get; set; }
+}
+
+public class RemoveAdvancedCcRuleRequest
+{
+    public string RuleId { get; set; } = "";
+}
+
+public class ToggleAdvancedCcRuleRequest
+{
+    public string RuleId { get; set; } = "";
+    public bool? Enabled { get; set; }
 }
 
 public class AddCountryRequest

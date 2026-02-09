@@ -8,6 +8,11 @@ public class StatisticOptions
     public HashSet<string> WhitePaths { get; set; } = [];
     public Dictionary<string, object> Config { get; set; } = [];
     public List<LimitCcOption> LimitCc { get; set; } = [];
+    
+    /// <summary>
+    /// 高级 CC 规则列表
+    /// </summary>
+    public List<AdvancedCcRule> AdvancedCcRules { get; set; } = [];
     public const string MATCH = "{**match}";
     public const string ANY = "{**any}";
     public const string CONNECT = "/C/";

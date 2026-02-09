@@ -15,6 +15,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '安全态势', icon: '🛡️' }
   },
   {
+    path: '/cc-protection',
+    name: 'CcProtection',
+    component: () => import('@/views/CcProtection.vue'),
+    meta: { title: 'CC 防护', icon: '🛡️' }
+  },
+  {
     path: '/api-timing',
     name: 'ApiTiming',
     component: () => import('@/views/ApiTiming.vue'),

@@ -32,6 +32,43 @@ public interface IStatisticService
     /// 移除 CC 限制规则
     /// </summary>
     bool RemoveLimitCcRule(string path);
+    
+    // =============== 高级 CC 规则管理 ===============
+    
+    /// <summary>
+    /// 获取所有高级 CC 规则
+    /// </summary>
+    List<AdvancedCcRule> GetAdvancedCcRules();
+    
+    /// <summary>
+    /// 获取指定类型的高级 CC 规则
+    /// </summary>
+    List<AdvancedCcRule> GetAdvancedCcRulesByType(CcRuleType type);
+    
+    /// <summary>
+    /// 获取单个高级 CC 规则
+    /// </summary>
+    AdvancedCcRule? GetAdvancedCcRule(string ruleId);
+    
+    /// <summary>
+    /// 添加高级 CC 规则
+    /// </summary>
+    bool AddAdvancedCcRule(AdvancedCcRule rule);
+    
+    /// <summary>
+    /// 更新高级 CC 规则
+    /// </summary>
+    bool UpdateAdvancedCcRule(AdvancedCcRule rule);
+    
+    /// <summary>
+    /// 删除高级 CC 规则
+    /// </summary>
+    bool RemoveAdvancedCcRule(string ruleId);
+    
+    /// <summary>
+    /// 启用/禁用高级 CC 规则
+    /// </summary>
+    bool ToggleAdvancedCcRule(string ruleId, bool enabled);
 }
 
 
@@ -48,6 +85,10 @@ public class StatisticService : IStatisticService
     // 动态添加的 CC 规则
     private readonly List<LimitCcOption> _dynamicLimitCc = [];
     private readonly object _ccRuleLock = new();
+    
+    // 动态添加的高级 CC 规则
+    private readonly List<AdvancedCcRule> _dynamicAdvancedCcRules = [];
+    private readonly object _advancedCcRuleLock = new();
 
     private const int HAS_ANY = 0x00000001;
     private const int HAS_MATCH = 0x00000002;
@@ -308,6 +349,159 @@ public class StatisticService : IStatisticService
                 _dynamicLimitCc.Remove(rule);
                 BuildStatistic();
                 _logger.LogInformation("已移除动态 CC 规则: Path={Path}", path);
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    // =============== 高级 CC 规则管理 ===============
+    
+    /// <summary>
+    /// 获取所有高级 CC 规则
+    /// </summary>
+    public List<AdvancedCcRule> GetAdvancedCcRules()
+    {
+        lock (_advancedCcRuleLock)
+        {
+            var allRules = new List<AdvancedCcRule>(_options.AdvancedCcRules);
+            allRules.AddRange(_dynamicAdvancedCcRules);
+            return allRules.OrderBy(r => r.Priority).ThenBy(r => r.CreatedAt).ToList();
+        }
+    }
+    
+    /// <summary>
+    /// 获取指定类型的高级 CC 规则
+    /// </summary>
+    public List<AdvancedCcRule> GetAdvancedCcRulesByType(CcRuleType type)
+    {
+        return GetAdvancedCcRules().Where(r => r.Type == type).ToList();
+    }
+    
+    /// <summary>
+    /// 获取单个高级 CC 规则
+    /// </summary>
+    public AdvancedCcRule? GetAdvancedCcRule(string ruleId)
+    {
+        lock (_advancedCcRuleLock)
+        {
+            return _options.AdvancedCcRules.FirstOrDefault(r => r.Id == ruleId) 
+                ?? _dynamicAdvancedCcRules.FirstOrDefault(r => r.Id == ruleId);
+        }
+    }
+    
+    /// <summary>
+    /// 添加高级 CC 规则
+    /// </summary>
+    public bool AddAdvancedCcRule(AdvancedCcRule rule)
+    {
+        if (string.IsNullOrWhiteSpace(rule.Name))
+            return false;
+            
+        lock (_advancedCcRuleLock)
+        {
+            // 检查是否已存在相同 ID 的规则
+            if (_dynamicAdvancedCcRules.Any(r => r.Id == rule.Id) ||
+                _options.AdvancedCcRules.Any(r => r.Id == rule.Id))
+                return false;
+            
+            // 确保有唯一 ID
+            if (string.IsNullOrEmpty(rule.Id))
+                rule.Id = Guid.NewGuid().ToString("N")[..8];
+                
+            rule.CreatedAt = DateTime.UtcNow;
+            _dynamicAdvancedCcRules.Add(rule);
+            
+            _logger.LogInformation("已添加高级 CC 规则: Id={Id}, Name={Name}, Type={Type}", 
+                rule.Id, rule.Name, rule.Type);
+            return true;
+        }
+    }
+    
+    /// <summary>
+    /// 更新高级 CC 规则
+    /// </summary>
+    public bool UpdateAdvancedCcRule(AdvancedCcRule rule)
+    {
+        lock (_advancedCcRuleLock)
+        {
+            // 先在动态规则中查找
+            var existingIndex = _dynamicAdvancedCcRules.FindIndex(r => r.Id == rule.Id);
+            if (existingIndex >= 0)
+            {
+                // 保留创建时间
+                rule.CreatedAt = _dynamicAdvancedCcRules[existingIndex].CreatedAt;
+                _dynamicAdvancedCcRules[existingIndex] = rule;
+                _logger.LogInformation("已更新高级 CC 规则: Id={Id}, Name={Name}", rule.Id, rule.Name);
+                return true;
+            }
+            
+            // 如果在配置规则中存在，则添加到动态规则（覆盖）
+            if (_options.AdvancedCcRules.Any(r => r.Id == rule.Id))
+            {
+                _dynamicAdvancedCcRules.Add(rule);
+                _logger.LogInformation("已覆盖配置中的高级 CC 规则: Id={Id}, Name={Name}", rule.Id, rule.Name);
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    /// <summary>
+    /// 删除高级 CC 规则
+    /// </summary>
+    public bool RemoveAdvancedCcRule(string ruleId)
+    {
+        lock (_advancedCcRuleLock)
+        {
+            var rule = _dynamicAdvancedCcRules.FirstOrDefault(r => r.Id == ruleId);
+            if (rule != null)
+            {
+                _dynamicAdvancedCcRules.Remove(rule);
+                _logger.LogInformation("已删除高级 CC 规则: Id={Id}, Name={Name}", rule.Id, rule.Name);
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    /// <summary>
+    /// 启用/禁用高级 CC 规则
+    /// </summary>
+    public bool ToggleAdvancedCcRule(string ruleId, bool enabled)
+    {
+        lock (_advancedCcRuleLock)
+        {
+            // 在动态规则中查找
+            var rule = _dynamicAdvancedCcRules.FirstOrDefault(r => r.Id == ruleId);
+            if (rule != null)
+            {
+                rule.Enabled = enabled;
+                _logger.LogInformation("高级 CC 规则状态已更改: Id={Id}, Enabled={Enabled}", ruleId, enabled);
+                return true;
+            }
+            
+            // 在配置规则中查找，需要复制到动态规则中修改
+            var configRule = _options.AdvancedCcRules.FirstOrDefault(r => r.Id == ruleId);
+            if (configRule != null)
+            {
+                // 创建一个副本并修改
+                var newRule = new AdvancedCcRule
+                {
+                    Id = configRule.Id,
+                    Name = configRule.Name,
+                    Enabled = enabled,
+                    Type = configRule.Type,
+                    Conditions = configRule.Conditions,
+                    Period = configRule.Period,
+                    Threshold = configRule.Threshold,
+                    Action = configRule.Action,
+                    ActionDuration = configRule.ActionDuration,
+                    Priority = configRule.Priority,
+                    CreatedAt = configRule.CreatedAt
+                };
+                _dynamicAdvancedCcRules.Add(newRule);
+                _logger.LogInformation("高级 CC 规则状态已更改（从配置复制）: Id={Id}, Enabled={Enabled}", ruleId, enabled);
                 return true;
             }
         }
