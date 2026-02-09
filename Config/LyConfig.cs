@@ -946,9 +946,10 @@ public class LyConfigParser
 
         // 带参数的块: name arg1 arg2 { ... }
         // 注意：以 / 开头的 Identifier 是路径块，不是参数
-        var args = new List<string>();
-        while (Current.Type == TokenType.Identifier || Current.Type == TokenType.String || 
-               Current.Type == TokenType.Number || Current.Type == TokenType.Variable)
+        var args = new List<object>();
+        while (Current.Type == TokenType.Identifier || Current.Type == TokenType.String ||
+               Current.Type == TokenType.Number || Current.Type == TokenType.Variable ||
+               Current.Type == TokenType.LeftBracket)
         {
             // 如果是以 / 开头的标识符，它是路径块而不是参数，停止收集参数
             if (Current.Type == TokenType.Identifier && Current.Value.StartsWith('/'))
@@ -959,6 +960,12 @@ public class LyConfigParser
             if (Current.Type == TokenType.Identifier && SiteDirectives.Contains(Current.Value))
             {
                 break;
+            }
+            // 数组参数: ["/api/", "/v2/"]
+            if (Current.Type == TokenType.LeftBracket)
+            {
+                args.Add(ParseArray());
+                continue;
             }
             args.Add(ParseStringValue());
         }
@@ -1431,17 +1438,17 @@ public class LyConfigParser
         return result;
     }
 
-    private object ProcessBlock(string name, List<string> args, Dictionary<string, object> content)
+    private object ProcessBlock(string name, List<object> args, Dictionary<string, object> content)
     {
         // 根据块名称进行特殊处理
         var nameLower = name.ToLower();
-        
+
         // 处理路径块（以 / 开头）
         // 如果有 @method 参数，需要将其合并到路径中以便后续处理
         if (name.StartsWith('/') && args.Count > 0)
         {
             // 收集 @method 参数（如 @post, @get）
-            var methodArgs = args.Where(a => a.StartsWith('@')).ToList();
+            var methodArgs = args.Where(a => a is string s && s.StartsWith('@')).Select(a => a.ToString()!).ToList();
             if (methodArgs.Count > 0)
             {
                 // 将方法参数合并到路径中，格式：/path @method1 @method2
@@ -1464,7 +1471,7 @@ public class LyConfigParser
         };
     }
 
-    private Dictionary<string, object> ProcessSiteBlock(List<string> args, Dictionary<string, object> content)
+    private Dictionary<string, object> ProcessSiteBlock(List<object> args, Dictionary<string, object> content)
     {
         var result = new Dictionary<string, object>(content);
         if (args.Count > 0)
@@ -1474,7 +1481,7 @@ public class LyConfigParser
         return result;
     }
 
-    private Dictionary<string, object> ProcessRouteBlock(List<string> args, Dictionary<string, object> content)
+    private Dictionary<string, object> ProcessRouteBlock(List<object> args, Dictionary<string, object> content)
     {
         var result = new Dictionary<string, object>(content);
         if (args.Count > 0)
@@ -1484,14 +1491,14 @@ public class LyConfigParser
         return result;
     }
 
-    private Dictionary<string, object> ProcessUpstreamBlock(List<string> args, Dictionary<string, object> content)
+    private Dictionary<string, object> ProcessUpstreamBlock(List<object> args, Dictionary<string, object> content)
     {
         var result = new Dictionary<string, object>(content);
         if (args.Count > 0)
         {
             result["destinations"] = args.Select((addr, i) => new KeyValuePair<string, object>(
                 $"dest{i + 1}",
-                new Dictionary<string, object> { ["address"] = addr }
+                new Dictionary<string, object> { ["address"] = addr.ToString()! }
             )).ToDictionary(kv => kv.Key, kv => kv.Value);
         }
         return result;

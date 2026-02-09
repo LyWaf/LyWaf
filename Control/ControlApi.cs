@@ -1356,7 +1356,7 @@ public static class ControlApi
                     period = r.Period,
                     threshold = r.Threshold,
                     action = r.Action.ToString(),
-                    actionDuration = r.ActionDuration,
+                    actionSeconds = r.ActionSeconds,
                     priority = r.Priority,
                     createdAt = r.CreatedAt
                 }),
@@ -1393,7 +1393,7 @@ public static class ControlApi
                     period = r.Period,
                     threshold = r.Threshold,
                     action = r.Action.ToString(),
-                    actionDuration = r.ActionDuration,
+                    actionSeconds = r.ActionSeconds,
                     priority = r.Priority,
                     createdAt = r.CreatedAt
                 }),
@@ -1428,7 +1428,7 @@ public static class ControlApi
                     period = rule.Period,
                     threshold = rule.Threshold,
                     action = rule.Action.ToString(),
-                    actionDuration = rule.ActionDuration,
+                    actionSeconds = rule.ActionSeconds,
                     priority = rule.Priority,
                     createdAt = rule.CreatedAt
                 },
@@ -1455,7 +1455,7 @@ public static class ControlApi
                     Period = request.Period ?? 10,
                     Threshold = request.Threshold ?? 100,
                     Action = Enum.TryParse<CcAction>(request.Action, true, out var a) ? a : CcAction.Captcha,
-                    ActionDuration = request.ActionDuration ?? 10,
+                    ActionSeconds = request.ActionSeconds ?? 600,
                     Priority = request.Priority ?? 100,
                     Conditions = request.Conditions?.Select(c => new CcCondition
                     {
@@ -1512,7 +1512,7 @@ public static class ControlApi
                     Period = request.Period ?? existingRule.Period,
                     Threshold = request.Threshold ?? existingRule.Threshold,
                     Action = request.Action != null && Enum.TryParse<CcAction>(request.Action, true, out var a) ? a : existingRule.Action,
-                    ActionDuration = request.ActionDuration ?? existingRule.ActionDuration,
+                    ActionSeconds = request.ActionSeconds ?? existingRule.ActionSeconds,
                     Priority = request.Priority ?? existingRule.Priority,
                     Conditions = request.Conditions?.Select(c => new CcCondition
                     {
@@ -2388,7 +2388,7 @@ public class AddAdvancedCcRuleRequest
     public int? Period { get; set; }
     public int? Threshold { get; set; }
     public string? Action { get; set; }
-    public int? ActionDuration { get; set; }
+    public int? ActionSeconds { get; set; }
     public int? Priority { get; set; }
 }
 
@@ -2402,7 +2402,7 @@ public class UpdateAdvancedCcRuleRequest
     public int? Period { get; set; }
     public int? Threshold { get; set; }
     public string? Action { get; set; }
-    public int? ActionDuration { get; set; }
+    public int? ActionSeconds { get; set; }
     public int? Priority { get; set; }
 }
 

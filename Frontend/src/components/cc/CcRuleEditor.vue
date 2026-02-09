@@ -70,7 +70,7 @@ const form = ref({
   period: 10,
   threshold: 100,
   action: 'Captcha' as CcAction,
-  actionDuration: 10,
+  actionSeconds: 600,
   priority: 100,
 })
 
@@ -96,7 +96,7 @@ const resetForm = () => {
     period: 10,
     threshold: 100,
     action: 'Captcha',
-    actionDuration: 10,
+    actionSeconds: 600,
     priority: 100,
   }
 }
@@ -112,7 +112,7 @@ watch(() => props.editRule, (rule) => {
       period: rule.period,
       threshold: rule.threshold,
       action: rule.action,
-      actionDuration: rule.actionDuration,
+      actionSeconds: rule.actionSeconds,
       priority: rule.priority,
     }
   } else {
@@ -197,7 +197,7 @@ const handleSubmit = async () => {
       period: form.value.period,
       threshold: form.value.threshold,
       action: form.value.action,
-      actionDuration: form.value.actionDuration,
+      actionSeconds: form.value.actionSeconds,
       priority: form.value.priority,
     }
 
@@ -364,8 +364,8 @@ const handleClose = () => {
           <div>
             <label class="block text-sm text-gray-400 mb-1">{{ actionLabels[form.action] }} <span class="text-red-400">*</span></label>
             <div class="flex items-center gap-2">
-              <input v-model.number="form.actionDuration" type="number" min="1" class="input flex-1" />
-              <span class="text-sm text-gray-500">分钟</span>
+              <input v-model.number="form.actionSeconds" type="number" min="1" class="input flex-1" />
+              <span class="text-sm text-gray-500">秒</span>
             </div>
           </div>
         </div>

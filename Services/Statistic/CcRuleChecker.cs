@@ -14,7 +14,7 @@ public class CcCheckResult
     public bool IsTriggered { get; set; }
     public AdvancedCcRule? TriggeredRule { get; set; }
     public CcAction Action { get; set; }
-    public int ActionDuration { get; set; }
+    public int ActionSeconds { get; set; }
     public string? Message { get; set; }
 }
 
@@ -95,7 +95,7 @@ public class CcRuleChecker : ICcRuleChecker
                     result.IsTriggered = true;
                     result.TriggeredRule = rule;
                     result.Action = rule.Action;
-                    result.ActionDuration = rule.ActionDuration;
+                    result.ActionSeconds = rule.ActionSeconds;
                     result.Message = $"IP {clientIp} 仍在 CC 规则 [{rule.Name}] 处罚期内";
                     return result;
                 }
@@ -141,11 +141,11 @@ public class CcRuleChecker : ICcRuleChecker
                 result.IsTriggered = true;
                 result.TriggeredRule = rule;
                 result.Action = rule.Action;
-                result.ActionDuration = rule.ActionDuration;
+                result.ActionSeconds = rule.ActionSeconds;
                 result.Message = $"IP {clientIp} 触发 CC 规则 [{rule.Name}]: {rule.Period}秒内请求{counter.Count}次，超过阈值{rule.Threshold}";
                 
                 // 标记为已触发，设置处罚结束时间
-                _triggeredIps[triggeredKey] = DateTime.UtcNow.AddMinutes(rule.ActionDuration);
+                _triggeredIps[triggeredKey] = DateTime.UtcNow.AddSeconds(rule.ActionSeconds);
                 
                 // 重置计数器
                 counter.Reset();
@@ -211,22 +211,22 @@ public class CcRuleChecker : ICcRuleChecker
         {
             case CcAction.Block:
                 // 封禁 IP
-                var blockDuration = TimeSpan.FromMinutes(result.ActionDuration);
+                var blockDuration = TimeSpan.FromSeconds(result.ActionSeconds);
                 SharedData.ClientFb.Set(clientIp, $"CC 规则触发: {rule.Name}", blockDuration);
-                _logger.Info("CC 封禁: IP={ClientIp}, Rule={Rule}, Duration={Duration}分钟", 
-                    clientIp, rule.Name, result.ActionDuration);
-                
+                _logger.Info("CC 封禁: IP={ClientIp}, Rule={Rule}, Duration={Duration}秒",
+                    clientIp, rule.Name, result.ActionSeconds);
+
                 await WafUtil.WriteErrorOutput(context, 403, new Dictionary<string, string?>
                 {
-                    ["reason"] = $"触发 CC 防护规则 [{rule.Name}]，已被封禁 {result.ActionDuration} 分钟"
+                    ["reason"] = $"触发 CC 防护规则 [{rule.Name}]，已被封禁 {result.ActionSeconds} 秒"
                 });
                 break;
                 
             case CcAction.Captcha:
                 // 人机验证 - 目前先用封禁替代，后续可以实现真正的验证码页面
-                SharedData.ClientFb.Set(clientIp, $"CC 人机验证: {rule.Name}", TimeSpan.FromMinutes(result.ActionDuration));
-                _logger.Info("CC 人机验证: IP={ClientIp}, Rule={Rule}, Duration={Duration}分钟", 
-                    clientIp, rule.Name, result.ActionDuration);
+                SharedData.ClientFb.Set(clientIp, $"CC 人机验证: {rule.Name}", TimeSpan.FromSeconds(result.ActionSeconds));
+                _logger.Info("CC 人机验证: IP={ClientIp}, Rule={Rule}, Duration={Duration}秒",
+                    clientIp, rule.Name, result.ActionSeconds);
                 
                 await WafUtil.WriteErrorOutput(context, 403, new Dictionary<string, string?>
                 {
@@ -248,10 +248,10 @@ public class CcRuleChecker : ICcRuleChecker
                 // 限速 - 返回 429 Too Many Requests
                 _logger.Info("CC 限速: IP={ClientIp}, Rule={Rule}", clientIp, rule.Name);
                 
-                context.Response.Headers["Retry-After"] = result.ActionDuration.ToString();
+                context.Response.Headers["Retry-After"] = result.ActionSeconds.ToString();
                 await WafUtil.WriteErrorOutput(context, 429, new Dictionary<string, string?>
                 {
-                    ["reason"] = $"请求过于频繁，请 {result.ActionDuration} 分钟后重试"
+                    ["reason"] = $"请求过于频繁，请 {result.ActionSeconds} 秒后重试"
                 });
                 break;
                 

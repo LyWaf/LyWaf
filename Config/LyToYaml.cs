@@ -2035,6 +2035,14 @@ public static class LyToAppSettingsConverter
                 ProcessErrorTemplateConfig(value, result);
                 break;
 
+            case "ccrules":
+            case "cc_rules":
+            case "ccprotection":
+            case "cc_protection":
+                // CC 防护规则配置 → WafInfos.CcRules
+                ProcessCcRulesConfig(value, wafInfos);
+                break;
+
             default:
                 // 其他配置直接映射（首字母大写）
                 var normalizedKey = char.ToUpper(key[0]) + key[1..];
@@ -3313,5 +3321,246 @@ public static class LyToAppSettingsConverter
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// 处理 CC 防护规则配置
+    /// 以规则名称为 key，规则详情为子块，转换为 WafInfos.CcRules 列表
+    ///
+    /// 支持格式：
+    /// CcRules {
+    ///     频繁访问API限制 {
+    ///         Enabled = true
+    ///         Type = FrequentAccess        # FrequentAccess | FrequentAttack | FrequentError
+    ///         Period = 10                  # 统计周期（秒）
+    ///         Threshold = 100              # 触发阈值
+    ///         Action = Block               # Block | Captcha | Reject | RateLimit | LogOnly
+    ///         ActionSeconds = 600          # 动作持续时间（秒）
+    ///         Priority = 1                 # 优先级（越小越高）
+    ///         Conditions {
+    ///             UrlPath StartsWith ["/api/", "/v2/"]
+    ///             Method Equal ["POST", "PUT"]
+    ///         }
+    ///     }
+    ///     高频攻击封禁 {
+    ///         Type = FrequentAttack
+    ///         Threshold = 5
+    ///         Action = Block
+    ///         ActionSeconds = 1800
+    ///     }
+    /// }
+    /// </summary>
+    private static void ProcessCcRulesConfig(object value, Dictionary<string, object> wafInfos)
+    {
+        if (value is not Dictionary<string, object> rulesConfig)
+            return;
+
+        var rulesList = new List<object>();
+
+        foreach (var ruleKv in rulesConfig)
+        {
+            var ruleName = ruleKv.Key;
+
+            if (ruleKv.Value is not Dictionary<string, object> ruleConfig)
+                continue;
+
+            var rule = new Dictionary<string, object>
+            {
+                ["Name"] = ruleName,
+                ["Enabled"] = true
+            };
+
+            List<object>? conditions = null;
+
+            foreach (var kv in ruleConfig)
+            {
+                var key = kv.Key.ToLower();
+                switch (key)
+                {
+                    case "enabled":
+                        rule["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
+                        break;
+
+                    case "type":
+                        rule["Type"] = NormalizeCcEnum(kv.Value?.ToString() ?? "",
+                            ["FrequentAccess", "FrequentAttack", "FrequentError"], "FrequentAccess")!;
+                        break;
+
+                    case "period":
+                        if (int.TryParse(kv.Value?.ToString(), out var period))
+                            rule["Period"] = period;
+                        break;
+
+                    case "threshold":
+                        if (int.TryParse(kv.Value?.ToString(), out var threshold))
+                            rule["Threshold"] = threshold;
+                        break;
+
+                    case "action":
+                        rule["Action"] = NormalizeCcEnum(kv.Value?.ToString() ?? "",
+                            ["Block", "Captcha", "Reject", "RateLimit", "LogOnly"], "Captcha")!;
+                        break;
+
+                    case "actionseconds" or "action_seconds" or "duration":
+                        if (int.TryParse(kv.Value?.ToString(), out var duration))
+                            rule["ActionSeconds"] = duration;
+                        break;
+
+                    case "priority":
+                        if (int.TryParse(kv.Value?.ToString(), out var priority))
+                            rule["Priority"] = priority;
+                        break;
+
+                    case "conditions" or "condition":
+                        conditions = ParseCcConditions(kv.Value);
+                        break;
+                }
+            }
+
+            if (conditions != null && conditions.Count > 0)
+            {
+                rule["Conditions"] = conditions;
+            }
+
+            rulesList.Add(rule);
+        }
+
+        if (rulesList.Count > 0)
+        {
+            wafInfos["CcRules"] = rulesList;
+        }
+    }
+
+    /// <summary>
+    /// 解析 CC 条件配置
+    /// 支持格式：
+    /// Conditions {
+    ///     UrlPath StartsWith ["/api/", "/v2/"]       # Target Operator Values
+    ///     Method Equal ["POST"]
+    ///     UserAgent Contains ["bot", "spider"]
+    /// }
+    ///
+    /// 或嵌套格式：
+    /// Conditions {
+    ///     cond1 { Target = UrlPath; Operator = StartsWith; Values = ["/api/"] }
+    /// }
+    /// </summary>
+    private static List<object> ParseCcConditions(object? value)
+    {
+        var result = new List<object>();
+
+        if (value is not Dictionary<string, object> condConfig)
+            return result;
+
+        foreach (var kv in condConfig)
+        {
+            if (kv.Value is Dictionary<string, object> detailConfig)
+            {
+                // 嵌套格式: cond1 { Target = UrlPath; Operator = StartsWith; Values = ["/api/"] }
+                var condition = new Dictionary<string, object>();
+                foreach (var dkv in detailConfig)
+                {
+                    var dkey = dkv.Key.ToLower();
+                    switch (dkey)
+                    {
+                        case "target":
+                            condition["Target"] = NormalizeCcEnum(dkv.Value?.ToString() ?? "",
+                                ["UrlPath", "FullUrl", "Method", "ContentType", "UserAgent",
+                                 "Referer", "Header", "QueryParam", "Cookie", "ClientIp", "StatusCode"],
+                                "UrlPath")!;
+                            break;
+                        case "operator" or "op":
+                            condition["Operator"] = NormalizeCcEnum(dkv.Value?.ToString() ?? "",
+                                ["Equal", "NotEqual", "Contains", "NotContains",
+                                 "StartsWith", "EndsWith", "Regex", "Exists", "NotExists"],
+                                "Equal")!;
+                            break;
+                        case "values" or "value":
+                            condition["Values"] = ParseStringList(dkv.Value);
+                            break;
+                    }
+                }
+                if (condition.Count > 0)
+                    result.Add(condition);
+            }
+            else
+            {
+                // 简写格式: "UrlPath StartsWith ["/api/"]" → key 是 Target, 值包含 "Operator Values"
+                // key = "UrlPath", value = "StartsWith [\"/api/\"]" 或 list
+                var target = NormalizeCcEnum(kv.Key,
+                    ["UrlPath", "FullUrl", "Method", "ContentType", "UserAgent",
+                     "Referer", "Header", "QueryParam", "Cookie", "ClientIp", "StatusCode"],
+                    null);
+
+                if (target == null)
+                    continue;
+
+                var condition = new Dictionary<string, object> { ["Target"] = target };
+
+                if (kv.Value is string strVal)
+                {
+                    // "StartsWith /api/" 或 "StartsWith [\"/api/\", \"/v2/\"]"
+                    var parts = strVal.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 1)
+                    {
+                        condition["Operator"] = NormalizeCcEnum(parts[0],
+                            ["Equal", "NotEqual", "Contains", "NotContains",
+                             "StartsWith", "EndsWith", "Regex", "Exists", "NotExists"],
+                            "Equal")!;
+
+                        if (parts.Length >= 2)
+                        {
+                            condition["Values"] = ParseStringList(parts[1]);
+                        }
+                    }
+                }
+                else if (kv.Value is List<object> listVal)
+                {
+                    // 解析器将 "UrlPath StartsWith ["/api/", "/v2/"]" 解析为:
+                    // key = "UrlPath", value = ["StartsWith", ["/api/", "/v2/"]]
+                    var operatorStr = listVal.FirstOrDefault(x => x is string) as string;
+                    var valuesArr = listVal.FirstOrDefault(x => x is List<object>) as List<object>;
+
+                    if (operatorStr != null)
+                    {
+                        condition["Operator"] = NormalizeCcEnum(operatorStr,
+                            ["Equal", "NotEqual", "Contains", "NotContains",
+                             "StartsWith", "EndsWith", "Regex", "Exists", "NotExists"],
+                            "Equal")!;
+                    }
+                    else
+                    {
+                        condition["Operator"] = "Equal";
+                    }
+
+                    if (valuesArr != null)
+                    {
+                        condition["Values"] = valuesArr.Select(x => x?.ToString() ?? "").Where(x => !string.IsNullOrEmpty(x)).ToList();
+                    }
+                    else
+                    {
+                        // 全是字符串，没有嵌套数组 → 当做值列表
+                        condition["Values"] = listVal.Select(x => x?.ToString() ?? "").Where(x => !string.IsNullOrEmpty(x)).ToList();
+                    }
+                }
+
+                result.Add(condition);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 枚举值归一化：忽略大小写匹配有效枚举值
+    /// </summary>
+    private static string? NormalizeCcEnum(string input, string[] validValues, string? defaultValue)
+    {
+        foreach (var v in validValues)
+        {
+            if (v.Equals(input, StringComparison.OrdinalIgnoreCase))
+                return v;
+        }
+        return defaultValue;
     }
 }

@@ -8,4 +8,7 @@ datas/*
 node_modules
 dist
 control_html
+myLyWafbintest_build
+nul
+.claude
 # wwwroot/*

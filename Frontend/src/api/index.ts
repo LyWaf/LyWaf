@@ -169,7 +169,7 @@ export interface CreateAdvancedCcRuleRequest {
   period?: number
   threshold?: number
   action?: string
-  actionDuration?: number
+  actionSeconds?: number
   priority?: number
 }
 

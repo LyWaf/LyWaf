@@ -2,6 +2,7 @@
 
 using System.Net;
 using System.Net.Http.Headers;
+using LyWaf.Services.Statistic;
 using NLog;
 
 namespace LyWaf.Services.WafInfo;
@@ -16,6 +17,11 @@ public class WafInfoOptions
     public Dictionary<string, string> HeaderDowns { get; set; } = [];
     public string? ChangeHost { get; set; } = null;
     public ForwardedInfo? Forwarded { get; set; } = null; // set, append, none
+
+    /// <summary>
+    /// CC 防护规则配置（可在 WafInfos 中直接配置）
+    /// </summary>
+    public List<AdvancedCcRule> CcRules { get; set; } = [];
 
     private static readonly HashSet<string> LoopbackAddresses =
     [

@@ -108,7 +108,7 @@ export interface AdvancedCcRule {
   period: number
   threshold: number
   action: CcAction
-  actionDuration: number
+  actionSeconds: number
   priority: number
   createdAt: string
 }

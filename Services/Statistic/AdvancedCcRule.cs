@@ -46,9 +46,9 @@ public class AdvancedCcRule
     public CcAction Action { get; set; } = CcAction.Captcha;
     
     /// <summary>
-    /// 动作持续时间（分钟）
+    /// 动作持续时间（秒）
     /// </summary>
-    public int ActionDuration { get; set; } = 10;
+    public int ActionSeconds { get; set; } = 600;
     
     /// <summary>
     /// 优先级（数值越小优先级越高）

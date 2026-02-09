@@ -15,9 +15,9 @@ const ruleTypeLabels: Record<CcRuleType, string> = {
 }
 
 const ruleTypeDescriptions: Record<CcRuleType, string> = {
-  FrequentAccess: '某 IP 在 {period} 秒内请求达到 {threshold} 次，{duration} 分钟内再次访问需要进行人机验证',
-  FrequentAttack: '某 IP 在 {period} 秒内触发攻击拦截次数达到 {threshold} 次，{duration} 分钟内再次访问需要进行人机验证',
-  FrequentError: '某 IP 在 {period} 秒内触发 错误达到 {threshold} 次，{duration} 分钟内再次访问需要进行人机验证',
+  FrequentAccess: '某 IP 在 {period} 秒内请求达到 {threshold} 次，{duration} 秒内再次访问需要进行人机验证',
+  FrequentAttack: '某 IP 在 {period} 秒内触发攻击拦截次数达到 {threshold} 次，{duration} 秒内再次访问需要进行人机验证',
+  FrequentError: '某 IP 在 {period} 秒内触发 错误达到 {threshold} 次，{duration} 秒内再次访问需要进行人机验证',
 }
 
 // 数据
@@ -117,7 +117,7 @@ const formatRuleDescription = (rule: AdvancedCcRule): string => {
   return template
     .replace('{period}', String(rule.period))
     .replace('{threshold}', String(rule.threshold))
-    .replace('{duration}', String(rule.actionDuration))
+    .replace('{duration}', String(rule.actionSeconds))
 }
 
 // 自动刷新

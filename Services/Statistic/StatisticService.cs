@@ -2,6 +2,7 @@
 using System.IO.Compression;
 using System.Net.Http;
 using System.Threading.RateLimiting;
+using LyWaf.Services.WafInfo;
 using LyWaf.Utils;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
@@ -75,6 +76,7 @@ public interface IStatisticService
 public class StatisticService : IStatisticService
 {
     private StatisticOptions _options;
+    private WafInfoOptions _wafInfoOptions;
     private readonly IMemoryCache _cache;
     private readonly ILogger<StatisticService> _logger;
 
@@ -90,6 +92,13 @@ public class StatisticService : IStatisticService
     private readonly List<AdvancedCcRule> _dynamicAdvancedCcRules = [];
     private readonly object _advancedCcRuleLock = new();
 
+    // 缓存已排序的高级 CC 规则列表
+    private List<AdvancedCcRule> _cachedAdvancedCcRules = [];
+    // 按类型分组的缓存字典
+    private Dictionary<CcRuleType, List<AdvancedCcRule>> _cachedAdvancedCcRulesByType = new();
+    // 已排除的配置规则 ID（用于"删除"配置中的规则）
+    private readonly HashSet<string> _excludedCcRuleIds = new();
+
     private const int HAS_ANY = 0x00000001;
     private const int HAS_MATCH = 0x00000002;
     private const int HAS_FULL = 0x00000004;
@@ -97,17 +106,32 @@ public class StatisticService : IStatisticService
     private const int HAS_ALL = HAS_ANY | HAS_MATCH | HAS_FULL;
 
     public StatisticService(
-        IOptionsMonitor<StatisticOptions> options, IServiceProvider _serviceProvider, IConfiguration configuration, IMemoryCache cache,
+        IOptionsMonitor<StatisticOptions> options, IOptionsMonitor<WafInfoOptions> wafInfoOptions,
+        IServiceProvider _serviceProvider, IConfiguration configuration, IMemoryCache cache,
         ILogger<StatisticService> logger)
     {
         _options = options.CurrentValue;
+        _wafInfoOptions = wafInfoOptions.CurrentValue;
         // 可以订阅变更，但需注意生命周期和内存泄漏
         options.OnChange(newConfig =>
         {
             _options = newConfig;
             BuildStatistic();
+            lock (_advancedCcRuleLock)
+            {
+                RebuildAdvancedCcRulesCache();
+            }
+        });
+        wafInfoOptions.OnChange(newConfig =>
+        {
+            _wafInfoOptions = newConfig;
+            lock (_advancedCcRuleLock)
+            {
+                RebuildAdvancedCcRulesCache();
+            }
         });
         BuildStatistic();
+        RebuildAdvancedCcRulesCache();
         _cache = cache;
         _logger = logger;
     }
@@ -356,18 +380,30 @@ public class StatisticService : IStatisticService
     }
     
     // =============== 高级 CC 规则管理 ===============
-    
+
+    /// <summary>
+    /// 重建高级 CC 规则缓存（调用前需持有 _advancedCcRuleLock）
+    /// </summary>
+    private void RebuildAdvancedCcRulesCache()
+    {
+        var allRules = new List<AdvancedCcRule>();
+        // 合并配置规则，过滤已排除的
+        allRules.AddRange(_options.AdvancedCcRules.Where(r => !_excludedCcRuleIds.Contains(r.Id)));
+        allRules.AddRange(_wafInfoOptions.CcRules.Where(r => !_excludedCcRuleIds.Contains(r.Id)));
+        allRules.AddRange(_dynamicAdvancedCcRules);
+        var sorted = allRules.OrderBy(r => r.Priority).ThenBy(r => r.CreatedAt).ToList();
+        _cachedAdvancedCcRules = sorted;
+        // 按类型分组缓存
+        _cachedAdvancedCcRulesByType = sorted.GroupBy(r => r.Type)
+            .ToDictionary(g => g.Key, g => g.ToList());
+    }
+
     /// <summary>
     /// 获取所有高级 CC 规则
     /// </summary>
     public List<AdvancedCcRule> GetAdvancedCcRules()
     {
-        lock (_advancedCcRuleLock)
-        {
-            var allRules = new List<AdvancedCcRule>(_options.AdvancedCcRules);
-            allRules.AddRange(_dynamicAdvancedCcRules);
-            return allRules.OrderBy(r => r.Priority).ThenBy(r => r.CreatedAt).ToList();
-        }
+        return _cachedAdvancedCcRules;
     }
     
     /// <summary>
@@ -375,7 +411,7 @@ public class StatisticService : IStatisticService
     /// </summary>
     public List<AdvancedCcRule> GetAdvancedCcRulesByType(CcRuleType type)
     {
-        return GetAdvancedCcRules().Where(r => r.Type == type).ToList();
+        return _cachedAdvancedCcRulesByType.TryGetValue(type, out var rules) ? rules : [];
     }
     
     /// <summary>
@@ -385,7 +421,8 @@ public class StatisticService : IStatisticService
     {
         lock (_advancedCcRuleLock)
         {
-            return _options.AdvancedCcRules.FirstOrDefault(r => r.Id == ruleId) 
+            return _options.AdvancedCcRules.FirstOrDefault(r => r.Id == ruleId)
+                ?? _wafInfoOptions.CcRules.FirstOrDefault(r => r.Id == ruleId)
                 ?? _dynamicAdvancedCcRules.FirstOrDefault(r => r.Id == ruleId);
         }
     }
@@ -402,7 +439,8 @@ public class StatisticService : IStatisticService
         {
             // 检查是否已存在相同 ID 的规则
             if (_dynamicAdvancedCcRules.Any(r => r.Id == rule.Id) ||
-                _options.AdvancedCcRules.Any(r => r.Id == rule.Id))
+                _options.AdvancedCcRules.Any(r => r.Id == rule.Id) ||
+                _wafInfoOptions.CcRules.Any(r => r.Id == rule.Id))
                 return false;
             
             // 确保有唯一 ID
@@ -411,8 +449,9 @@ public class StatisticService : IStatisticService
                 
             rule.CreatedAt = DateTime.UtcNow;
             _dynamicAdvancedCcRules.Add(rule);
-            
-            _logger.LogInformation("已添加高级 CC 规则: Id={Id}, Name={Name}, Type={Type}", 
+            RebuildAdvancedCcRulesCache();
+
+            _logger.LogInformation("已添加高级 CC 规则: Id={Id}, Name={Name}, Type={Type}",
                 rule.Id, rule.Name, rule.Type);
             return true;
         }
@@ -432,14 +471,17 @@ public class StatisticService : IStatisticService
                 // 保留创建时间
                 rule.CreatedAt = _dynamicAdvancedCcRules[existingIndex].CreatedAt;
                 _dynamicAdvancedCcRules[existingIndex] = rule;
+                RebuildAdvancedCcRulesCache();
                 _logger.LogInformation("已更新高级 CC 规则: Id={Id}, Name={Name}", rule.Id, rule.Name);
                 return true;
             }
-            
+
             // 如果在配置规则中存在，则添加到动态规则（覆盖）
-            if (_options.AdvancedCcRules.Any(r => r.Id == rule.Id))
+            if (_options.AdvancedCcRules.Any(r => r.Id == rule.Id) ||
+                _wafInfoOptions.CcRules.Any(r => r.Id == rule.Id))
             {
                 _dynamicAdvancedCcRules.Add(rule);
+                RebuildAdvancedCcRulesCache();
                 _logger.LogInformation("已覆盖配置中的高级 CC 规则: Id={Id}, Name={Name}", rule.Id, rule.Name);
                 return true;
             }
@@ -454,11 +496,30 @@ public class StatisticService : IStatisticService
     {
         lock (_advancedCcRuleLock)
         {
+            var removed = false;
+
+            // 尝试从动态规则中移除
             var rule = _dynamicAdvancedCcRules.FirstOrDefault(r => r.Id == ruleId);
             if (rule != null)
             {
                 _dynamicAdvancedCcRules.Remove(rule);
-                _logger.LogInformation("已删除高级 CC 规则: Id={Id}, Name={Name}", rule.Id, rule.Name);
+                removed = true;
+            }
+
+            // 如果是配置中的规则，添加到排除列表
+            if (_options.AdvancedCcRules.Any(r => r.Id == ruleId) ||
+                _wafInfoOptions.CcRules.Any(r => r.Id == ruleId))
+            {
+                if (_excludedCcRuleIds.Add(ruleId))
+                {
+                    removed = true;
+                }
+            }
+
+            if (removed)
+            {
+                RebuildAdvancedCcRulesCache();
+                _logger.LogInformation("已删除高级 CC 规则: Id={Id}", ruleId);
                 return true;
             }
         }
@@ -477,12 +538,14 @@ public class StatisticService : IStatisticService
             if (rule != null)
             {
                 rule.Enabled = enabled;
+                RebuildAdvancedCcRulesCache();
                 _logger.LogInformation("高级 CC 规则状态已更改: Id={Id}, Enabled={Enabled}", ruleId, enabled);
                 return true;
             }
-            
-            // 在配置规则中查找，需要复制到动态规则中修改
-            var configRule = _options.AdvancedCcRules.FirstOrDefault(r => r.Id == ruleId);
+
+            // 在配置规则中查找（Statistic 和 WafInfos），需要复制到动态规则中修改
+            var configRule = _options.AdvancedCcRules.FirstOrDefault(r => r.Id == ruleId)
+                ?? _wafInfoOptions.CcRules.FirstOrDefault(r => r.Id == ruleId);
             if (configRule != null)
             {
                 // 创建一个副本并修改
@@ -496,11 +559,12 @@ public class StatisticService : IStatisticService
                     Period = configRule.Period,
                     Threshold = configRule.Threshold,
                     Action = configRule.Action,
-                    ActionDuration = configRule.ActionDuration,
+                    ActionSeconds = configRule.ActionSeconds,
                     Priority = configRule.Priority,
                     CreatedAt = configRule.CreatedAt
                 };
                 _dynamicAdvancedCcRules.Add(newRule);
+                RebuildAdvancedCcRulesCache();
                 _logger.LogInformation("高级 CC 规则状态已更改（从配置复制）: Id={Id}, Enabled={Enabled}", ruleId, enabled);
                 return true;
             }
