@@ -9,6 +9,7 @@ node_modules
 dist
 control_html
 myLyWafbintest_build
+bintemp_build
 nul
 .claude
 # wwwroot/*

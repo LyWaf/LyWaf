@@ -70,8 +70,9 @@ public class CaptchaMiddleware(RequestDelegate next, ICaptchaService captchaServ
             success = true,
             token = challenge.Token,
             mode = challenge.Mode,
-            question = challenge.Question,
-            sliderTarget = challenge.SliderTarget
+            questionImage = challenge.QuestionImage,
+            sliderTarget = challenge.SliderTarget,
+            sliderBackground = challenge.SliderBackground
         }));
     }
 
@@ -215,12 +216,12 @@ public class CaptchaMiddleware(RequestDelegate next, ICaptchaService captchaServ
             color: #a1a1aa;
             margin-bottom: 0.5rem;
         }
-        .question-text {
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: #60a5fa;
-            font-family: 'Courier New', monospace;
-            letter-spacing: 3px;
+        .question-image {
+            max-width: 100%;
+            height: auto;
+            border-radius: 6px;
+            display: block;
+            margin: 0.5rem auto;
         }
         .input-group {
             margin-bottom: 1rem;
@@ -301,20 +302,34 @@ public class CaptchaMiddleware(RequestDelegate next, ICaptchaService captchaServ
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            color: #71717a;
-            font-size: 0.85rem;
+            color: #b0b0c0;
+            font-size: 0.9rem;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.5);
             pointer-events: none;
-            z-index: 1;
+            z-index: 4;
         }
         .slider-target {
             position: absolute;
             top: 4px;
             width: 36px;
             height: 36px;
-            background: transparent;
-            border: 2px dashed rgba(99,102,241,0.6);
+            background: rgba(99,102,241,0.15);
+            border: 2.5px solid rgba(99,102,241,0.8);
             border-radius: 50%;
             z-index: 2;
+            box-shadow: 0 0 8px rgba(99,102,241,0.4);
+        }
+        .slider-bg-image {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border-radius: 22px;
+            pointer-events: none;
+            z-index: 0;
         }
         .btn-verify {
             width: 100%;
@@ -397,7 +412,7 @@ public class CaptchaMiddleware(RequestDelegate next, ICaptchaService captchaServ
         <div class="captcha-section" id="mathSection" style="display:none;">
             <div class="question-box">
                 <div class="question-label">请计算以下结果</div>
-                <div class="question-text" id="questionText">--</div>
+                <img id="questionImage" class="question-image" alt="验证码" />
             </div>
             <div class="input-group">
                 <label>输入答案</label>
@@ -409,9 +424,10 @@ public class CaptchaMiddleware(RequestDelegate next, ICaptchaService captchaServ
         <div class="slider-section" id="sliderSection" style="display:none;">
             <div class="slider-label">拖动滑块到指定位置</div>
             <div class="slider-track" id="sliderTrack">
+                <img id="sliderBgImage" class="slider-bg-image" alt="" />
                 <div class="slider-fill" id="sliderFill"></div>
                 <div class="slider-target" id="sliderTarget"></div>
-                <div class="slider-text" id="sliderHint">拖动滑块 →</div>
+                <div class="slider-text" id="sliderHint">拖动滑块 ▶▶</div>
                 <div class="slider-thumb" id="sliderThumb">
                     <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                 </div>
@@ -459,13 +475,16 @@ public class CaptchaMiddleware(RequestDelegate next, ICaptchaService captchaServ
                     document.getElementById('captchaArea').style.display = 'block';
 
                     if (currentMode === 'math') {
-                        document.getElementById('questionText').textContent = data.question;
+                        document.getElementById('questionImage').src = 'data:image/png;base64,' + data.questionImage;
                         document.getElementById('mathSection').style.display = 'block';
                         document.getElementById('answerInput').value = '';
                         document.getElementById('answerInput').focus();
                     } else {
                         document.getElementById('sliderSection').style.display = 'block';
                         sliderValue = 0;
+                        if (data.sliderBackground) {
+                            document.getElementById('sliderBgImage').src = 'data:image/png;base64,' + data.sliderBackground;
+                        }
                         initSlider(data.sliderTarget);
                     }
                 }

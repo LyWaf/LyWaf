@@ -54,14 +54,19 @@ public class CaptchaChallenge
     public string Mode { get; set; } = "math";
 
     /// <summary>
-    /// 显示的问题（仅 math 模式，如 "3 + 7 = ?"）
+    /// 数学题图片 base64（仅 math 模式）
     /// </summary>
-    public string? Question { get; set; }
+    public string? QuestionImage { get; set; }
 
     /// <summary>
     /// 滑块目标位置百分比（仅 slider 模式）
     /// </summary>
     public int? SliderTarget { get; set; }
+
+    /// <summary>
+    /// 滑块背景图片 base64（仅 slider 模式，含干扰元素）
+    /// </summary>
+    public string? SliderBackground { get; set; }
 }
 
 /// <summary>
@@ -164,13 +169,14 @@ public class CaptchaService : ICaptchaService
         {
             var (question, answer) = GenerateMathQuestion();
             entry.Answer = answer;
-            challenge.Question = question;
+            challenge.QuestionImage = CaptchaImageGenerator.GenerateMathImage(question);
         }
         else
         {
             var sliderTarget = RandomNumberGenerator.GetInt32(30, 80);
             entry.SliderTarget = sliderTarget;
             challenge.SliderTarget = sliderTarget;
+            challenge.SliderBackground = CaptchaImageGenerator.GenerateSliderBackgroundImage(sliderTarget, 380, 44);
         }
 
         _challenges[token] = entry;
