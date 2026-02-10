@@ -37,9 +37,9 @@ CcRules {
     rule1 {
         Type = FrequentAccess
         Period = 100
-        Threshold = 2
-        Action = Block
-        ActionSeconds = 5
+        Threshold = 4
+        Action = Captcha
+        ActionSeconds = 60
         Priority = 1
         Conditions {
             UrlPath StartsWith ["/api/", "/v2/"]

@@ -36,6 +36,7 @@ using LyWaf.Services.Dns;
 using LyWaf.Services.ProxyServer;
 using LyWaf.Services.StreamServer;
 using LyWaf.Services.ABTest;
+using LyWaf.Services.Captcha;
 using LyWaf.Config;
 
 using System.CommandLine;
@@ -1030,6 +1031,7 @@ public class Program
         builder.Services.AddSingleton<ISpeedLimitService, SpeedLimitService>();
         builder.Services.AddSingleton<IProtectService, ProtectService>();
         builder.Services.AddSingleton<IStatisticService, StatisticService>();
+        builder.Services.AddSingleton<ICaptchaService, CaptchaService>();
         builder.Services.AddSingleton<ICcRuleChecker, CcRuleChecker>();
         builder.Services.AddSingleton<IAccessControlService, AccessControlService>();
         builder.Services.AddSingleton<IWafInfoService, WafInfoService>();
@@ -1179,6 +1181,7 @@ public class Program
             // 自动 HTTPS 重定向
             proxyApp.UseMiddleware<AutoHttpsMiddleware>();
             proxyApp.UseMiddleware<WafControlMiddleware>();
+            proxyApp.UseMiddleware<CaptchaMiddleware>();
             proxyApp.UseMiddleware<CcProtectionMiddleware>();
             proxyApp.UseMiddleware<ThrottledMiddleware>();
             proxyApp.UseMiddleware<SpeedLimitMiddleware>();

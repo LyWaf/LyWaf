@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using LyWaf.Services.Captcha;
 using LyWaf.Shared;
 using LyWaf.Utils;
 using NLog;
@@ -42,32 +43,39 @@ public interface ICcRuleChecker
     /// 执行 CC 处罚动作
     /// </summary>
     Task ExecuteAction(HttpContext context, CcCheckResult result, string clientIp);
+
+    /// <summary>
+    /// 清除指定 IP 的 CC 触发记录和计数器（验证码通过后调用）
+    /// </summary>
+    void ClearTriggeredRecords(string clientIp);
 }
 
 public class CcRuleChecker : ICcRuleChecker
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly IStatisticService _statisticService;
-    
+    private readonly ICaptchaService _captchaService;
+
     // CC 计数器存储: Key = "{ruleId}:{clientIp}", Value = 请求计数信息
     private static readonly ConcurrentDictionary<string, CcCounter> _counters = new();
-    
+
     // 攻击事件计数: Key = "{clientIp}", Value = 攻击计数
     private static readonly ConcurrentDictionary<string, CcCounter> _attackCounters = new();
-    
+
     // 错误事件计数: Key = "{clientIp}", Value = 错误计数
     private static readonly ConcurrentDictionary<string, CcCounter> _errorCounters = new();
-    
+
     // 已触发规则的 IP（避免重复处罚）: Key = "{ruleId}:{clientIp}"
     private static readonly ConcurrentDictionary<string, DateTime> _triggeredIps = new();
-    
+
     // 编译后的正则表达式缓存
     private static readonly ConcurrentDictionary<string, Regex> _regexCache = new();
-    
-    public CcRuleChecker(IStatisticService statisticService)
+
+    public CcRuleChecker(IStatisticService statisticService, ICaptchaService captchaService)
     {
         _statisticService = statisticService;
-        
+        _captchaService = captchaService;
+
         // 启动清理任务
         _ = Task.Run(CleanupLoop);
     }
@@ -223,14 +231,16 @@ public class CcRuleChecker : ICcRuleChecker
                 break;
                 
             case CcAction.Captcha:
-                // 人机验证 - 目前先用封禁替代，后续可以实现真正的验证码页面
-                SharedData.ClientFb.Set(clientIp, $"CC 人机验证: {rule.Name}", TimeSpan.FromSeconds(result.ActionSeconds));
+                // 人机验证 - 将 IP 标记为待验证状态，后续请求由 CaptchaMiddleware 拦截并展示验证页面
+                _captchaService.SetPending(clientIp, rule.Name, result.ActionSeconds);
                 _logger.Info("CC 人机验证: IP={ClientIp}, Rule={Rule}, Duration={Duration}秒",
                     clientIp, rule.Name, result.ActionSeconds);
-                
+
+                // 返回 403 + captcha 标识，让中间件或客户端知道需要验证
                 await WafUtil.WriteErrorOutput(context, 403, new Dictionary<string, string?>
                 {
-                    ["reason"] = $"触发 CC 防护规则 [{rule.Name}]，需要人机验证"
+                    ["reason"] = $"触发 CC 防护规则 [{rule.Name}]，需要人机验证",
+                    ["captcha"] = "required"
                 });
                 break;
                 
@@ -265,7 +275,32 @@ public class CcRuleChecker : ICcRuleChecker
         // 记录安全事件
         SharedData.Security.RecordEvent(SecurityEventType.CcAttack, clientIp);
     }
-    
+
+    /// <summary>
+    /// 清除指定 IP 的 CC 触发记录和计数器（验证码通过后调用）
+    /// </summary>
+    public void ClearTriggeredRecords(string clientIp)
+    {
+        // 清除触发记录
+        var keysToRemove = _triggeredIps.Keys.Where(k => k.EndsWith($":{clientIp}")).ToList();
+        foreach (var key in keysToRemove)
+        {
+            _triggeredIps.TryRemove(key, out _);
+        }
+
+        // 清除计数器
+        var counterKeys = _counters.Keys.Where(k => k.EndsWith($":{clientIp}")).ToList();
+        foreach (var key in counterKeys)
+        {
+            _counters.TryRemove(key, out _);
+        }
+
+        _attackCounters.TryRemove(clientIp, out _);
+        _errorCounters.TryRemove(clientIp, out _);
+
+        _logger.Info("已清除 IP={ClientIp} 的 CC 统计记录", clientIp);
+    }
+
     /// <summary>
     /// 匹配所有条件（AND 关系）
     /// </summary>

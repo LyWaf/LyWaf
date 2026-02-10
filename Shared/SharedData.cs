@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using LyWaf.Services.Captcha;
 using LyWaf.Services.SpeedLimit;
 using LyWaf.Struct;
 
@@ -111,6 +112,17 @@ public static class SharedData
     public static readonly ExpiringSafeDictionary<string, string> ClientFb =
                             new(defaultExpiration: TimeSpan.FromMinutes(10),
                                 cleanupInterval: TimeSpan.FromMinutes(10));
+
+    /// <summary>
+    /// 等待验证码验证的客户端IP
+    /// Key: 客户端IP地址
+    /// Value: CaptchaPendingInfo（包含规则名称、过期时间等）
+    /// 用途: 当 CC 规则触发 Captcha 动作时，将 IP 加入此列表，
+    ///       后续请求会被拦截并展示验证码页面，验证通过后移除
+    /// </summary>
+    public static readonly ExpiringSafeDictionary<string, CaptchaPendingInfo> CaptchaPending =
+                            new(defaultExpiration: TimeSpan.FromMinutes(10),
+                                cleanupInterval: TimeSpan.FromMinutes(5));
 
     /// <summary>
     /// 客户端带宽限速状态
