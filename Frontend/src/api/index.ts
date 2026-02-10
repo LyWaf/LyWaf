@@ -356,7 +356,7 @@ export interface DashboardResponse {
     post: string[]
   }
   ccRules: Array<{ path: string; period: number; limitNum: number; fbTime: number }>
-  blockedIps: Array<{ ip: string; reason: string; remainingSeconds?: number }>
+  blockedIps: Array<{ ip: string; type: string; reason: string; remainingSeconds?: number }>
   abTests: Array<{ testId: string; name: string; enabled: boolean; mode: string; variants: Record<string, number> }>
   timestamp: string
 }

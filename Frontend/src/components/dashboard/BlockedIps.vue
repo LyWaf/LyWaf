@@ -6,6 +6,7 @@ import { useToast } from '@/composables/useToast'
 
 interface BlockedIpInfo {
   ip: string
+  type: string
   reason: string
   remainingSeconds?: number
 }
@@ -25,6 +26,26 @@ watch(() => props.initialData, (newData) => {
     blockedIps.value = newData
   }
 }, { immediate: true })
+
+// 类型标签
+const typeLabel = (type: string) => {
+  switch (type) {
+    case 'blocked': return '封禁'
+    case 'captcha': return '验证码'
+    case 'throttled': return '限速'
+    default: return type
+  }
+}
+
+// 类型样式
+const typeClass = (type: string) => {
+  switch (type) {
+    case 'blocked': return 'bg-red-500/20 text-red-400'
+    case 'captcha': return 'bg-yellow-500/20 text-yellow-400'
+    case 'throttled': return 'bg-blue-500/20 text-blue-400'
+    default: return 'bg-gray-500/20 text-gray-400'
+  }
+}
 
 // 格式化剩余时间
 const formatRemainingTime = (seconds?: number) => {
@@ -59,6 +80,7 @@ const blockIp = async () => {
     if (res.success) {
       blockedIps.value.push({
         ip,
+        type: 'blocked',
         reason: reason || '手动封禁',
         remainingSeconds: duration || undefined,
       })
@@ -102,7 +124,7 @@ const clearAll = async () => {
 </script>
 
 <template>
-  <Section id="blocked-ips" title="当前封禁的 IP">
+  <Section id="blocked-ips" :title="`当前封禁/受限的 IP (${blockedIps.length})`">
     <template #actions>
       <div class="flex gap-2">
         <button @click="blockIp" class="btn btn-sm btn-primary">+ 手动封禁</button>
@@ -113,13 +135,21 @@ const clearAll = async () => {
     <div class="space-y-2 max-h-[400px] overflow-y-auto">
       <div 
         v-for="item in blockedIps" 
-        :key="item.ip"
+        :key="`${item.type}-${item.ip}`"
         class="flex items-center justify-between p-4 bg-dark-card-hover rounded-lg"
       >
         <div class="flex items-center gap-6">
           <div>
             <span class="text-gray-400 text-sm">IP 地址</span>
             <div class="text-red-400 font-mono">{{ item.ip }}</div>
+          </div>
+          <div>
+            <span class="text-gray-400 text-sm">类型</span>
+            <div>
+              <span :class="typeClass(item.type)" class="inline-block px-2 py-0.5 rounded text-xs font-medium">
+                {{ typeLabel(item.type) }}
+              </span>
+            </div>
           </div>
           <div v-if="item.reason">
             <span class="text-gray-400 text-sm">原因</span>

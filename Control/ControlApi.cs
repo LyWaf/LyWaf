@@ -277,14 +277,31 @@ public static class ControlApi
                 // 获取流量统计
                 var trafficSnapshot = SharedData.Traffic.GetSnapshot();
                 
-                // 获取被封禁的IP
+                // 获取被封禁的IP（合并 ClientFb、CaptchaPending、ClientThrottled）
                 var blockedIpList = SharedData.ClientFb.GetValidItemsWithExpiry()
                     .Select(x => new
                     {
                         ip = x.Key,
+                        type = "blocked",
                         reason = x.Value,
                         remainingSeconds = x.RemainingTime?.TotalSeconds
                     })
+                    .Concat(SharedData.CaptchaPending.GetValidItemsWithExpiry()
+                        .Select(x => new
+                        {
+                            ip = x.Key,
+                            type = "captcha",
+                            reason = $"验证码待验证: {x.Value.RuleName}",
+                            remainingSeconds = x.RemainingTime?.TotalSeconds
+                        }))
+                    .Concat(SharedData.ClientThrottled.GetValidItemsWithExpiry()
+                        .Select(x => new
+                        {
+                            ip = x.Key,
+                            type = "throttled",
+                            reason = $"带宽限速: {x.Value.EveryCapacity / 1024}KB/s",
+                            remainingSeconds = x.RemainingTime?.TotalSeconds
+                        }))
                     .ToList();
                 
                 // 获取最近5分钟内的客户端
@@ -996,13 +1013,33 @@ public static class ControlApi
         // 获取被封禁的 IP 列表
         app.MapGet("/api/blocked-ips", (HttpContext ctx) =>
         {
-            var blockedIps = SharedData.ClientFb.GetSnapshot()
-                .Select(kv => new
+            var blockedIps = SharedData.ClientFb.GetValidItemsWithExpiry()
+                .Select(x => new
                 {
-                    ip = kv.Key,
-                    reason = kv.Value,
-                    expiresAt = SharedData.ClientFb.GetExpiration(kv.Key)
+                    ip = x.Key,
+                    type = "blocked",
+                    reason = x.Value,
+                    remainingSeconds = x.RemainingTime?.TotalSeconds,
+                    expiresAt = SharedData.ClientFb.GetExpiration(x.Key)
                 })
+                .Concat(SharedData.CaptchaPending.GetValidItemsWithExpiry()
+                    .Select(x => new
+                    {
+                        ip = x.Key,
+                        type = "captcha",
+                        reason = $"验证码待验证: {x.Value.RuleName}",
+                        remainingSeconds = x.RemainingTime?.TotalSeconds,
+                        expiresAt = SharedData.CaptchaPending.GetExpiration(x.Key)
+                    }))
+                .Concat(SharedData.ClientThrottled.GetValidItemsWithExpiry()
+                    .Select(x => new
+                    {
+                        ip = x.Key,
+                        type = "throttled",
+                        reason = $"带宽限速: {x.Value.EveryCapacity / 1024}KB/s",
+                        remainingSeconds = x.RemainingTime?.TotalSeconds,
+                        expiresAt = SharedData.ClientThrottled.GetExpiration(x.Key)
+                    }))
                 .OrderBy(x => x.ip)
                 .ToList();
 
@@ -1059,13 +1096,18 @@ public static class ControlApi
                     return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
                 }
 
-                if (SharedData.ClientFb.Remove(request.Ip.Trim()))
+                var ip = request.Ip.Trim();
+                var removed = SharedData.ClientFb.Remove(ip);
+                removed |= SharedData.CaptchaPending.Remove(ip);
+                removed |= SharedData.ClientThrottled.Remove(ip);
+                
+                if (removed)
                 {
                     return Results.Json(new
                     {
                         success = true,
-                        message = $"已解封 IP: {request.Ip}",
-                        ip = request.Ip,
+                        message = $"已解封 IP: {ip}",
+                        ip = ip,
                         timestamp = DateTime.Now
                     });
                 }
@@ -1083,8 +1125,10 @@ public static class ControlApi
         // 清空所有封禁的 IP
         app.MapPost("/api/blocked-ips/clear", (HttpContext ctx) =>
         {
-            var count = SharedData.ClientFb.Count;
+            var count = SharedData.ClientFb.Count + SharedData.CaptchaPending.Count + SharedData.ClientThrottled.Count;
             SharedData.ClientFb.Clear();
+            SharedData.CaptchaPending.Clear();
+            SharedData.ClientThrottled.Clear();
             return Results.Json(new
             {
                 success = true,

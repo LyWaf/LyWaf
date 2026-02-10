@@ -38,7 +38,7 @@ const system = ref<SystemStatus>({
 const recentClients = ref<Array<{ ip: string; lastAccessTime: string }>>([])
 
 // 当前封禁的 IP
-const blockedIps = ref<Array<{ ip: string; reason: string; remainingSeconds?: number }>>([])
+const blockedIps = ref<Array<{ ip: string; type: string; reason: string; remainingSeconds?: number }>>([])
 
 
 // 自动刷新
