@@ -10,31 +10,22 @@ using Yarp.ReverseProxy.Model;
 
 namespace LyWaf.Middleware;
 
-public class FileProviderMiddleware : IDisposable
+public class FileProviderMiddleware
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly RequestDelegate _next;
-    private readonly IOptionsMonitor<Services.Files.FileServerOptions> _optionsMonitor;
-    private readonly IDisposable? _optionsChangeToken;
     private Services.Files.FileServerOptions _currentOptions;
 
     public FileProviderMiddleware(RequestDelegate next, IOptionsMonitor<Services.Files.FileServerOptions> options)
     {
         _next = next;
-        _optionsMonitor = options;
         _currentOptions = options.CurrentValue;
-        _optionsChangeToken = _optionsMonitor.OnChange(OnOptionsChanged);
-    }
 
-    private void OnOptionsChanged(Services.Files.FileServerOptions newOptions)
-    {
-        _logger.Info("FileServer 配置已更新，共 {Count} 个文件服务项", newOptions.Items.Count);
-        _currentOptions = newOptions;
-    }
-
-    public void Dispose()
-    {
-        _optionsChangeToken?.Dispose();
+        options.OnChange(newOptions =>
+        {
+            _logger.Info("FileServer 配置已更新，共 {Count} 个文件服务项", newOptions.Items.Count);
+            _currentOptions = newOptions;
+        });
     }
     private const string BROWSE_HEADER = """
 <head>

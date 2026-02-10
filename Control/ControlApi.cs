@@ -6,6 +6,7 @@ using LyWaf.Services.Protect;
 using LyWaf.Services.SpeedLimit;
 using LyWaf.Services.Statistic;
 using LyWaf.Services.WafInfo;
+using LyWaf.Config;
 using LyWaf.Shared;
 using Microsoft.Extensions.FileProviders;
 using YamlDotNet.Serialization;
@@ -562,6 +563,142 @@ public static class ControlApi
                 return Results.Json(new { message = "配置已重新加载", timestamp = DateTime.Now });
             }
             return Results.Json(new { message = "配置重载失败：不支持的配置类型" }, statusCode: 500);
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 配置文件管理 API ===============
+
+        // 获取配置文件内容（优先返回草稿内容，同时返回原始文件内容）
+        app.MapGet("/api/config/file", (HttpContext ctx) =>
+        {
+            try
+            {
+                var filePath = SharedData.ConfigFilePath;
+                if (!File.Exists(filePath))
+                {
+                    return Results.Json(new { success = false, message = $"配置文件不存在: {filePath}" }, statusCode: 404);
+                }
+
+                var originalContent = File.ReadAllText(filePath, Encoding.UTF8);
+                var fileName = Path.GetFileName(filePath);
+                var format = filePath.EndsWith(".ly", StringComparison.OrdinalIgnoreCase) ? "ly" : "yaml";
+
+                // 检查是否存在草稿文件
+                var dir = Path.GetDirectoryName(filePath) ?? ".";
+                var ext = Path.GetExtension(filePath);
+                var draftPath = Path.Combine(dir, $".lywaf.draft{ext}");
+                string? draftContent = null;
+                if (File.Exists(draftPath))
+                {
+                    draftContent = File.ReadAllText(draftPath, Encoding.UTF8);
+                }
+
+                return Results.Json(new
+                {
+                    success = true,
+                    fileName,
+                    format,
+                    content = originalContent,
+                    draftContent,
+                    hasDraft = draftContent != null
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"读取配置文件失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 保存配置文件内容（保存到草稿文件，不覆盖原始配置）
+        app.MapPost("/api/config/file", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<SaveConfigRequest>();
+                if (request == null || string.IsNullOrEmpty(request.Content))
+                {
+                    return Results.Json(new { success = false, message = "请求内容为空" }, statusCode: 400);
+                }
+
+                var originalPath = SharedData.ConfigFilePath;
+                var isLy = originalPath.EndsWith(".ly", StringComparison.OrdinalIgnoreCase);
+
+                // 如果是 .ly 文件，先校验语法
+                if (isLy)
+                {
+                    try
+                    {
+                        LyConfigParser.Parse(request.Content);
+                    }
+                    catch (LyConfigException ex)
+                    {
+                        return Results.Json(new { success = false, message = $"语法错误: {ex.Message}" }, statusCode: 400);
+                    }
+                }
+
+                // 保存到草稿文件（不覆盖原始配置文件）
+                var dir = Path.GetDirectoryName(originalPath) ?? ".";
+                var ext = Path.GetExtension(originalPath);
+                var draftPath = Path.Combine(dir, $".lywaf.draft{ext}");
+
+                await File.WriteAllTextAsync(draftPath, request.Content, Encoding.UTF8);
+
+                var message = $"草稿已保存到 {Path.GetFileName(draftPath)}";
+
+                // 如果需要重载配置，设置标志后 Reload
+                // LyConfigProvider / DraftAwareYamlProvider 检查此标志决定是否读取草稿
+                if (request.Reload)
+                {
+                    if (config is IConfigurationRoot configRoot)
+                    {
+                        SharedData.UseDraftConfig = true;
+                        configRoot.Reload();
+                        message = "草稿已保存，配置已重新加载（端口监听等信息需重启服务才能生效）";
+                    }
+                }
+
+                return Results.Json(new
+                {
+                    success = true,
+                    message,
+                    draftFile = Path.GetFileName(draftPath)
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"保存配置失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 将 .ly 内容转换为 YAML 预览
+        app.MapPost("/api/config/convert", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<ConvertConfigRequest>();
+                if (request == null || string.IsNullOrEmpty(request.Content))
+                {
+                    return Results.Json(new { success = false, message = "请求内容为空" }, statusCode: 400);
+                }
+
+                // 收集环境变量用于变量替换
+                var variables = new Dictionary<string, string>();
+                foreach (var key in Environment.GetEnvironmentVariables().Keys)
+                {
+                    var keyStr = key.ToString()!;
+                    variables[keyStr] = Environment.GetEnvironmentVariable(keyStr) ?? "";
+                }
+
+                var yaml = LyToAppSettingsConverter.Convert(request.Content, variables);
+                return Results.Json(new { success = true, yaml });
+            }
+            catch (LyConfigException ex)
+            {
+                return Results.Json(new { success = false, message = $"转换失败（语法错误）: {ex.Message}" }, statusCode: 400);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"转换失败: {ex.Message}" }, statusCode: 500);
+            }
         }).RequireHost($"*:{controlPort}");
 
         app.MapGet("/api/statistics", (HttpContext ctx, IAccessControlService accessControlService) =>
@@ -2525,4 +2662,15 @@ public class ToggleABTestRequest
 public class ToggleFeatureRequest
 {
     public bool? Enabled { get; set; }
+}
+
+public class SaveConfigRequest
+{
+    public string Content { get; set; } = "";
+    public bool Reload { get; set; }
+}
+
+public class ConvertConfigRequest
+{
+    public string Content { get; set; } = "";
 }

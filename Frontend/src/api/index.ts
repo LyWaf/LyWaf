@@ -322,6 +322,34 @@ export const abTestApi = {
     api.get<ApiResponse>(`/abtest/stats/${id}`),
 }
 
+// ==================== 配置文件 API ====================
+
+interface ConfigFileResponse {
+  success: boolean
+  fileName: string
+  format: string
+  content: string
+  draftContent: string | null
+  hasDraft: boolean
+}
+
+interface ConvertResponse {
+  success: boolean
+  yaml: string
+  message?: string
+}
+
+export const configFileApi = {
+  getFile: () =>
+    api.get<ConfigFileResponse>('/config/file'),
+
+  saveFile: (content: string, reload: boolean = false) =>
+    api.post<ApiResponse>('/config/file', { content, reload }),
+
+  convert: (content: string) =>
+    api.post<ConvertResponse>('/config/convert', { content }),
+}
+
 // ==================== 仪表板 API ====================
 
 export interface DashboardResponse {

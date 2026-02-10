@@ -21,6 +21,7 @@ const menuItems: MenuItem[] = [
   { path: '/cc-protection', name: 'CC 防护', icon: '⚡' },
   { name: '地理访问', icon: '🌍', action: 'geo-access' },
   { path: '/api-timing', name: 'API 耗时', icon: '⏱️' },
+  { path: '/config', name: '配置文件', icon: '📄' },
 ]
 
 const isActive = (item: MenuItem) => {

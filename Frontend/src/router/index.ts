@@ -26,6 +26,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/ApiTiming.vue'),
     meta: { title: 'API 耗时', icon: '⏱️' }
   },
+  {
+    path: '/config',
+    name: 'ConfigEditor',
+    component: () => import('@/views/ConfigEditor.vue'),
+    meta: { title: '配置文件', icon: '📄' }
+  },
 ]
 
 const router = createRouter({

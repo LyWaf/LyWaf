@@ -38,6 +38,7 @@ using LyWaf.Services.StreamServer;
 using LyWaf.Services.ABTest;
 using LyWaf.Services.Captcha;
 using LyWaf.Config;
+using LyWaf.Shared;
 
 using System.CommandLine;
 using System.CommandLine.Parsing;
@@ -297,6 +298,8 @@ public class Program
         
         // 根据文件扩展名选择加载方式
         var configPath = run.Config;
+        SharedData.ConfigFilePath = Path.GetFullPath(configPath);
+
         if (configPath.EndsWith(".ly", StringComparison.OrdinalIgnoreCase))
         {
             // 加载 .ly 配置文件
@@ -305,10 +308,10 @@ public class Program
         }
         else
         {
-            // 加载 YAML 配置文件
-            builder.Configuration.AddYamlFile(configPath, optional: false, reloadOnChange: true);
+            // 加载 YAML 配置文件（支持草稿优先读取）
+            builder.Configuration.AddDraftAwareYamlFile(configPath, optional: false);
         }
-        
+
         DoStartWaf(builder, run, null, null);
     }
 

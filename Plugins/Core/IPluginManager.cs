@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using NLog;
 using System.Collections.Concurrent;
 using System.Reflection;
@@ -115,17 +116,56 @@ public class PluginManager : IPluginManager
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly ConcurrentDictionary<string, PluginInfo> _plugins = new();
-    private readonly PluginOptions _options;
+    private PluginOptions _options;
     private readonly IConfiguration _configuration;
     private readonly IPluginEventBus _eventBus;
     private IServiceProvider? _serviceProvider;
 
-    public PluginManager(IConfiguration configuration, IPluginEventBus eventBus)
+    public PluginManager(IConfiguration configuration, IPluginEventBus eventBus, IOptionsMonitor<PluginOptions> optionsMonitor)
     {
         _configuration = configuration;
         _eventBus = eventBus;
-        _options = new PluginOptions();
-        configuration.GetSection("Plugins").Bind(_options);
+        _options = optionsMonitor.CurrentValue;
+
+        // 订阅配置变更
+        optionsMonitor.OnChange(newOptions =>
+        {
+            _options = newOptions;
+            _logger.Info("插件配置已动态更新");
+            _ = Task.Run(() => OnOptionsChangedAsync(newOptions));
+        });
+    }
+
+    /// <summary>
+    /// 配置变更时动态更新插件启用/禁用状态
+    /// </summary>
+    private async Task OnOptionsChangedAsync(PluginOptions newOptions)
+    {
+        try
+        {
+            foreach (var (pluginId, info) in _plugins)
+            {
+                var isSystemPlugin = newOptions.SystemPlugins.Contains(pluginId);
+                var shouldBeEnabled = GetPluginEnabledState(pluginId, isSystemPlugin, info.Plugin.Metadata.EnabledByDefault);
+
+                if (shouldBeEnabled && !info.IsEnabled)
+                {
+                    _logger.Info("配置变更：启用插件 {Id}", pluginId);
+                    try { await EnablePluginAsync(pluginId); }
+                    catch (Exception ex) { _logger.Error(ex, "配置变更启用插件 {Id} 失败", pluginId); }
+                }
+                else if (!shouldBeEnabled && info.IsEnabled)
+                {
+                    _logger.Info("配置变更：禁用插件 {Id}", pluginId);
+                    try { await DisablePluginAsync(pluginId); }
+                    catch (Exception ex) { _logger.Error(ex, "配置变更禁用插件 {Id} 失败", pluginId); }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "处理插件配置变更失败");
+        }
     }
 
     /// <summary>

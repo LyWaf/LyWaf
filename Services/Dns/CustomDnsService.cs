@@ -109,10 +109,9 @@ public interface ICustomDnsService
 public class CustomDnsService : ICustomDnsService
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
-    private readonly IOptionsMonitor<CustomDnsOptions> _optionsMonitor;
     private readonly ConcurrentDictionary<string, (IPAddress[] addresses, DateTime expiry)> _cache = new();
     private readonly ConcurrentDictionary<string, int> _roundRobinCounters = new();
-    
+
     // 预处理的映射表：精确匹配和通配符匹配
     private Dictionary<string, DnsEntry> _exactEntries = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, DnsEntry> _wildcardEntries = new(StringComparer.OrdinalIgnoreCase);
@@ -120,14 +119,13 @@ public class CustomDnsService : ICustomDnsService
 
     public CustomDnsService(IOptionsMonitor<CustomDnsOptions> optionsMonitor)
     {
-        _optionsMonitor = optionsMonitor;
         _currentOptions = optionsMonitor.CurrentValue;
-        
+
         // 初始化映射表
         RebuildMappings(_currentOptions);
-        
+
         // 监听配置变化
-        _optionsMonitor.OnChange(options =>
+        optionsMonitor.OnChange(options =>
         {
             _logger.Info("检测到 CustomDns 配置变化，重新加载映射表...");
             _currentOptions = options;

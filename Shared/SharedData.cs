@@ -13,6 +13,17 @@ namespace LyWaf.Shared;
 public static class SharedData
 {
     /// <summary>
+    /// 当前使用的配置文件路径（启动时设置）
+    /// </summary>
+    public static string ConfigFilePath { get; set; } = "config.ly";
+
+    /// <summary>
+    /// 是否使用草稿配置（通过 API 保存并重载后设为 true）
+    /// 启动时为 false，确保首次加载读取原始配置文件
+    /// </summary>
+    public static bool UseDraftConfig { get; set; } = false;
+
+    /// <summary>
     /// IP 通用数据字典
     /// Key: IP地址
     /// Value: 任意对象数据

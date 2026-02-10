@@ -24,33 +24,22 @@ namespace LyWaf.Middleware;
 /// - {URL} / {url} - 完整URL
 /// - {USER_AGENT} / {UserAgent} - User-Agent
 /// </summary>
-public class SimpleResMiddleware : IDisposable
+public class SimpleResMiddleware
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly RequestDelegate _next;
-    private readonly IOptionsMonitor<SimpleResOptions> _optionsMonitor;
-    private readonly IDisposable? _optionsChangeToken;
     private SimpleResOptions _currentOptions;
 
     public SimpleResMiddleware(RequestDelegate next, IOptionsMonitor<SimpleResOptions> options)
     {
         _next = next;
-        _optionsMonitor = options;
         _currentOptions = options.CurrentValue;
-        
-        // 监控配置变化
-        _optionsChangeToken = _optionsMonitor.OnChange(OnOptionsChanged);
-    }
 
-    private void OnOptionsChanged(SimpleResOptions newOptions)
-    {
-        _logger.Info("SimpleRes 配置已更新，共 {Count} 个响应项", newOptions.Items.Count);
-        _currentOptions = newOptions;
-    }
-
-    public void Dispose()
-    {
-        _optionsChangeToken?.Dispose();
+        options.OnChange(newOptions =>
+        {
+            _logger.Info("SimpleRes 配置已更新，共 {Count} 个响应项", newOptions.Items.Count);
+            _currentOptions = newOptions;
+        });
     }
 
     public async Task InvokeAsync(HttpContext context)

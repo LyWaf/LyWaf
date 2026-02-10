@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace LyWaf.Plugins.Core;
 
@@ -14,32 +15,33 @@ public static class PluginExtensions
     /// </summary>
     public static IServiceCollection AddLyWafPlugins(this IServiceCollection services, IConfiguration configuration)
     {
+        // 确保 PluginOptions 已注册（Configure 可重复调用，幂等）
+        services.Configure<PluginOptions>(configuration.GetSection("Plugins"));
+
         // 注册事件总线
-        services.AddSingleton<IPluginEventBus, PluginEventBus>();
-        
-        // 注册插件管理器
-        services.AddSingleton<PluginManager>();
-        services.AddSingleton<IPluginManager>(sp => sp.GetRequiredService<PluginManager>());
-        
-        // 发现并加载插件
         var eventBus = new PluginEventBus();
-        var manager = new PluginManager(configuration, eventBus);
-        manager.DiscoverPlugins();
-        
-        // 配置插件服务
-        manager.ConfigureServices(services);
-        
-        // 替换为实际的单例
-        services.AddSingleton<PluginManager>(manager);
         services.AddSingleton<IPluginEventBus>(eventBus);
+
+        // 构建临时 ServiceProvider 以获取 IOptionsMonitor<PluginOptions>
+        // 这样 PluginManager 构造函数可以直接用标准 IOptionsMonitor
+        var tempProvider = services.BuildServiceProvider();
+        var optionsMonitor = tempProvider.GetRequiredService<IOptionsMonitor<PluginOptions>>();
+
+        // 创建插件管理器
+        var manager = new PluginManager(configuration, eventBus, optionsMonitor);
+        manager.DiscoverPlugins();
+        manager.ConfigureServices(services);
+
+        // 注册为单例
+        services.AddSingleton<PluginManager>(manager);
         services.AddSingleton<IPluginManager>(manager);
-        
+
         // 注册插件生命周期管理器
         services.AddHostedService<PluginHostedService>();
-        
+
         // 注册插件基础中间件（用于发布请求事件）
         services.AddSingleton<BasePluginMiddleware>();
-        
+
         return services;
     }
     
