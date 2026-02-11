@@ -6,6 +6,15 @@ import type { LbCluster, LbDestination, LbPolicy } from '@/types'
 
 const { showSuccess, showError } = useToast()
 
+// 从 axios 错误中提取服务端 message
+const getErrorMessage = (error: unknown, fallback: string): string => {
+  if (error && typeof error === 'object' && 'response' in error) {
+    const res = (error as { response?: { data?: { message?: string } } }).response
+    if (res?.data?.message) return res.data.message
+  }
+  return fallback
+}
+
 // 数据状态
 const loading = ref(false)
 const clusters = ref<LbCluster[]>([])
@@ -87,7 +96,7 @@ const updatePolicy = async (policy: string) => {
       showError(res.message || '更新策略失败')
     }
   } catch (error) {
-    showError('更新策略失败')
+    showError(getErrorMessage(error, '更新策略失败'))
   }
 }
 
@@ -167,9 +176,7 @@ const handleSave = async () => {
       showError(res.message || '操作失败')
     }
   } catch (error) {
-    showError('操作失败')
-  } finally {
-    saving.value = false
+    showError(getErrorMessage(error, '操作失败'))
   }
 }
 
@@ -185,7 +192,7 @@ const removeDest = async (dest: LbDestination) => {
       showError(res.message || '删除失败')
     }
   } catch (error) {
-    showError('删除失败')
+    showError(getErrorMessage(error, '删除失败'))
   }
 }
 
@@ -208,7 +215,7 @@ const batchRemove = async () => {
       showError(res.message || '批量删除失败')
     }
   } catch (error) {
-    showError('批量删除失败')
+    showError(getErrorMessage(error, '批量删除失败'))
   }
 }
 
@@ -225,7 +232,7 @@ const removeClusterPatch = async () => {
       showError(res.message || '删除补丁失败')
     }
   } catch (error) {
-    showError('删除补丁失败')
+    showError(getErrorMessage(error, '删除补丁失败'))
   }
 }
 

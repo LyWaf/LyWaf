@@ -19,6 +19,10 @@ const http = axios.create({
 http.interceptors.response.use(
   (response) => response.data,
   (error) => {
+    // 如果服务端返回了 JSON body（如 400），直接返回 data 让业务层处理
+    if (error.response?.data) {
+      return error.response.data
+    }
     console.error('API Error:', error)
     return Promise.reject(error)
   }

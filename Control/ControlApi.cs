@@ -2789,46 +2789,22 @@ public static class ControlApi
                     return Results.Json(new { success = false, message = "ClusterId 和 DestinationId 不能为空" }, statusCode: 400);
                 }
 
-                // 检测目标配置的来源
+                // 检测目标配置的来源：只允许删除补丁中的目标
                 var destConfigKey = $"ReverseProxy:Clusters:{request.ClusterId}:Destinations:{request.DestinationId}";
                 var configSource = DetectConfigSource(config, destConfigKey);
 
-                if (configSource == ConfigSource.OriginalConfig)
+                if (configSource != ConfigSource.PatchConfig)
                 {
-                    // 修改原始配置文件
-                    return await ModifyOriginalConfig(config, request.ClusterId, configObj =>
-                    {
-                        if (configObj is not Dictionary<string, object> rootDict)
-                            return "配置文件格式错误";
-                            
-                        if (!rootDict.TryGetValue("ReverseProxy", out var rpObj) || rpObj is not Dictionary<string, object> rpDict)
-                            return "ReverseProxy 配置不存在";
-                            
-                        if (!rpDict.TryGetValue("Clusters", out var clustersObj) || clustersObj is not Dictionary<string, object> clustersDict)
-                            return "Clusters 配置不存在";
-                            
-                        if (!clustersDict.TryGetValue(request.ClusterId, out var clusterObj) || clusterObj is not Dictionary<string, object> clusterDict)
-                            return $"集群 {request.ClusterId} 不存在";
-                            
-                        if (!clusterDict.TryGetValue("Destinations", out var destsObj) || destsObj is not Dictionary<string, object> destsDict)
-                            return "Destinations 配置不存在";
-                            
-                        // 删除目标
-                        destsDict.Remove(request.DestinationId);
-                        return null;
-                    });
+                    return Results.Json(new { success = false, message = $"目标 {request.DestinationId} 来自默认配置，不能删除" }, statusCode: 400);
                 }
-                else
+
+                return await ModifyLbPatch(config, patch =>
                 {
-                    // 修改补丁配置文件（只删除指定目标）
-                    return await ModifyLbPatch(config, patch =>
-                    {
-                        var cluster = EnsurePatchCluster(patch, request.ClusterId);
-                        var dests = EnsurePatchDestinations(cluster);
-                        dests.Remove(request.DestinationId);
-                        return null;
-                    });
-                }
+                    var cluster = EnsurePatchCluster(patch, request.ClusterId);
+                    var dests = EnsurePatchDestinations(cluster);
+                    dests.Remove(request.DestinationId);
+                    return null;
+                });
             }
             catch (Exception ex)
             {
@@ -2847,61 +2823,33 @@ public static class ControlApi
                     return Results.Json(new { success = false, message = "ClusterId 和 DestinationIds 不能为空" }, statusCode: 400);
                 }
 
-                // 检测任一目标的配置来源（如果任一目标在原始配置中，就修改原始配置）
-                var anyInOriginalConfig = false;
+                // 检测所有目标的配置来源：只允许删除补丁中的目标
+                var originalIds = new List<string>();
                 foreach (var destId in request.DestinationIds)
                 {
                     var destConfigKey = $"ReverseProxy:Clusters:{request.ClusterId}:Destinations:{destId}";
                     var configSource = DetectConfigSource(config, destConfigKey);
-                    if (configSource == ConfigSource.OriginalConfig)
+                    if (configSource != ConfigSource.PatchConfig)
                     {
-                        anyInOriginalConfig = true;
-                        break;
+                        originalIds.Add(destId);
                     }
                 }
 
-                if (anyInOriginalConfig)
+                if (originalIds.Count > 0)
                 {
-                    // 修改原始配置文件
-                    return await ModifyOriginalConfig(config, request.ClusterId, configObj =>
-                    {
-                        if (configObj is not Dictionary<string, object> rootDict)
-                            return "配置文件格式错误";
-                            
-                        if (!rootDict.TryGetValue("ReverseProxy", out var rpObj) || rpObj is not Dictionary<string, object> rpDict)
-                            return "ReverseProxy 配置不存在";
-                            
-                        if (!rpDict.TryGetValue("Clusters", out var clustersObj) || clustersObj is not Dictionary<string, object> clustersDict)
-                            return "Clusters 配置不存在";
-                            
-                        if (!clustersDict.TryGetValue(request.ClusterId, out var clusterObj) || clusterObj is not Dictionary<string, object> clusterDict)
-                            return $"集群 {request.ClusterId} 不存在";
-                            
-                        if (!clusterDict.TryGetValue("Destinations", out var destsObj) || destsObj is not Dictionary<string, object> destsDict)
-                            return "Destinations 配置不存在";
-                            
-                        // 批量删除目标
-                        foreach (var destId in request.DestinationIds)
-                        {
-                            destsDict.Remove(destId);
-                        }
-                        return null;
-                    });
+                    return Results.Json(new { success = false, message = $"以下目标来自默认配置，不能删除: {string.Join(", ", originalIds)}" }, statusCode: 400);
                 }
-                else
+
+                return await ModifyLbPatch(config, patch =>
                 {
-                    // 修改补丁配置文件（只删除指定目标）
-                    return await ModifyLbPatch(config, patch =>
+                    var cluster = EnsurePatchCluster(patch, request.ClusterId);
+                    var dests = EnsurePatchDestinations(cluster);
+                    foreach (var destId in request.DestinationIds)
                     {
-                        var cluster = EnsurePatchCluster(patch, request.ClusterId);
-                        var dests = EnsurePatchDestinations(cluster);
-                        foreach (var destId in request.DestinationIds)
-                        {
-                            dests.Remove(destId);
-                        }
-                        return null;
-                    });
-                }
+                        dests.Remove(destId);
+                    }
+                    return null;
+                });
             }
             catch (Exception ex)
             {
@@ -3191,7 +3139,7 @@ public static class ControlApi
                 var source = DetectConfigSource(config, $"ReverseProxy:Routes:{request.RouteId}");
                 if (source == ConfigSource.OriginalConfig)
                 {
-                    return Results.Json(new { success = false, message = $"路由 {request.RouteId} 来自原始配置，不能删除。如需恢复原始配置，请使用「删除补丁」。" }, statusCode: 400);
+                    return Results.Json(new { success = false, message = $"路由 {request.RouteId} 来自默认配置，不能删除" }, statusCode: 400);
                 }
 
                 return await ModifyRoutePatch(config, routes =>
