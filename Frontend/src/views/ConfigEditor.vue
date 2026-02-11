@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { configFileApi } from '@/api'
 import { useToast } from '@/composables/useToast'
 
-const { showSuccess, showError, showWarning } = useToast()
+const { showSuccess, showError } = useToast()
 
 // 状态
 const loading = ref(false)
@@ -33,8 +33,8 @@ const loadFile = async () => {
       originalContent.value = response.content
       hasDraft.value = response.hasDraft
 
-      // 如果有草稿，默认加载草稿内容
-      if (response.hasDraft && response.draftContent) {
+      // 仅在运行时已加载草稿配置时，默认显示草稿内容
+      if (response.draftLoaded && response.draftContent) {
         content.value = response.draftContent
         lastSavedContent.value = response.draftContent
       } else {
@@ -109,11 +109,18 @@ const switchTab = (tab: 'source' | 'yaml') => {
   }
 }
 
-// 快捷键保存
+// 快捷键
 const handleKeydown = (e: KeyboardEvent) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
     e.preventDefault()
     saveConfig(false)
+    return
+  }
+
+  // Tab 插入4个空格（使用 execCommand 保留浏览器原生 undo 支持）
+  if (e.key === 'Tab') {
+    e.preventDefault()
+    document.execCommand('insertText', false, '    ')
   }
 }
 

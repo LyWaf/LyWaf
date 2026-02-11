@@ -582,12 +582,13 @@ public static class ControlApi
                 var fileName = Path.GetFileName(filePath);
                 var format = filePath.EndsWith(".ly", StringComparison.OrdinalIgnoreCase) ? "ly" : "yaml";
 
-                // 检查是否存在草稿文件
+                // 检查是否存在草稿文件（仅在已加载草稿配置时才返回草稿内容）
                 var dir = Path.GetDirectoryName(filePath) ?? ".";
                 var ext = Path.GetExtension(filePath);
                 var draftPath = Path.Combine(dir, $".lywaf.draft{ext}");
+                var draftExists = File.Exists(draftPath);
                 string? draftContent = null;
-                if (File.Exists(draftPath))
+                if (draftExists && SharedData.UseDraftConfig)
                 {
                     draftContent = File.ReadAllText(draftPath, Encoding.UTF8);
                 }
@@ -599,7 +600,8 @@ public static class ControlApi
                     format,
                     content = originalContent,
                     draftContent,
-                    hasDraft = draftContent != null
+                    hasDraft = draftExists,
+                    draftLoaded = SharedData.UseDraftConfig && draftExists
                 });
             }
             catch (Exception ex)

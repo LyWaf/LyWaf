@@ -12,4 +12,5 @@ myLyWafbintest_build
 bintemp_build
 nul
 .claude
+.lywaf*
 # wwwroot/*

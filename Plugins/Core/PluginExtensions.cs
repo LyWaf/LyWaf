@@ -15,25 +15,22 @@ public static class PluginExtensions
     /// </summary>
     public static IServiceCollection AddLyWafPlugins(this IServiceCollection services, IConfiguration configuration)
     {
-        // 确保 PluginOptions 已注册（Configure 可重复调用，幂等）
+        // 注册 PluginOptions
         services.Configure<PluginOptions>(configuration.GetSection("Plugins"));
 
         // 注册事件总线
         var eventBus = new PluginEventBus();
         services.AddSingleton<IPluginEventBus>(eventBus);
 
-        // 构建临时 ServiceProvider 以获取 IOptionsMonitor<PluginOptions>
-        // 这样 PluginManager 构造函数可以直接用标准 IOptionsMonitor
-        var tempProvider = services.BuildServiceProvider();
-        var optionsMonitor = tempProvider.GetRequiredService<IOptionsMonitor<PluginOptions>>();
+        // 通过 BuildServiceProvider 获取 IOptionsMonitor，用于创建 PluginManager
+        var sp = services.BuildServiceProvider();
+        var optionsMonitor = sp.GetRequiredService<IOptionsMonitor<PluginOptions>>();
 
-        // 创建插件管理器
         var manager = new PluginManager(configuration, eventBus, optionsMonitor);
         manager.DiscoverPlugins();
         manager.ConfigureServices(services);
 
-        // 注册为单例
-        services.AddSingleton<PluginManager>(manager);
+        services.AddSingleton(manager);
         services.AddSingleton<IPluginManager>(manager);
 
         // 注册插件生命周期管理器

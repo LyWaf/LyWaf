@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import Section from '@/components/common/Section.vue'
 import { ipApi } from '@/api'
 import { useToast } from '@/composables/useToast'
@@ -8,6 +8,22 @@ const { showSuccess, showError } = useToast()
 
 const whitelist = ref<string[]>([])
 const blacklist = ref<string[]>([])
+
+// 加载数据
+const loadData = async () => {
+  try {
+    const [wRes, bRes] = await Promise.all([
+      ipApi.getWhitelist(),
+      ipApi.getBlacklist()
+    ])
+    if (wRes.success) whitelist.value = wRes.whitelist || []
+    if (bRes.success) blacklist.value = bRes.blacklist || []
+  } catch {
+    // 静默处理
+  }
+}
+
+onMounted(loadData)
 
 // 白名单操作
 const addWhitelistIp = async () => {

@@ -127,7 +127,6 @@ public class PluginManager : IPluginManager
         _eventBus = eventBus;
         _options = optionsMonitor.CurrentValue;
 
-        // 订阅配置变更
         optionsMonitor.OnChange(newOptions =>
         {
             _options = newOptions;

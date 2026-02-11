@@ -52,16 +52,22 @@ export const featureApi = {
 
 export const ipApi = {
   // 白名单
+  getWhitelist: () =>
+    api.get<{ success: boolean; whitelist: string[] }>('/ac/whitelist'),
+
   addWhitelist: (ipOrCidr: string) =>
     api.post<ApiResponse>('/ac/whitelist/add', { ipOrCidr }),
-    
+
   removeWhitelist: (ipOrCidr: string) =>
     api.post<ApiResponse>('/ac/whitelist/remove', { ipOrCidr }),
-    
+
   // 黑名单
+  getBlacklist: () =>
+    api.get<{ success: boolean; blacklist: string[] }>('/ac/blacklist'),
+
   addBlacklist: (ipOrCidr: string) =>
     api.post<ApiResponse>('/ac/blacklist/add', { ipOrCidr }),
-    
+
   removeBlacklist: (ipOrCidr: string) =>
     api.post<ApiResponse>('/ac/blacklist/remove', { ipOrCidr }),
     
