@@ -371,4 +371,116 @@ public static class LyConfigExtensions
             Optional = optional
         });
     }
+
+    /// <summary>
+    /// 添加负载均衡补丁配置源（最后加载，覆盖主配置中的 Clusters）
+    /// </summary>
+    public static IConfigurationBuilder AddLbPatch(this IConfigurationBuilder builder)
+    {
+        return builder.Add(new LbPatchSource());
+    }
+}
+
+// =============== 负载均衡补丁配置 ===============
+
+/// <summary>
+/// 负载均衡补丁文件路径
+/// </summary>
+public static class LbPatchConfig
+{
+    public const string FileName = ".lywaf.lb-patch.json";
+
+    public static string GetPatchFilePath()
+    {
+        var configDir = Path.GetDirectoryName(SharedData.ConfigFilePath) ?? ".";
+        return Path.Combine(configDir, FileName);
+    }
+}
+
+/// <summary>
+/// 负载均衡补丁配置源
+/// </summary>
+public class LbPatchSource : IConfigurationSource
+{
+    public IConfigurationProvider Build(IConfigurationBuilder builder)
+    {
+        return new LbPatchProvider();
+    }
+}
+
+/// <summary>
+/// 负载均衡补丁配置提供程序
+/// 从独立的 JSON 文件加载补丁，覆盖主配置中的 ReverseProxy:Clusters 部分
+/// 补丁文件格式:
+/// {
+///   "Clusters": {
+///     "cluster1": {
+///       "LoadBalancingPolicy": "WeightedRoundRobin",
+///       "Destinations": {
+///         "dest1": { "Address": "http://1.2.3.4:8001", "Metadata": { "Weight": "1" } }
+///       }
+///     }
+///   }
+/// }
+/// </summary>
+public class LbPatchProvider : ConfigurationProvider
+{
+    private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
+
+    public override void Load()
+    {
+        // 清空旧数据，确保删除的补丁项不会残留在内存中
+        Data.Clear();
+
+        var patchPath = LbPatchConfig.GetPatchFilePath();
+        if (!File.Exists(patchPath))
+            return;
+
+        try
+        {
+            var json = File.ReadAllText(patchPath, System.Text.Encoding.UTF8);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("Clusters", out var clustersEl))
+                return;
+
+            foreach (var cluster in clustersEl.EnumerateObject())
+            {
+                var clusterPrefix = $"ReverseProxy:Clusters:{cluster.Name}";
+                FlattenJsonElement(clusterPrefix, cluster.Value);
+            }
+
+            _logger.Info("负载均衡补丁已加载: {Path} ({Count} 个配置项)", patchPath, Data.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "加载负载均衡补丁失败: {Path}", patchPath);
+        }
+    }
+
+    private void FlattenJsonElement(string prefix, System.Text.Json.JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case System.Text.Json.JsonValueKind.Object:
+                foreach (var prop in element.EnumerateObject())
+                {
+                    FlattenJsonElement($"{prefix}:{prop.Name}", prop.Value);
+                }
+                break;
+
+            case System.Text.Json.JsonValueKind.Array:
+                var i = 0;
+                foreach (var item in element.EnumerateArray())
+                {
+                    FlattenJsonElement($"{prefix}:{i++}", item);
+                }
+                break;
+
+            default:
+                Data[prefix] = element.ToString();
+                break;
+        }
+    }
 }

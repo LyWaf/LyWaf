@@ -22,6 +22,7 @@ const menuItems: MenuItem[] = [
   { name: '地理访问', icon: '🌍', action: 'geo-access' },
   { path: '/api-timing', name: 'API 耗时', icon: '⏱️' },
   { path: '/config', name: '配置文件', icon: '📄' },
+  { path: '/cluster-config', name: '配置集群', icon: '⚖️' },
 ]
 
 const isActive = (item: MenuItem) => {

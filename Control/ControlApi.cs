@@ -2472,8 +2472,856 @@ public static class ControlApi
                 timestamp = DateTime.Now
             });
         }).RequireHost($"*:{controlPort}");
-        
+
+        // =============== 负载均衡管理 API ===============
+
+        // 获取所有集群及其目标列表
+        app.MapGet("/api/lb/clusters", (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var rpSection = config.GetSection("ReverseProxy:Clusters");
+                var clusters = new List<object>();
+                foreach (var clusterSection in rpSection.GetChildren())
+                {
+                    var clusterId = clusterSection.Key;
+                    var policy = clusterSection["LoadBalancingPolicy"] ?? "RoundRobin";
+                    var destinations = new List<object>();
+                    var destSection = clusterSection.GetSection("Destinations");
+                    foreach (var dest in destSection.GetChildren())
+                    {
+                        var address = dest["Address"] ?? "";
+                        Uri.TryCreate(address, UriKind.Absolute, out var uri);
+                        var metadata = new Dictionary<string, string>();
+                        var metaSection = dest.GetSection("Metadata");
+                        foreach (var meta in metaSection.GetChildren())
+                        {
+                            metadata[meta.Key] = meta.Value ?? "";
+                        }
+                        destinations.Add(new
+                        {
+                            id = dest.Key,
+                            address,
+                            host = uri?.Host ?? "*",
+                            port = uri?.Port ?? 0,
+                            scheme = uri?.Scheme ?? "http",
+                            metadata
+                        });
+                    }
+                    clusters.Add(new
+                    {
+                        id = clusterId,
+                        loadBalancingPolicy = policy,
+                        destinations,
+                        destinationCount = destinations.Count
+                    });
+                }
+                return Results.Json(new { success = true, clusters, timestamp = DateTime.Now });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"获取集群列表失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 获取所有可用负载均衡策略
+        app.MapGet("/api/lb/policies", (HttpContext ctx) =>
+        {
+            var policies = new[]
+            {
+                new { name = "RoundRobin", label = "轮询" },
+                new { name = "Random", label = "随机" },
+                new { name = "LeastRequests", label = "最少连接" },
+                new { name = "PowerOfTwoChoices", label = "二选一" },
+                new { name = "First", label = "总是第一个" },
+                new { name = "WeightedRoundRobin", label = "加权轮询" },
+                new { name = "WeightedLeastConnections", label = "加权最少连接" },
+                new { name = "IpHash", label = "IP 哈希" },
+                new { name = "GenericHash", label = "通用哈希" },
+                new { name = "WeightedRandom", label = "加权随机" },
+                new { name = "ConsistentHash", label = "一致性哈希" },
+            };
+            return Results.Json(new { success = true, policies });
+        }).RequireHost($"*:{controlPort}");
+
+        // 更新集群的负载均衡策略
+        app.MapPost("/api/lb/policy/update", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<UpdateClusterPolicyRequest>();
+                if (request == null || string.IsNullOrEmpty(request.ClusterId) || string.IsNullOrEmpty(request.Policy))
+                {
+                    return Results.Json(new { success = false, message = "ClusterId 和 Policy 不能为空" }, statusCode: 400);
+                }
+
+                var clusterSection = config.GetSection($"ReverseProxy:Clusters:{request.ClusterId}");
+                if (!clusterSection.Exists())
+                {
+                    return Results.Json(new { success = false, message = $"集群 {request.ClusterId} 不存在" }, statusCode: 400);
+                }
+
+                // 检测策略配置的来源
+                var policyConfigKey = $"ReverseProxy:Clusters:{request.ClusterId}:LoadBalancingPolicy";
+                var configSource = DetectConfigSource(config, policyConfigKey);
+
+                if (configSource == ConfigSource.OriginalConfig)
+                {
+                    // 修改原始配置文件
+                    return await ModifyOriginalConfig(config, request.ClusterId, configObj =>
+                    {
+                        if (configObj is not Dictionary<string, object> rootDict)
+                            return "配置文件格式错误";
+                            
+                        if (!rootDict.TryGetValue("ReverseProxy", out var rpObj) || rpObj is not Dictionary<string, object> rpDict)
+                            return "ReverseProxy 配置不存在";
+                            
+                        if (!rpDict.TryGetValue("Clusters", out var clustersObj) || clustersObj is not Dictionary<string, object> clustersDict)
+                            return "Clusters 配置不存在";
+                            
+                        if (!clustersDict.TryGetValue(request.ClusterId, out var clusterObj) || clusterObj is not Dictionary<string, object> clusterDict)
+                            return $"集群 {request.ClusterId} 不存在";
+                            
+                        clusterDict["LoadBalancingPolicy"] = request.Policy;
+                        return null;
+                    });
+                }
+                else
+                {
+                    // 修改补丁配置文件
+                    return await ModifyLbPatch(config, patch =>
+                    {
+                        var cluster = EnsurePatchCluster(patch, request.ClusterId);
+                        cluster["LoadBalancingPolicy"] = request.Policy;
+                        // 快照当前 destinations 到补丁
+                        SnapshotClusterDestinations(config, request.ClusterId, cluster);
+                        return null;
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"更新策略失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 添加目标服务器
+        app.MapPost("/api/lb/destinations/add", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddDestinationRequest>();
+                if (request == null || string.IsNullOrEmpty(request.ClusterId) ||
+                    string.IsNullOrEmpty(request.DestinationId) || string.IsNullOrEmpty(request.Address))
+                {
+                    return Results.Json(new { success = false, message = "ClusterId、DestinationId 和 Address 不能为空" }, statusCode: 400);
+                }
+
+                // 检查集群是否存在
+                var clusterSection = config.GetSection($"ReverseProxy:Clusters:{request.ClusterId}");
+                if (!clusterSection.Exists())
+                {
+                    return Results.Json(new { success = false, message = $"集群 {request.ClusterId} 不存在" }, statusCode: 400);
+                }
+
+                // 检查目标是否已存在
+                var existDest = config.GetSection($"ReverseProxy:Clusters:{request.ClusterId}:Destinations:{request.DestinationId}");
+                if (existDest.Exists())
+                {
+                    return Results.Json(new { success = false, message = $"目标 {request.DestinationId} 已存在" }, statusCode: 400);
+                }
+
+                // 检测集群配置的来源（Destinations 或集群本身）
+                var clusterConfigKey = $"ReverseProxy:Clusters:{request.ClusterId}";
+                var destinationsConfigKey = $"ReverseProxy:Clusters:{request.ClusterId}:Destinations";
+                var configSource = DetectConfigSource(config, destinationsConfigKey);
+                
+                if (configSource == ConfigSource.NotFound)
+                {
+                    configSource = DetectConfigSource(config, clusterConfigKey);
+                }
+
+                if (configSource == ConfigSource.OriginalConfig)
+                {
+                    // 修改原始配置文件
+                    return await ModifyOriginalConfig(config, request.ClusterId, configObj =>
+                    {
+                        if (configObj is not Dictionary<string, object> rootDict)
+                            return "配置文件格式错误";
+                            
+                        if (!rootDict.TryGetValue("ReverseProxy", out var rpObj) || rpObj is not Dictionary<string, object> rpDict)
+                            return "ReverseProxy 配置不存在";
+                            
+                        if (!rpDict.TryGetValue("Clusters", out var clustersObj) || clustersObj is not Dictionary<string, object> clustersDict)
+                            return "Clusters 配置不存在";
+                            
+                        if (!clustersDict.TryGetValue(request.ClusterId, out var clusterObj) || clusterObj is not Dictionary<string, object> clusterDict)
+                            return $"集群 {request.ClusterId} 不存在";
+                            
+                        // 确保Destinations存在
+                        if (!clusterDict.TryGetValue("Destinations", out var destsObj) || destsObj is not Dictionary<string, object> destsDict)
+                        {
+                            destsDict = new Dictionary<string, object>();
+                            clusterDict["Destinations"] = destsDict;
+                        }
+                        
+                        // 添加新的目标
+                        var dest = new Dictionary<string, object> { ["Address"] = request.Address };
+                        if (request.Metadata != null && request.Metadata.Count > 0)
+                        {
+                            dest["Metadata"] = request.Metadata.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
+                        }
+                        destsDict[request.DestinationId] = dest;
+                        return null;
+                    });
+                }
+                else
+                {
+                    // 修改补丁配置文件
+                    return await ModifyLbPatch(config, patch =>
+                    {
+                        var cluster = EnsurePatchCluster(patch, request.ClusterId);
+                        // 快照现有 destinations + 加入新的
+                        SnapshotClusterDestinations(config, request.ClusterId, cluster);
+                        var dests = cluster["Destinations"] as Dictionary<string, object> ?? new Dictionary<string, object>();
+                        var dest = new Dictionary<string, object> { ["Address"] = request.Address };
+                        if (request.Metadata != null && request.Metadata.Count > 0)
+                        {
+                            dest["Metadata"] = request.Metadata.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
+                        }
+                        dests[request.DestinationId] = dest;
+                        cluster["Destinations"] = dests;
+                        return null;
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"添加目标失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 编辑目标服务器
+        app.MapPost("/api/lb/destinations/update", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<UpdateDestinationRequest>();
+                if (request == null || string.IsNullOrEmpty(request.ClusterId) || string.IsNullOrEmpty(request.DestinationId))
+                {
+                    return Results.Json(new { success = false, message = "ClusterId 和 DestinationId 不能为空" }, statusCode: 400);
+                }
+
+                var destSection = config.GetSection($"ReverseProxy:Clusters:{request.ClusterId}:Destinations:{request.DestinationId}");
+                if (!destSection.Exists())
+                {
+                    return Results.Json(new { success = false, message = $"目标 {request.DestinationId} 不存在" }, statusCode: 400);
+                }
+
+                // 检测目标配置的来源
+                var destConfigKey = $"ReverseProxy:Clusters:{request.ClusterId}:Destinations:{request.DestinationId}";
+                var configSource = DetectConfigSource(config, destConfigKey);
+
+                if (configSource == ConfigSource.OriginalConfig)
+                {
+                    // 修改原始配置文件
+                    return await ModifyOriginalConfig(config, request.ClusterId, configObj =>
+                    {
+                        if (configObj is not Dictionary<string, object> rootDict)
+                            return "配置文件格式错误";
+                            
+                        if (!rootDict.TryGetValue("ReverseProxy", out var rpObj) || rpObj is not Dictionary<string, object> rpDict)
+                            return "ReverseProxy 配置不存在";
+                            
+                        if (!rpDict.TryGetValue("Clusters", out var clustersObj) || clustersObj is not Dictionary<string, object> clustersDict)
+                            return "Clusters 配置不存在";
+                            
+                        if (!clustersDict.TryGetValue(request.ClusterId, out var clusterObj) || clusterObj is not Dictionary<string, object> clusterDict)
+                            return $"集群 {request.ClusterId} 不存在";
+                            
+                        if (!clusterDict.TryGetValue("Destinations", out var destsObj) || destsObj is not Dictionary<string, object> destsDict)
+                            return "Destinations 配置不存在";
+                            
+                        if (!destsDict.TryGetValue(request.DestinationId, out var destObj) || destObj is not Dictionary<string, object> destDict)
+                            return $"目标 {request.DestinationId} 不存在";
+                            
+                        // 更新目标配置
+                        if (!string.IsNullOrEmpty(request.Address)) destDict["Address"] = request.Address;
+                        if (request.Metadata != null)
+                        {
+                            destDict["Metadata"] = request.Metadata.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
+                        }
+                        return null;
+                    });
+                }
+                else
+                {
+                    // 修改补丁配置文件
+                    return await ModifyLbPatch(config, patch =>
+                    {
+                        var cluster = EnsurePatchCluster(patch, request.ClusterId);
+                        SnapshotClusterDestinations(config, request.ClusterId, cluster);
+                        var dests = cluster["Destinations"] as Dictionary<string, object> ?? new Dictionary<string, object>();
+
+                        var dest = dests.TryGetValue(request.DestinationId, out var existObj) && existObj is Dictionary<string, object> existDict
+                            ? existDict : new Dictionary<string, object>();
+
+                        if (!string.IsNullOrEmpty(request.Address)) dest["Address"] = request.Address;
+                        if (request.Metadata != null)
+                        {
+                            dest["Metadata"] = request.Metadata.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
+                        }
+                        dests[request.DestinationId] = dest;
+                        cluster["Destinations"] = dests;
+                        return null;
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"更新目标失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除目标服务器
+        app.MapPost("/api/lb/destinations/remove", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveDestinationRequest>();
+                if (request == null || string.IsNullOrEmpty(request.ClusterId) || string.IsNullOrEmpty(request.DestinationId))
+                {
+                    return Results.Json(new { success = false, message = "ClusterId 和 DestinationId 不能为空" }, statusCode: 400);
+                }
+
+                // 检测目标配置的来源
+                var destConfigKey = $"ReverseProxy:Clusters:{request.ClusterId}:Destinations:{request.DestinationId}";
+                var configSource = DetectConfigSource(config, destConfigKey);
+
+                if (configSource == ConfigSource.OriginalConfig)
+                {
+                    // 修改原始配置文件
+                    return await ModifyOriginalConfig(config, request.ClusterId, configObj =>
+                    {
+                        if (configObj is not Dictionary<string, object> rootDict)
+                            return "配置文件格式错误";
+                            
+                        if (!rootDict.TryGetValue("ReverseProxy", out var rpObj) || rpObj is not Dictionary<string, object> rpDict)
+                            return "ReverseProxy 配置不存在";
+                            
+                        if (!rpDict.TryGetValue("Clusters", out var clustersObj) || clustersObj is not Dictionary<string, object> clustersDict)
+                            return "Clusters 配置不存在";
+                            
+                        if (!clustersDict.TryGetValue(request.ClusterId, out var clusterObj) || clusterObj is not Dictionary<string, object> clusterDict)
+                            return $"集群 {request.ClusterId} 不存在";
+                            
+                        if (!clusterDict.TryGetValue("Destinations", out var destsObj) || destsObj is not Dictionary<string, object> destsDict)
+                            return "Destinations 配置不存在";
+                            
+                        // 删除目标
+                        destsDict.Remove(request.DestinationId);
+                        return null;
+                    });
+                }
+                else
+                {
+                    // 修改补丁配置文件
+                    return await ModifyLbPatch(config, patch =>
+                    {
+                        var cluster = EnsurePatchCluster(patch, request.ClusterId);
+                        SnapshotClusterDestinations(config, request.ClusterId, cluster);
+                        var dests = cluster["Destinations"] as Dictionary<string, object>;
+                        if (dests != null) dests.Remove(request.DestinationId);
+                        return null;
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除目标失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 批量删除目标服务器
+        app.MapPost("/api/lb/destinations/batch-remove", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<BatchRemoveDestinationsRequest>();
+                if (request == null || string.IsNullOrEmpty(request.ClusterId) || request.DestinationIds == null || request.DestinationIds.Count == 0)
+                {
+                    return Results.Json(new { success = false, message = "ClusterId 和 DestinationIds 不能为空" }, statusCode: 400);
+                }
+
+                // 检测任一目标的配置来源（如果任一目标在原始配置中，就修改原始配置）
+                var anyInOriginalConfig = false;
+                foreach (var destId in request.DestinationIds)
+                {
+                    var destConfigKey = $"ReverseProxy:Clusters:{request.ClusterId}:Destinations:{destId}";
+                    var configSource = DetectConfigSource(config, destConfigKey);
+                    if (configSource == ConfigSource.OriginalConfig)
+                    {
+                        anyInOriginalConfig = true;
+                        break;
+                    }
+                }
+
+                if (anyInOriginalConfig)
+                {
+                    // 修改原始配置文件
+                    return await ModifyOriginalConfig(config, request.ClusterId, configObj =>
+                    {
+                        if (configObj is not Dictionary<string, object> rootDict)
+                            return "配置文件格式错误";
+                            
+                        if (!rootDict.TryGetValue("ReverseProxy", out var rpObj) || rpObj is not Dictionary<string, object> rpDict)
+                            return "ReverseProxy 配置不存在";
+                            
+                        if (!rpDict.TryGetValue("Clusters", out var clustersObj) || clustersObj is not Dictionary<string, object> clustersDict)
+                            return "Clusters 配置不存在";
+                            
+                        if (!clustersDict.TryGetValue(request.ClusterId, out var clusterObj) || clusterObj is not Dictionary<string, object> clusterDict)
+                            return $"集群 {request.ClusterId} 不存在";
+                            
+                        if (!clusterDict.TryGetValue("Destinations", out var destsObj) || destsObj is not Dictionary<string, object> destsDict)
+                            return "Destinations 配置不存在";
+                            
+                        // 批量删除目标
+                        foreach (var destId in request.DestinationIds)
+                        {
+                            destsDict.Remove(destId);
+                        }
+                        return null;
+                    });
+                }
+                else
+                {
+                    // 修改补丁配置文件
+                    return await ModifyLbPatch(config, patch =>
+                    {
+                        var cluster = EnsurePatchCluster(patch, request.ClusterId);
+                        SnapshotClusterDestinations(config, request.ClusterId, cluster);
+                        var dests = cluster["Destinations"] as Dictionary<string, object>;
+                        if (dests != null)
+                        {
+                            foreach (var destId in request.DestinationIds)
+                            {
+                                dests.Remove(destId);
+                            }
+                        }
+                        return null;
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"批量删除目标失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除集群补丁（恢复为原始配置）
+        app.MapPost("/api/lb/patch/remove", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveClusterPatchRequest>();
+                if (request == null || string.IsNullOrEmpty(request.ClusterId))
+                {
+                    return Results.Json(new { success = false, message = "ClusterId 不能为空" }, statusCode: 400);
+                }
+
+                return await ModifyLbPatch(config, clusters =>
+                {
+                    if (!clusters.Remove(request.ClusterId))
+                    {
+                        return $"补丁中不存在集群 {request.ClusterId}";
+                    }
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除补丁失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         return app;
+    }
+
+    // =============== 配置来源检测辅助方法 ===============
+
+    /// <summary>
+    /// 配置来源枚举
+    /// </summary>
+    private enum ConfigSource
+    {
+        OriginalConfig,  // 原始配置文件 (.ly 或 .yaml)
+        PatchConfig,     // 补丁配置文件 (.lywaf.lb-patch.json)
+        NotFound         // 配置不存在
+    }
+
+    /// <summary>
+    /// 检测指定配置项的来源
+    /// </summary>
+    /// <param name="config">配置对象</param>
+    /// <param name="key">配置键</param>
+    /// <returns>配置来源</returns>
+    private static ConfigSource DetectConfigSource(IConfiguration config, string key)
+    {
+        // 检查是否存在于补丁配置中
+        var patchPath = LbPatchConfig.GetPatchFilePath();
+        if (File.Exists(patchPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(patchPath, Encoding.UTF8);
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                
+                // 将配置键转换为补丁文件中的路径
+                var patchKey = key;
+                if (patchKey.StartsWith("ReverseProxy:Clusters:"))
+                {
+                    patchKey = patchKey.Substring("ReverseProxy:".Length);
+                }
+                
+                if (FindValueInJsonElement(doc.RootElement, patchKey))
+                {
+                    return ConfigSource.PatchConfig;
+                }
+            }
+            catch (Exception)
+            {
+                // 补丁文件读取失败，继续检查原始配置
+            }
+        }
+        
+        // 检查是否存在于原始配置中
+        var configPath = SharedData.ConfigFilePath;
+        if (File.Exists(configPath))
+        {
+            try
+            {
+                var content = File.ReadAllText(configPath, Encoding.UTF8);
+                
+                if (configPath.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
+                    configPath.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
+                {
+                    // YAML 文件解析
+                    using var reader = new StringReader(content);
+                    var deserializer = new DeserializerBuilder()
+                        .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                        .Build();
+                    var yamlObj = deserializer.Deserialize(reader);
+                    if (yamlObj != null && FindValueInYamlObject(yamlObj, key))
+                    {
+                        return ConfigSource.OriginalConfig;
+                    }
+                }
+                else if (configPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                {
+                    // JSON 文件解析
+                    using var doc = System.Text.Json.JsonDocument.Parse(content);
+                    if (FindValueInJsonElement(doc.RootElement, key))
+                    {
+                        return ConfigSource.OriginalConfig;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // 原始配置文件读取失败
+            }
+        }
+        
+        return ConfigSource.NotFound;
+    }
+
+    /// <summary>
+    /// 在 JsonElement 中查找指定的键路径
+    /// </summary>
+    private static bool FindValueInJsonElement(System.Text.Json.JsonElement element, string keyPath)
+    {
+        var parts = keyPath.Split(':');
+        var current = element;
+        
+        foreach (var part in parts)
+        {
+            if (current.ValueKind != System.Text.Json.JsonValueKind.Object)
+                return false;
+                
+            if (!current.TryGetProperty(part, out current))
+                return false;
+        }
+        
+        return true;
+    }
+
+    /// <summary>
+    /// 在 YAML 对象中查找指定的键路径
+    /// </summary>
+    private static bool FindValueInYamlObject(object yamlObj, string keyPath)
+    {
+        var parts = keyPath.Split(':');
+        var current = yamlObj;
+        
+        foreach (var part in parts)
+        {
+            if (current is not Dictionary<object, object> dict)
+                return false;
+                
+            if (!dict.TryGetValue(part, out current))
+                return false;
+        }
+        
+        return current != null;
+    }
+
+    // =============== 负载均衡补丁文件辅助方法 ===============
+
+    private static readonly SemaphoreSlim _lbPatchLock = new(1, 1);
+
+    /// <summary>
+    /// 修改负载均衡补丁文件并触发配置重载
+    /// modifier 返回 null 表示成功，返回字符串表示错误信息
+    /// </summary>
+    private static async Task<IResult> ModifyLbPatch(IConfiguration config, Func<Dictionary<string, object>, string?> modifier)
+    {
+        await _lbPatchLock.WaitAsync();
+        try
+        {
+            var patchPath = LbPatchConfig.GetPatchFilePath();
+
+            // 读取现有补丁
+            Dictionary<string, object> patch;
+            if (File.Exists(patchPath))
+            {
+                var json = await File.ReadAllTextAsync(patchPath, Encoding.UTF8);
+                patch = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = false }) ?? new();
+            }
+            else
+            {
+                patch = new Dictionary<string, object>();
+            }
+
+            // 确保 Clusters 节点存在
+            if (!patch.ContainsKey("Clusters"))
+                patch["Clusters"] = new Dictionary<string, object>();
+
+            // 反序列化 Clusters 为可操作的字典
+            var clustersObj = patch["Clusters"];
+            Dictionary<string, object> clusters;
+            if (clustersObj is System.Text.Json.JsonElement je)
+            {
+                clusters = JsonElementToDict(je);
+            }
+            else if (clustersObj is Dictionary<string, object> dict)
+            {
+                clusters = dict;
+            }
+            else
+            {
+                clusters = new Dictionary<string, object>();
+            }
+            patch["Clusters"] = clusters;
+
+            // 执行修改
+            var error = modifier(clusters);
+            if (error != null)
+            {
+                return Results.Json(new { success = false, message = error }, statusCode: 400);
+            }
+
+            // 保存补丁文件
+            var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+            var newJson = System.Text.Json.JsonSerializer.Serialize(patch, options);
+            await File.WriteAllTextAsync(patchPath, newJson, Encoding.UTF8);
+
+            // 触发配置重载
+            if (config is IConfigurationRoot configRoot)
+            {
+                configRoot.Reload();
+            }
+
+            return Results.Json(new { success = true, message = "配置已更新并重载" });
+        }
+        finally
+        {
+            _lbPatchLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// 修改原始配置文件并触发配置重载
+    /// modifier 返回 null 表示成功，返回字符串表示错误信息
+    /// </summary>
+    private static async Task<IResult> ModifyOriginalConfig(IConfiguration config, string clusterId, Func<object, string?> modifier)
+    {
+        var configPath = SharedData.ConfigFilePath;
+        if (!File.Exists(configPath))
+        {
+            return Results.Json(new { success = false, message = "配置文件不存在" }, statusCode: 500);
+        }
+
+        try
+        {
+            var content = await File.ReadAllTextAsync(configPath, Encoding.UTF8);
+            object configObj;
+            
+            if (configPath.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
+                configPath.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
+            {
+                // YAML 文件处理
+                var deserializer = new DeserializerBuilder()
+                    .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                    .Build();
+                var serializer = new SerializerBuilder()
+                    .WithNamingConvention(CamelCaseNamingConvention.Instance)
+                    .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitDefaults)
+                    .Build();
+                    
+                using var reader = new StringReader(content);
+                configObj = deserializer.Deserialize(reader) ?? new Dictionary<string, object>();
+                
+                // 执行修改
+                var error = modifier(configObj);
+                if (error != null)
+                {
+                    return Results.Json(new { success = false, message = error }, statusCode: 400);
+                }
+                
+                // 保存 YAML 文件
+                var newYaml = serializer.Serialize(configObj);
+                await File.WriteAllTextAsync(configPath, newYaml, Encoding.UTF8);
+            }
+            else if (configPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                // JSON 文件处理
+                var jsonOptions = new System.Text.Json.JsonSerializerOptions 
+                { 
+                    WriteIndented = true,
+                    PropertyNameCaseInsensitive = false 
+                };
+                
+                configObj = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(content) 
+                           ?? new Dictionary<string, object>();
+                
+                // 执行修改
+                var error = modifier(configObj);
+                if (error != null)
+                {
+                    return Results.Json(new { success = false, message = error }, statusCode: 400);
+                }
+                
+                // 保存 JSON 文件
+                var newJson = System.Text.Json.JsonSerializer.Serialize(configObj, jsonOptions);
+                await File.WriteAllTextAsync(configPath, newJson, Encoding.UTF8);
+            }
+            else
+            {
+                return Results.Json(new { success = false, message = "不支持的配置文件格式" }, statusCode: 500);
+            }
+
+            // 触发配置重载
+            if (config is IConfigurationRoot configRoot)
+            {
+                configRoot.Reload();
+            }
+
+            return Results.Json(new { success = true, message = "原始配置已更新并重载" });
+        }
+        catch (Exception ex)
+        {
+            return Results.Json(new { success = false, message = $"修改原始配置失败: {ex.Message}" }, statusCode: 500);
+        }
+    }
+
+    /// <summary>
+    /// 确保补丁中存在指定集群节点，返回该集群字典
+    /// </summary>
+    private static Dictionary<string, object> EnsurePatchCluster(Dictionary<string, object> clusters, string clusterId)
+    {
+        if (clusters.TryGetValue(clusterId, out var clusterObj))
+        {
+            if (clusterObj is System.Text.Json.JsonElement je)
+            {
+                var dict = JsonElementToDict(je);
+                clusters[clusterId] = dict;
+                return dict;
+            }
+            if (clusterObj is Dictionary<string, object> existing)
+                return existing;
+        }
+        var newCluster = new Dictionary<string, object>();
+        clusters[clusterId] = newCluster;
+        return newCluster;
+    }
+
+    /// <summary>
+    /// 从 IConfiguration 快照当前集群的 Destinations 和 LoadBalancingPolicy 到补丁字典
+    /// </summary>
+    private static void SnapshotClusterDestinations(IConfiguration config, string clusterId, Dictionary<string, object> clusterPatch)
+    {
+        var clusterSection = config.GetSection($"ReverseProxy:Clusters:{clusterId}");
+
+        // 保持策略
+        if (!clusterPatch.ContainsKey("LoadBalancingPolicy"))
+        {
+            var policy = clusterSection["LoadBalancingPolicy"];
+            if (policy != null) clusterPatch["LoadBalancingPolicy"] = policy;
+        }
+
+        // 快照 destinations（如果补丁中还没有）
+        if (!clusterPatch.ContainsKey("Destinations"))
+        {
+            var dests = new Dictionary<string, object>();
+            var destsSection = clusterSection.GetSection("Destinations");
+            foreach (var dest in destsSection.GetChildren())
+            {
+                var destDict = new Dictionary<string, object>();
+                var address = dest["Address"];
+                if (address != null) destDict["Address"] = address;
+
+                var metaSection = dest.GetSection("Metadata");
+                var metaChildren = metaSection.GetChildren().ToList();
+                if (metaChildren.Count > 0)
+                {
+                    var meta = new Dictionary<string, object>();
+                    foreach (var m in metaChildren)
+                    {
+                        if (m.Value != null) meta[m.Key] = m.Value;
+                    }
+                    destDict["Metadata"] = meta;
+                }
+
+                dests[dest.Key] = destDict;
+            }
+            clusterPatch["Destinations"] = dests;
+        }
+    }
+
+    /// <summary>
+    /// 递归将 JsonElement 转换为 Dictionary
+    /// </summary>
+    private static Dictionary<string, object> JsonElementToDict(System.Text.Json.JsonElement element)
+    {
+        var dict = new Dictionary<string, object>();
+        if (element.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return dict;
+
+        foreach (var prop in element.EnumerateObject())
+        {
+            dict[prop.Name] = prop.Value.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.Object => JsonElementToDict(prop.Value),
+                System.Text.Json.JsonValueKind.String => prop.Value.GetString() ?? "",
+                System.Text.Json.JsonValueKind.Number => prop.Value.ToString(),
+                System.Text.Json.JsonValueKind.True => "true",
+                System.Text.Json.JsonValueKind.False => "false",
+                _ => prop.Value.ToString()
+            };
+        }
+        return dict;
     }
 
     private static object? GetSectionValue(IConfigurationSection section)
@@ -2675,4 +3523,45 @@ public class SaveConfigRequest
 public class ConvertConfigRequest
 {
     public string Content { get; set; } = "";
+}
+
+// =============== 负载均衡请求模型 ===============
+
+public class UpdateClusterPolicyRequest
+{
+    public string ClusterId { get; set; } = "";
+    public string Policy { get; set; } = "";
+}
+
+public class AddDestinationRequest
+{
+    public string ClusterId { get; set; } = "";
+    public string DestinationId { get; set; } = "";
+    public string Address { get; set; } = "";
+    public Dictionary<string, string>? Metadata { get; set; }
+}
+
+public class UpdateDestinationRequest
+{
+    public string ClusterId { get; set; } = "";
+    public string DestinationId { get; set; } = "";
+    public string? Address { get; set; }
+    public Dictionary<string, string>? Metadata { get; set; }
+}
+
+public class RemoveDestinationRequest
+{
+    public string ClusterId { get; set; } = "";
+    public string DestinationId { get; set; } = "";
+}
+
+public class BatchRemoveDestinationsRequest
+{
+    public string ClusterId { get; set; } = "";
+    public List<string> DestinationIds { get; set; } = [];
+}
+
+public class RemoveClusterPatchRequest
+{
+    public string ClusterId { get; set; } = "";
 }

@@ -32,6 +32,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/ConfigEditor.vue'),
     meta: { title: '配置文件', icon: '📄' }
   },
+  {
+    path: '/cluster-config',
+    name: 'ClusterConfig',
+    component: () => import('@/views/ClusterConfig.vue'),
+    meta: { title: '配置集群', icon: '⚖️' }
+  },
 ]
 
 const router = createRouter({

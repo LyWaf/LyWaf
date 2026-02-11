@@ -312,6 +312,9 @@ public class Program
             builder.Configuration.AddDraftAwareYamlFile(configPath, optional: false);
         }
 
+        // 加载负载均衡补丁（最后加载，以补丁方式覆盖主配置中的 Clusters）
+        builder.Configuration.AddLbPatch();
+
         DoStartWaf(builder, run, null, null);
     }
 

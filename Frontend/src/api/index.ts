@@ -335,6 +335,7 @@ interface ConfigFileResponse {
   fileName: string
   format: string
   content: string
+  draftLoaded: boolean | null
   draftContent: string | null
   hasDraft: boolean
 }
@@ -354,6 +355,55 @@ export const configFileApi = {
 
   convert: (content: string) =>
     api.post<ConvertResponse>('/config/convert', { content }),
+}
+
+// ==================== 集群配置 API ====================
+
+import type { LbCluster, LbPolicy } from '@/types'
+
+interface LbClustersResponse {
+  success: boolean
+  clusters: LbCluster[]
+  timestamp: string
+}
+
+interface LbPoliciesResponse {
+  success: boolean
+  policies: LbPolicy[]
+}
+
+export const lbApi = {
+  getClusters: () =>
+    api.get<LbClustersResponse>('/lb/clusters'),
+
+  getPolicies: () =>
+    api.get<LbPoliciesResponse>('/lb/policies'),
+
+  updatePolicy: (clusterId: string, policy: string) =>
+    api.post<ApiResponse>('/lb/policy/update', { clusterId, policy }),
+
+  addDestination: (data: {
+    clusterId: string
+    destinationId: string
+    address: string
+    metadata?: Record<string, string>
+  }) => api.post<ApiResponse>('/lb/destinations/add', data),
+
+  updateDestination: (data: {
+    clusterId: string
+    destinationId: string
+    address?: string
+    metadata?: Record<string, string>
+  }) => api.post<ApiResponse>('/lb/destinations/update', data),
+
+  removeDestination: (clusterId: string, destinationId: string) =>
+    api.post<ApiResponse>('/lb/destinations/remove', { clusterId, destinationId }),
+
+  batchRemoveDestinations: (clusterId: string, destinationIds: string[]) =>
+    api.post<ApiResponse>('/lb/destinations/batch-remove', { clusterId, destinationIds }),
+
+  removeClusterPatch: (clusterId: string) =>
+    api.post<ApiResponse>('/lb/patch/remove', { clusterId }),
 }
 
 // ==================== 仪表板 API ====================

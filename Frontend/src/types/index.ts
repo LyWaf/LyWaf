@@ -210,6 +210,29 @@ export interface ApiTimingSummary {
   apiCount: number
 }
 
+// =============== 集群配置类型 ===============
+
+export interface LbDestination {
+  id: string
+  address: string
+  host: string
+  port: number
+  scheme: string
+  metadata: Record<string, string>
+}
+
+export interface LbCluster {
+  id: string
+  loadBalancingPolicy: string
+  destinations: LbDestination[]
+  destinationCount: number
+}
+
+export interface LbPolicy {
+  name: string
+  label: string
+}
+
 // 仪表板数据
 export interface DashboardData {
   system: SystemStatus
