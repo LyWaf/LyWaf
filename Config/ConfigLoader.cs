@@ -409,16 +409,24 @@ public class LbPatchSource : IConfigurationSource
 }
 
 /// <summary>
-/// 负载均衡补丁配置提供程序
-/// 从独立的 JSON 文件加载补丁，覆盖主配置中的 ReverseProxy:Clusters 部分
+/// 补丁配置提供程序
+/// 从独立的 JSON 文件加载补丁，覆盖主配置中的 ReverseProxy:Clusters 和 ReverseProxy:Routes 部分
 /// 补丁文件格式:
 /// {
+///   "_source": { "file": "config.ly", "lastModified": "2026-02-11T10:30:00Z" },
 ///   "Clusters": {
 ///     "cluster1": {
 ///       "LoadBalancingPolicy": "WeightedRoundRobin",
 ///       "Destinations": {
 ///         "dest1": { "Address": "http://1.2.3.4:8001", "Metadata": { "Weight": "1" } }
 ///       }
+///     }
+///   },
+///   "Routes": {
+///     "route1": {
+///       "ClusterId": "cluster1",
+///       "Order": 1,
+///       "Match": { "Path": "/{**catch-all}", "Hosts": ["example.com"] }
 ///     }
 ///   }
 /// }
@@ -442,20 +450,66 @@ public class LbPatchProvider : ConfigurationProvider
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             var root = doc.RootElement;
 
-            if (!root.TryGetProperty("Clusters", out var clustersEl))
-                return;
-
-            foreach (var cluster in clustersEl.EnumerateObject())
+            // 检查源文件跟踪：如果源文件已更新，补丁失效
+            if (root.TryGetProperty("_source", out var sourceEl))
             {
-                var clusterPrefix = $"ReverseProxy:Clusters:{cluster.Name}";
-                FlattenJsonElement(clusterPrefix, cluster.Value);
+                if (sourceEl.TryGetProperty("file", out var fileEl) &&
+                    sourceEl.TryGetProperty("lastModified", out var lastModEl))
+                {
+                    var sourceFile = fileEl.GetString();
+                    var lastModStr = lastModEl.GetString();
+                    if (sourceFile != null && lastModStr != null)
+                    {
+                        // 获取源文件的实际修改时间
+                        var configDir = Path.GetDirectoryName(SharedData.ConfigFilePath) ?? ".";
+                        var sourceFilePath = Path.IsPathRooted(sourceFile) 
+                            ? sourceFile 
+                            : Path.Combine(configDir, sourceFile);
+                        
+                        if (File.Exists(sourceFilePath) && 
+                            DateTime.TryParse(lastModStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var savedTime))
+                        {
+                            var actualTime = File.GetLastWriteTimeUtc(sourceFilePath);
+                            // 如果源文件修改时间比补丁记录的更新，补丁失效
+                            if (actualTime > savedTime.AddSeconds(1))
+                            {
+                                _logger.Warn("源文件已更新，补丁失效: {Path} (源文件: {SourceTime}, 补丁记录: {PatchTime})",
+                                    patchPath, actualTime.ToString("o"), savedTime.ToString("o"));
+                                return;
+                            }
+                        }
+                    }
+                }
             }
 
-            _logger.Info("负载均衡补丁已加载: {Path} ({Count} 个配置项)", patchPath, Data.Count);
+            // 加载 Clusters 补丁
+            if (root.TryGetProperty("Clusters", out var clustersEl))
+            {
+                foreach (var cluster in clustersEl.EnumerateObject())
+                {
+                    var clusterPrefix = $"ReverseProxy:Clusters:{cluster.Name}";
+                    FlattenJsonElement(clusterPrefix, cluster.Value);
+                }
+            }
+
+            // 加载 Routes 补丁
+            if (root.TryGetProperty("Routes", out var routesEl))
+            {
+                foreach (var route in routesEl.EnumerateObject())
+                {
+                    var routePrefix = $"ReverseProxy:Routes:{route.Name}";
+                    FlattenJsonElement(routePrefix, route.Value);
+                }
+            }
+
+            if (Data.Count > 0)
+            {
+                _logger.Info("补丁已加载: {Path} ({Count} 个配置项)", patchPath, Data.Count);
+            }
         }
         catch (Exception ex)
         {
-            _logger.Error(ex, "加载负载均衡补丁失败: {Path}", patchPath);
+            _logger.Error(ex, "加载补丁失败: {Path}", patchPath);
         }
     }
 

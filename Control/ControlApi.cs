@@ -2498,6 +2498,7 @@ public static class ControlApi
                         {
                             metadata[meta.Key] = meta.Value ?? "";
                         }
+                        var destSource = DetectConfigSource(config, $"ReverseProxy:Clusters:{clusterId}:Destinations:{dest.Key}");
                         destinations.Add(new
                         {
                             id = dest.Key,
@@ -2505,7 +2506,8 @@ public static class ControlApi
                             host = uri?.Host ?? "*",
                             port = uri?.Port ?? 0,
                             scheme = uri?.Scheme ?? "http",
-                            metadata
+                            metadata,
+                            source = destSource == ConfigSource.PatchConfig ? "patch" : "original"
                         });
                     }
                     clusters.Add(new
@@ -2593,8 +2595,6 @@ public static class ControlApi
                     {
                         var cluster = EnsurePatchCluster(patch, request.ClusterId);
                         cluster["LoadBalancingPolicy"] = request.Policy;
-                        // 快照当前 destinations 到补丁
-                        SnapshotClusterDestinations(config, request.ClusterId, cluster);
                         return null;
                     });
                 }
@@ -2677,20 +2677,17 @@ public static class ControlApi
                 }
                 else
                 {
-                    // 修改补丁配置文件
+                    // 修改补丁配置文件（只写入新增的目标，不快照整个集群）
                     return await ModifyLbPatch(config, patch =>
                     {
                         var cluster = EnsurePatchCluster(patch, request.ClusterId);
-                        // 快照现有 destinations + 加入新的
-                        SnapshotClusterDestinations(config, request.ClusterId, cluster);
-                        var dests = cluster["Destinations"] as Dictionary<string, object> ?? new Dictionary<string, object>();
+                        var dests = EnsurePatchDestinations(cluster);
                         var dest = new Dictionary<string, object> { ["Address"] = request.Address };
                         if (request.Metadata != null && request.Metadata.Count > 0)
                         {
                             dest["Metadata"] = request.Metadata.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
                         }
                         dests[request.DestinationId] = dest;
-                        cluster["Destinations"] = dests;
                         return null;
                     });
                 }
@@ -2756,12 +2753,11 @@ public static class ControlApi
                 }
                 else
                 {
-                    // 修改补丁配置文件
+                    // 修改补丁配置文件（只写入被修改的目标）
                     return await ModifyLbPatch(config, patch =>
                     {
                         var cluster = EnsurePatchCluster(patch, request.ClusterId);
-                        SnapshotClusterDestinations(config, request.ClusterId, cluster);
-                        var dests = cluster["Destinations"] as Dictionary<string, object> ?? new Dictionary<string, object>();
+                        var dests = EnsurePatchDestinations(cluster);
 
                         var dest = dests.TryGetValue(request.DestinationId, out var existObj) && existObj is Dictionary<string, object> existDict
                             ? existDict : new Dictionary<string, object>();
@@ -2772,7 +2768,6 @@ public static class ControlApi
                             dest["Metadata"] = request.Metadata.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
                         }
                         dests[request.DestinationId] = dest;
-                        cluster["Destinations"] = dests;
                         return null;
                     });
                 }
@@ -2825,13 +2820,12 @@ public static class ControlApi
                 }
                 else
                 {
-                    // 修改补丁配置文件
+                    // 修改补丁配置文件（只删除指定目标）
                     return await ModifyLbPatch(config, patch =>
                     {
                         var cluster = EnsurePatchCluster(patch, request.ClusterId);
-                        SnapshotClusterDestinations(config, request.ClusterId, cluster);
-                        var dests = cluster["Destinations"] as Dictionary<string, object>;
-                        if (dests != null) dests.Remove(request.DestinationId);
+                        var dests = EnsurePatchDestinations(cluster);
+                        dests.Remove(request.DestinationId);
                         return null;
                     });
                 }
@@ -2896,18 +2890,14 @@ public static class ControlApi
                 }
                 else
                 {
-                    // 修改补丁配置文件
+                    // 修改补丁配置文件（只删除指定目标）
                     return await ModifyLbPatch(config, patch =>
                     {
                         var cluster = EnsurePatchCluster(patch, request.ClusterId);
-                        SnapshotClusterDestinations(config, request.ClusterId, cluster);
-                        var dests = cluster["Destinations"] as Dictionary<string, object>;
-                        if (dests != null)
+                        var dests = EnsurePatchDestinations(cluster);
+                        foreach (var destId in request.DestinationIds)
                         {
-                            foreach (var destId in request.DestinationIds)
-                            {
-                                dests.Remove(destId);
-                            }
+                            dests.Remove(destId);
                         }
                         return null;
                     });
@@ -2945,6 +2935,315 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // =============== 路由管理 API ===============
+
+        // 获取所有路由列表
+        app.MapGet("/api/routes", (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var rpSection = config.GetSection("ReverseProxy:Routes");
+                var routes = new List<object>();
+                foreach (var routeSection in rpSection.GetChildren())
+                {
+                    var routeId = routeSection.Key;
+                    var clusterId = routeSection["ClusterId"] ?? "";
+                    var order = int.TryParse(routeSection["Order"], out var o) ? o : 0;
+
+                    // Match
+                    var matchSection = routeSection.GetSection("Match");
+                    var path = matchSection["Path"] ?? "";
+                    var hosts = new List<string>();
+                    var hostsSection = matchSection.GetSection("Hosts");
+                    foreach (var h in hostsSection.GetChildren())
+                    {
+                        if (h.Value != null) hosts.Add(h.Value);
+                    }
+                    var methods = new List<string>();
+                    var methodsSection = matchSection.GetSection("Methods");
+                    foreach (var m in methodsSection.GetChildren())
+                    {
+                        if (m.Value != null) methods.Add(m.Value);
+                    }
+
+                    // 检测配置来源
+                    var source = DetectConfigSource(config, $"ReverseProxy:Routes:{routeId}");
+                    var sourceText = source == ConfigSource.PatchConfig ? "patch" : "original";
+
+                    routes.Add(new
+                    {
+                        routeId,
+                        clusterId,
+                        order,
+                        match = new
+                        {
+                            path,
+                            hosts,
+                            methods
+                        },
+                        source = sourceText
+                    });
+                }
+
+                // 按 Order 排序
+                routes.Sort((a, b) =>
+                {
+                    var orderA = ((dynamic)a).order;
+                    var orderB = ((dynamic)b).order;
+                    return ((int)orderA).CompareTo((int)orderB);
+                });
+
+                return Results.Json(new { success = true, routes, timestamp = DateTime.Now });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"获取路由列表失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 新增路由（通过补丁）
+        app.MapPost("/api/routes/add", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddRouteRequest>();
+                if (request == null || string.IsNullOrEmpty(request.RouteId))
+                {
+                    return Results.Json(new { success = false, message = "RouteId 不能为空" }, statusCode: 400);
+                }
+
+                // 检查路由是否已存在（在合并后的配置中）
+                var existingRoute = config.GetSection($"ReverseProxy:Routes:{request.RouteId}");
+                if (existingRoute.Exists())
+                {
+                    return Results.Json(new { success = false, message = $"路由 {request.RouteId} 已存在" }, statusCode: 400);
+                }
+
+                return await ModifyRoutePatch(config, routes =>
+                {
+                    // 检查补丁中是否也已存在
+                    if (routes.ContainsKey(request.RouteId))
+                    {
+                        return $"路由 {request.RouteId} 已存在于补丁中";
+                    }
+
+                    var routePatch = new Dictionary<string, object>();
+
+                    if (request.ClusterId != null)
+                        routePatch["ClusterId"] = request.ClusterId;
+
+                    if (request.Order.HasValue)
+                        routePatch["Order"] = request.Order.Value;
+
+                    if (request.Match != null)
+                    {
+                        var matchPatch = new Dictionary<string, object>();
+                        if (request.Match.Path != null)
+                            matchPatch["Path"] = request.Match.Path;
+                        if (request.Match.Hosts != null && request.Match.Hosts.Count > 0)
+                            matchPatch["Hosts"] = request.Match.Hosts.ToList<object>();
+                        if (request.Match.Methods != null && request.Match.Methods.Count > 0)
+                            matchPatch["Methods"] = request.Match.Methods.ToList<object>();
+                        if (matchPatch.Count > 0)
+                            routePatch["Match"] = matchPatch;
+                    }
+
+                    routes[request.RouteId] = routePatch;
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"新增路由失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 更新路由配置（通过补丁）
+        app.MapPost("/api/routes/update", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<UpdateRouteRequest>();
+                if (request == null || string.IsNullOrEmpty(request.RouteId))
+                {
+                    return Results.Json(new { success = false, message = "RouteId 不能为空" }, statusCode: 400);
+                }
+
+                // 检查路由是否存在
+                var routeSection = config.GetSection($"ReverseProxy:Routes:{request.RouteId}");
+                if (!routeSection.Exists())
+                {
+                    return Results.Json(new { success = false, message = $"路由 {request.RouteId} 不存在" }, statusCode: 400);
+                }
+
+                // 从当前配置快照需要的字段，然后用补丁覆盖
+                return await ModifyRoutePatch(config, routes =>
+                {
+                    // 获取或创建该路由的补丁节点
+                    Dictionary<string, object> routePatch;
+                    if (routes.TryGetValue(request.RouteId, out var existObj))
+                    {
+                        if (existObj is System.Text.Json.JsonElement je)
+                            routePatch = JsonElementToDict(je);
+                        else if (existObj is Dictionary<string, object> dict)
+                            routePatch = dict;
+                        else
+                            routePatch = new Dictionary<string, object>();
+                    }
+                    else
+                    {
+                        routePatch = new Dictionary<string, object>();
+                    }
+
+                    // 快照当前配置中的基础字段到补丁（如果补丁中还没有）
+                    if (!routePatch.ContainsKey("ClusterId"))
+                    {
+                        var clusterId = routeSection["ClusterId"];
+                        if (clusterId != null) routePatch["ClusterId"] = clusterId;
+                    }
+                    if (!routePatch.ContainsKey("Order"))
+                    {
+                        var order = routeSection["Order"];
+                        if (order != null) routePatch["Order"] = int.TryParse(order, out var o) ? o : (object)order;
+                    }
+                    if (!routePatch.ContainsKey("Match"))
+                    {
+                        var matchSection = routeSection.GetSection("Match");
+                        var match = new Dictionary<string, object>();
+                        var path = matchSection["Path"];
+                        if (path != null) match["Path"] = path;
+
+                        var hostsSection = matchSection.GetSection("Hosts");
+                        var hostsList = hostsSection.GetChildren().Select(h => h.Value).Where(v => v != null).ToList();
+                        if (hostsList.Count > 0) match["Hosts"] = hostsList;
+
+                        var methodsSection = matchSection.GetSection("Methods");
+                        var methodsList = methodsSection.GetChildren().Select(m => m.Value).Where(v => v != null).ToList();
+                        if (methodsList.Count > 0) match["Methods"] = methodsList;
+
+                        if (match.Count > 0) routePatch["Match"] = match;
+                    }
+
+                    // 应用请求中的更新
+                    if (request.Order.HasValue)
+                    {
+                        routePatch["Order"] = request.Order.Value;
+                    }
+                    if (request.ClusterId != null)
+                    {
+                        routePatch["ClusterId"] = request.ClusterId;
+                    }
+                    if (request.Match != null)
+                    {
+                        Dictionary<string, object> matchPatch;
+                        if (routePatch.TryGetValue("Match", out var matchObj) && matchObj is Dictionary<string, object> existMatch)
+                        {
+                            matchPatch = existMatch;
+                        }
+                        else
+                        {
+                            matchPatch = new Dictionary<string, object>();
+                        }
+
+                        if (request.Match.Path != null)
+                        {
+                            matchPatch["Path"] = request.Match.Path;
+                        }
+                        if (request.Match.Hosts != null)
+                        {
+                            if (request.Match.Hosts.Count > 0)
+                                matchPatch["Hosts"] = request.Match.Hosts.ToList<object>();
+                            else
+                                matchPatch.Remove("Hosts");
+                        }
+                        if (request.Match.Methods != null)
+                        {
+                            if (request.Match.Methods.Count > 0)
+                                matchPatch["Methods"] = request.Match.Methods.ToList<object>();
+                            else
+                                matchPatch.Remove("Methods");
+                        }
+                        routePatch["Match"] = matchPatch;
+                    }
+
+                    routes[request.RouteId] = routePatch;
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"更新路由失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除路由（仅支持删除补丁中新增的路由）
+        app.MapPost("/api/routes/remove", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveRoutePatchRequest>();
+                if (request == null || string.IsNullOrEmpty(request.RouteId))
+                {
+                    return Results.Json(new { success = false, message = "RouteId 不能为空" }, statusCode: 400);
+                }
+
+                // 检测来源：如果原始配置中存在，不允许删除（只能删除补丁新增的）
+                var source = DetectConfigSource(config, $"ReverseProxy:Routes:{request.RouteId}");
+                if (source == ConfigSource.OriginalConfig)
+                {
+                    return Results.Json(new { success = false, message = $"路由 {request.RouteId} 来自原始配置，不能删除。如需恢复原始配置，请使用「删除补丁」。" }, statusCode: 400);
+                }
+
+                return await ModifyRoutePatch(config, routes =>
+                {
+                    if (!routes.Remove(request.RouteId))
+                    {
+                        return $"补丁中不存在路由 {request.RouteId}";
+                    }
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除路由失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除路由补丁（恢复为原始配置）
+        app.MapPost("/api/routes/patch/remove", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveRoutePatchRequest>();
+                if (request == null)
+                {
+                    return Results.Json(new { success = false, message = "请求格式错误" }, statusCode: 400);
+                }
+
+                return await ModifyRoutePatch(config, routes =>
+                {
+                    if (string.IsNullOrEmpty(request.RouteId))
+                    {
+                        // 清空所有路由补丁
+                        routes.Clear();
+                    }
+                    else
+                    {
+                        // 删除指定路由补丁
+                        if (!routes.Remove(request.RouteId))
+                        {
+                            return $"补丁中不存在路由 {request.RouteId}";
+                        }
+                    }
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除路由补丁失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         return app;
     }
 
@@ -2979,7 +3278,7 @@ public static class ControlApi
                 
                 // 将配置键转换为补丁文件中的路径
                 var patchKey = key;
-                if (patchKey.StartsWith("ReverseProxy:Clusters:"))
+                if (patchKey.StartsWith("ReverseProxy:"))
                 {
                     patchKey = patchKey.Substring("ReverseProxy:".Length);
                 }
@@ -3076,73 +3375,137 @@ public static class ControlApi
         return current != null;
     }
 
-    // =============== 负载均衡补丁文件辅助方法 ===============
+    // =============== 补丁文件辅助方法 ===============
 
     private static readonly SemaphoreSlim _lbPatchLock = new(1, 1);
 
     /// <summary>
-    /// 修改负载均衡补丁文件并触发配置重载
-    /// modifier 返回 null 表示成功，返回字符串表示错误信息
+    /// 读取补丁文件并反序列化为可操作的字典
+    /// </summary>
+    private static async Task<Dictionary<string, object>> ReadPatchFile()
+    {
+        var patchPath = LbPatchConfig.GetPatchFilePath();
+        Dictionary<string, object> patch;
+        if (File.Exists(patchPath))
+        {
+            var json = await File.ReadAllTextAsync(patchPath, Encoding.UTF8);
+            patch = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = false }) ?? new();
+        }
+        else
+        {
+            patch = new Dictionary<string, object>();
+        }
+        return patch;
+    }
+
+    /// <summary>
+    /// 确保补丁中指定节点存在，并返回可操作的字典
+    /// </summary>
+    private static Dictionary<string, object> EnsurePatchSection(Dictionary<string, object> patch, string sectionName)
+    {
+        if (!patch.ContainsKey(sectionName))
+            patch[sectionName] = new Dictionary<string, object>();
+
+        var sectionObj = patch[sectionName];
+        Dictionary<string, object> section;
+        if (sectionObj is System.Text.Json.JsonElement je)
+        {
+            section = JsonElementToDict(je);
+        }
+        else if (sectionObj is Dictionary<string, object> dict)
+        {
+            section = dict;
+        }
+        else
+        {
+            section = new Dictionary<string, object>();
+        }
+        patch[sectionName] = section;
+        return section;
+    }
+
+    /// <summary>
+    /// 更新补丁中的源文件跟踪信息
+    /// </summary>
+    private static void UpdatePatchSourceTracking(Dictionary<string, object> patch)
+    {
+        var configPath = SharedData.ConfigFilePath;
+        if (File.Exists(configPath))
+        {
+            var lastModified = File.GetLastWriteTimeUtc(configPath);
+            patch["_source"] = new Dictionary<string, object>
+            {
+                ["file"] = Path.GetFileName(configPath),
+                ["lastModified"] = lastModified.ToString("o")
+            };
+        }
+    }
+
+    /// <summary>
+    /// 保存补丁文件并触发配置重载
+    /// </summary>
+    private static async Task SavePatchAndReload(Dictionary<string, object> patch, IConfiguration config)
+    {
+        var patchPath = LbPatchConfig.GetPatchFilePath();
+        var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+        var newJson = System.Text.Json.JsonSerializer.Serialize(patch, options);
+        await File.WriteAllTextAsync(patchPath, newJson, Encoding.UTF8);
+
+        if (config is IConfigurationRoot configRoot)
+        {
+            configRoot.Reload();
+        }
+    }
+
+    /// <summary>
+    /// 修改集群补丁并触发配置重载
+    /// modifier 接收 Clusters 字典，返回 null 表示成功，返回字符串表示错误
     /// </summary>
     private static async Task<IResult> ModifyLbPatch(IConfiguration config, Func<Dictionary<string, object>, string?> modifier)
     {
         await _lbPatchLock.WaitAsync();
         try
         {
-            var patchPath = LbPatchConfig.GetPatchFilePath();
+            var patch = await ReadPatchFile();
+            var clusters = EnsurePatchSection(patch, "Clusters");
 
-            // 读取现有补丁
-            Dictionary<string, object> patch;
-            if (File.Exists(patchPath))
-            {
-                var json = await File.ReadAllTextAsync(patchPath, Encoding.UTF8);
-                patch = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json,
-                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = false }) ?? new();
-            }
-            else
-            {
-                patch = new Dictionary<string, object>();
-            }
-
-            // 确保 Clusters 节点存在
-            if (!patch.ContainsKey("Clusters"))
-                patch["Clusters"] = new Dictionary<string, object>();
-
-            // 反序列化 Clusters 为可操作的字典
-            var clustersObj = patch["Clusters"];
-            Dictionary<string, object> clusters;
-            if (clustersObj is System.Text.Json.JsonElement je)
-            {
-                clusters = JsonElementToDict(je);
-            }
-            else if (clustersObj is Dictionary<string, object> dict)
-            {
-                clusters = dict;
-            }
-            else
-            {
-                clusters = new Dictionary<string, object>();
-            }
-            patch["Clusters"] = clusters;
-
-            // 执行修改
             var error = modifier(clusters);
             if (error != null)
             {
                 return Results.Json(new { success = false, message = error }, statusCode: 400);
             }
 
-            // 保存补丁文件
-            var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
-            var newJson = System.Text.Json.JsonSerializer.Serialize(patch, options);
-            await File.WriteAllTextAsync(patchPath, newJson, Encoding.UTF8);
+            UpdatePatchSourceTracking(patch);
+            await SavePatchAndReload(patch, config);
+            return Results.Json(new { success = true, message = "配置已更新并重载" });
+        }
+        finally
+        {
+            _lbPatchLock.Release();
+        }
+    }
 
-            // 触发配置重载
-            if (config is IConfigurationRoot configRoot)
+    /// <summary>
+    /// 修改路由补丁并触发配置重载
+    /// modifier 接收 Routes 字典，返回 null 表示成功，返回字符串表示错误
+    /// </summary>
+    private static async Task<IResult> ModifyRoutePatch(IConfiguration config, Func<Dictionary<string, object>, string?> modifier)
+    {
+        await _lbPatchLock.WaitAsync();
+        try
+        {
+            var patch = await ReadPatchFile();
+            var routes = EnsurePatchSection(patch, "Routes");
+
+            var error = modifier(routes);
+            if (error != null)
             {
-                configRoot.Reload();
+                return Results.Json(new { success = false, message = error }, statusCode: 400);
             }
 
+            UpdatePatchSourceTracking(patch);
+            await SavePatchAndReload(patch, config);
             return Results.Json(new { success = true, message = "配置已更新并重载" });
         }
         finally
@@ -3258,7 +3621,28 @@ public static class ControlApi
     }
 
     /// <summary>
-    /// 从 IConfiguration 快照当前集群的 Destinations 和 LoadBalancingPolicy 到补丁字典
+    /// 确保补丁集群字典中存在 Destinations 子字典，不存在则创建空字典
+    /// </summary>
+    private static Dictionary<string, object> EnsurePatchDestinations(Dictionary<string, object> clusterPatch)
+    {
+        if (clusterPatch.TryGetValue("Destinations", out var destsObj))
+        {
+            if (destsObj is System.Text.Json.JsonElement je)
+            {
+                var dict = JsonElementToDict(je);
+                clusterPatch["Destinations"] = dict;
+                return dict;
+            }
+            if (destsObj is Dictionary<string, object> existing)
+                return existing;
+        }
+        var newDests = new Dictionary<string, object>();
+        clusterPatch["Destinations"] = newDests;
+        return newDests;
+    }
+
+    /// <summary>
+    /// [已废弃] 从 IConfiguration 快照当前集群的 Destinations 和 LoadBalancingPolicy 到补丁字典
     /// </summary>
     private static void SnapshotClusterDestinations(IConfiguration config, string clusterId, Dictionary<string, object> clusterPatch)
     {
@@ -3564,4 +3948,32 @@ public class BatchRemoveDestinationsRequest
 public class RemoveClusterPatchRequest
 {
     public string ClusterId { get; set; } = "";
+}
+
+public class UpdateRouteRequest
+{
+    public string RouteId { get; set; } = "";
+    public string? ClusterId { get; set; }
+    public int? Order { get; set; }
+    public UpdateRouteMatchRequest? Match { get; set; }
+}
+
+public class UpdateRouteMatchRequest
+{
+    public string? Path { get; set; }
+    public List<string>? Hosts { get; set; }
+    public List<string>? Methods { get; set; }
+}
+
+public class AddRouteRequest
+{
+    public string RouteId { get; set; } = "";
+    public string? ClusterId { get; set; }
+    public int? Order { get; set; }
+    public UpdateRouteMatchRequest? Match { get; set; }
+}
+
+public class RemoveRoutePatchRequest
+{
+    public string RouteId { get; set; } = "";
 }

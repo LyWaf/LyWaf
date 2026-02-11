@@ -406,6 +406,49 @@ export const lbApi = {
     api.post<ApiResponse>('/lb/patch/remove', { clusterId }),
 }
 
+// ==================== 路由配置 API ====================
+
+import type { RouteConfig } from '@/types'
+
+interface RoutesResponse {
+  success: boolean
+  routes: RouteConfig[]
+  timestamp: string
+}
+
+export const routeApi = {
+  getRoutes: () =>
+    api.get<RoutesResponse>('/routes'),
+
+  addRoute: (data: {
+    routeId: string
+    clusterId?: string
+    order?: number
+    match?: {
+      path?: string
+      hosts?: string[]
+      methods?: string[]
+    }
+  }) => api.post<ApiResponse>('/routes/add', data),
+
+  updateRoute: (data: {
+    routeId: string
+    clusterId?: string
+    order?: number
+    match?: {
+      path?: string
+      hosts?: string[]
+      methods?: string[]
+    }
+  }) => api.post<ApiResponse>('/routes/update', data),
+
+  removeRoute: (routeId: string) =>
+    api.post<ApiResponse>('/routes/remove', { routeId }),
+
+  removeRoutePatch: (routeId: string) =>
+    api.post<ApiResponse>('/routes/patch/remove', { routeId }),
+}
+
 // ==================== 仪表板 API ====================
 
 export interface DashboardResponse {

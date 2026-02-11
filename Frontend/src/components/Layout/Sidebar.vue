@@ -23,6 +23,7 @@ const menuItems: MenuItem[] = [
   { path: '/api-timing', name: 'API 耗时', icon: '⏱️' },
   { path: '/config', name: '配置文件', icon: '📄' },
   { path: '/cluster-config', name: '配置集群', icon: '⚖️' },
+  { path: '/route-config', name: '配置路由', icon: '🔀' },
 ]
 
 const isActive = (item: MenuItem) => {

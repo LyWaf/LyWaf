@@ -334,6 +334,7 @@ onMounted(loadData)
                 />
               </th>
               <th class="py-3 px-3 text-left">名字</th>
+              <th class="py-3 px-3 text-left">来源</th>
               <th class="py-3 px-3 text-left">IP</th>
               <th class="py-3 px-3 text-left">端口</th>
               <th class="py-3 px-3 text-left">权重</th>
@@ -355,6 +356,16 @@ onMounted(loadData)
                 />
               </td>
               <td class="py-3 px-3 text-gray-200">{{ dest.id }}</td>
+              <td class="py-3 px-3">
+                <span
+                  v-if="dest.source === 'patch'"
+                  class="inline-block px-1.5 py-0.5 text-xs bg-yellow-500/20 text-yellow-400 rounded"
+                >补丁</span>
+                <span
+                  v-else
+                  class="inline-block px-1.5 py-0.5 text-xs bg-gray-500/20 text-gray-400 rounded"
+                >默认</span>
+              </td>
               <td class="py-3 px-3 text-gray-300 font-mono">{{ dest.host }}</td>
               <td class="py-3 px-3 text-gray-300">{{ dest.port }}</td>
               <td class="py-3 px-3 text-gray-300">{{ dest.metadata?.Weight || '1' }}</td>

@@ -219,6 +219,7 @@ export interface LbDestination {
   port: number
   scheme: string
   metadata: Record<string, string>
+  source: 'original' | 'patch'
 }
 
 export interface LbCluster {
@@ -231,6 +232,22 @@ export interface LbCluster {
 export interface LbPolicy {
   name: string
   label: string
+}
+
+// =============== 路由配置类型 ===============
+
+export interface RouteMatch {
+  path: string
+  hosts: string[]
+  methods: string[]
+}
+
+export interface RouteConfig {
+  routeId: string
+  clusterId: string
+  order: number
+  match: RouteMatch
+  source: 'original' | 'patch'
 }
 
 // 仪表板数据
