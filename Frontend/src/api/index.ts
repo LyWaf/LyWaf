@@ -453,6 +453,90 @@ export const routeApi = {
     api.post<ApiResponse>('/routes/patch/remove', { routeId }),
 }
 
+// ==================== 文件服务配置 API ====================
+
+import type { FileServerItem } from '@/types'
+
+interface FileServerResponse {
+  success: boolean
+  items: FileServerItem[]
+  timestamp: string
+}
+
+export const fileServerApi = {
+  getItems: () =>
+    api.get<FileServerResponse>('/fileserver'),
+
+  addItem: (data: {
+    itemId: string
+    prefix?: string
+    basePath?: string
+    browse?: boolean
+    preCompressed?: boolean
+    maxFileSize?: number
+    tryFiles?: string[]
+    defaultFiles?: string[]
+  }) => api.post<ApiResponse>('/fileserver/add', data),
+
+  updateItem: (data: {
+    itemId: string
+    prefix?: string
+    basePath?: string
+    browse?: boolean
+    preCompressed?: boolean
+    maxFileSize?: number
+    tryFiles?: string[]
+    defaultFiles?: string[]
+  }) => api.post<ApiResponse>('/fileserver/update', data),
+
+  removeItem: (itemId: string) =>
+    api.post<ApiResponse>('/fileserver/remove', { itemId }),
+
+  removePatch: () =>
+    api.post<ApiResponse>('/fileserver/patch/remove', {}),
+}
+
+// ==================== 简单响应配置 API ====================
+
+import type { SimpleResItem } from '@/types'
+
+interface SimpleResResponse {
+  success: boolean
+  items: SimpleResItem[]
+  timestamp: string
+}
+
+export const simpleResApi = {
+  getItems: () =>
+    api.get<SimpleResResponse>('/simpleres'),
+
+  addItem: (data: {
+    itemId: string
+    body?: string
+    contentType?: string
+    statusCode?: number
+    charset?: string
+    showReq?: boolean
+    headers?: Record<string, string>
+  }) => api.post<ApiResponse>('/simpleres/add', data),
+
+  updateItem: (data: {
+    itemId: string
+    body?: string
+    contentType?: string
+    statusCode?: number
+    charset?: string
+    showReq?: boolean
+    headers?: Record<string, string>
+  }) => api.post<ApiResponse>('/simpleres/update', data),
+
+  removeItem: (itemId: string) =>
+    api.post<ApiResponse>('/simpleres/remove', { itemId }),
+
+  removePatch: () =>
+    api.post<ApiResponse>('/simpleres/patch/remove', {}),
+}
+
 // ==================== 仪表板 API ====================
 
 export interface DashboardResponse {

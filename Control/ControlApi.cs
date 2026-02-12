@@ -3192,6 +3192,437 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // =============== 文件服务配置 API ===============
+
+        // 获取所有文件服务配置
+        app.MapGet("/api/fileserver", (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var fsSection = config.GetSection("FileServer:Items");
+                var items = new List<object>();
+                foreach (var itemSection in fsSection.GetChildren())
+                {
+                    var itemId = itemSection.Key;
+                    var prefix = itemSection["Prefix"] ?? "/";
+                    var basePath = itemSection["BasePath"] ?? "wwwroot";
+                    var browse = bool.TryParse(itemSection["Browse"], out var b) && b;
+                    var preCompressed = bool.TryParse(itemSection["PreCompressed"], out var pc) && pc;
+                    var maxFileSize = long.TryParse(itemSection["MaxFileSize"], out var mfs) ? mfs : 100L * 1024 * 1024;
+
+                    var tryFiles = new List<string>();
+                    var tryFilesSection = itemSection.GetSection("TryFiles");
+                    foreach (var tf in tryFilesSection.GetChildren())
+                    {
+                        if (tf.Value != null) tryFiles.Add(tf.Value);
+                    }
+
+                    var defaultFiles = new List<string>();
+                    var defaultSection = itemSection.GetSection("Default");
+                    foreach (var df in defaultSection.GetChildren())
+                    {
+                        if (df.Value != null) defaultFiles.Add(df.Value);
+                    }
+
+                    var source = DetectConfigSource(config, $"FileServer:Items:{itemId}");
+                    items.Add(new
+                    {
+                        itemId,
+                        prefix,
+                        basePath,
+                        browse,
+                        preCompressed,
+                        maxFileSize,
+                        tryFiles,
+                        defaultFiles,
+                        source = source == ConfigSource.PatchConfig ? "patch" : "original"
+                    });
+                }
+                return Results.Json(new { success = true, items, timestamp = DateTime.Now });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"获取文件服务配置失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 新增文件服务配置（通过补丁）
+        app.MapPost("/api/fileserver/add", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddFileServerRequest>();
+                if (request == null || string.IsNullOrEmpty(request.ItemId))
+                {
+                    return Results.Json(new { success = false, message = "ItemId 不能为空" }, statusCode: 400);
+                }
+
+                var existing = config.GetSection($"FileServer:Items:{request.ItemId}");
+                if (existing.Exists())
+                {
+                    return Results.Json(new { success = false, message = $"文件服务 {request.ItemId} 已存在" }, statusCode: 400);
+                }
+
+                return await ModifyFileServerPatch(config, fileservers =>
+                {
+                    if (fileservers.ContainsKey(request.ItemId))
+                        return $"文件服务 {request.ItemId} 已存在于补丁中";
+
+                    var item = new Dictionary<string, object>();
+                    if (request.Prefix != null) item["Prefix"] = request.Prefix;
+                    if (request.BasePath != null) item["BasePath"] = request.BasePath;
+                    if (request.Browse.HasValue) item["Browse"] = request.Browse.Value;
+                    if (request.PreCompressed.HasValue) item["PreCompressed"] = request.PreCompressed.Value;
+                    if (request.MaxFileSize.HasValue) item["MaxFileSize"] = request.MaxFileSize.Value;
+                    if (request.TryFiles != null && request.TryFiles.Count > 0)
+                        item["TryFiles"] = request.TryFiles.ToList<object>();
+                    if (request.DefaultFiles != null && request.DefaultFiles.Count > 0)
+                        item["Default"] = request.DefaultFiles.ToList<object>();
+
+                    fileservers[request.ItemId] = item;
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"新增文件服务失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 更新文件服务配置（通过补丁）
+        app.MapPost("/api/fileserver/update", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<UpdateFileServerRequest>();
+                if (request == null || string.IsNullOrEmpty(request.ItemId))
+                {
+                    return Results.Json(new { success = false, message = "ItemId 不能为空" }, statusCode: 400);
+                }
+
+                var itemSection = config.GetSection($"FileServer:Items:{request.ItemId}");
+                if (!itemSection.Exists())
+                {
+                    return Results.Json(new { success = false, message = $"文件服务 {request.ItemId} 不存在" }, statusCode: 400);
+                }
+
+                return await ModifyFileServerPatch(config, fileservers =>
+                {
+                    Dictionary<string, object> itemPatch;
+                    if (fileservers.TryGetValue(request.ItemId, out var existObj))
+                    {
+                        if (existObj is System.Text.Json.JsonElement je)
+                            itemPatch = JsonElementToDict(je);
+                        else if (existObj is Dictionary<string, object> dict)
+                            itemPatch = dict;
+                        else
+                            itemPatch = new Dictionary<string, object>();
+                    }
+                    else
+                    {
+                        // 快照当前配置到补丁
+                        itemPatch = new Dictionary<string, object>();
+                        var section = config.GetSection($"FileServer:Items:{request.ItemId}");
+                        var prefix = section["Prefix"]; if (prefix != null) itemPatch["Prefix"] = prefix;
+                        var basePath = section["BasePath"]; if (basePath != null) itemPatch["BasePath"] = basePath;
+                        var browse = section["Browse"]; if (browse != null) itemPatch["Browse"] = bool.TryParse(browse, out var bv) && bv;
+                        var preCompressed = section["PreCompressed"]; if (preCompressed != null) itemPatch["PreCompressed"] = bool.TryParse(preCompressed, out var pcv) && pcv;
+                        var maxFileSize = section["MaxFileSize"]; if (maxFileSize != null && long.TryParse(maxFileSize, out var mfv)) itemPatch["MaxFileSize"] = mfv;
+
+                        var tryFilesSection = section.GetSection("TryFiles");
+                        var tfList = tryFilesSection.GetChildren().Select(c => c.Value).Where(v => v != null).Cast<object>().ToList();
+                        if (tfList.Count > 0) itemPatch["TryFiles"] = tfList;
+
+                        var defaultSection = section.GetSection("Default");
+                        var dfList = defaultSection.GetChildren().Select(c => c.Value).Where(v => v != null).Cast<object>().ToList();
+                        if (dfList.Count > 0) itemPatch["Default"] = dfList;
+                    }
+
+                    // 应用更新
+                    if (request.Prefix != null) itemPatch["Prefix"] = request.Prefix;
+                    if (request.BasePath != null) itemPatch["BasePath"] = request.BasePath;
+                    if (request.Browse.HasValue) itemPatch["Browse"] = request.Browse.Value;
+                    if (request.PreCompressed.HasValue) itemPatch["PreCompressed"] = request.PreCompressed.Value;
+                    if (request.MaxFileSize.HasValue) itemPatch["MaxFileSize"] = request.MaxFileSize.Value;
+                    if (request.TryFiles != null)
+                    {
+                        if (request.TryFiles.Count > 0)
+                            itemPatch["TryFiles"] = request.TryFiles.ToList<object>();
+                        else
+                            itemPatch.Remove("TryFiles");
+                    }
+                    if (request.DefaultFiles != null)
+                    {
+                        if (request.DefaultFiles.Count > 0)
+                            itemPatch["Default"] = request.DefaultFiles.ToList<object>();
+                        else
+                            itemPatch.Remove("Default");
+                    }
+
+                    fileservers[request.ItemId] = itemPatch;
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"更新文件服务失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除文件服务（仅补丁中新增的）
+        app.MapPost("/api/fileserver/remove", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveFileServerRequest>();
+                if (request == null || string.IsNullOrEmpty(request.ItemId))
+                {
+                    return Results.Json(new { success = false, message = "ItemId 不能为空" }, statusCode: 400);
+                }
+
+                var source = DetectConfigSource(config, $"FileServer:Items:{request.ItemId}");
+                if (source != ConfigSource.PatchConfig)
+                {
+                    return Results.Json(new { success = false, message = $"文件服务 {request.ItemId} 来自默认配置，不能删除" }, statusCode: 400);
+                }
+
+                return await ModifyFileServerPatch(config, fileservers =>
+                {
+                    if (!fileservers.Remove(request.ItemId))
+                        return $"补丁中不存在文件服务 {request.ItemId}";
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除文件服务失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除所有文件服务补丁
+        app.MapPost("/api/fileserver/patch/remove", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                return await ModifyFileServerPatch(config, fileservers =>
+                {
+                    fileservers.Clear();
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除文件服务补丁失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 简单响应配置 API ===============
+
+        // 获取所有简单响应配置
+        app.MapGet("/api/simpleres", (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var srSection = config.GetSection("SimpleRes:Items");
+                var items = new List<object>();
+                foreach (var itemSection in srSection.GetChildren())
+                {
+                    var itemId = itemSection.Key;
+                    var body = itemSection["Body"] ?? "";
+                    var contentType = itemSection["ContentType"] ?? "text/plain";
+                    var statusCode = int.TryParse(itemSection["StatusCode"], out var sc) ? sc : 200;
+                    var charset = itemSection["Charset"] ?? "utf-8";
+                    var showReq = bool.TryParse(itemSection["ShowReq"], out var sr) && sr;
+
+                    var headers = new Dictionary<string, string>();
+                    var headersSection = itemSection.GetSection("Headers");
+                    foreach (var h in headersSection.GetChildren())
+                    {
+                        if (h.Value != null) headers[h.Key] = h.Value;
+                    }
+
+                    var source = DetectConfigSource(config, $"SimpleRes:Items:{itemId}");
+                    items.Add(new
+                    {
+                        itemId,
+                        body,
+                        contentType,
+                        statusCode,
+                        charset,
+                        showReq,
+                        headers,
+                        source = source == ConfigSource.PatchConfig ? "patch" : "original"
+                    });
+                }
+                return Results.Json(new { success = true, items, timestamp = DateTime.Now });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"获取简单响应配置失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 新增简单响应配置（通过补丁）
+        app.MapPost("/api/simpleres/add", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<AddSimpleResRequest>();
+                if (request == null || string.IsNullOrEmpty(request.ItemId))
+                {
+                    return Results.Json(new { success = false, message = "ItemId 不能为空" }, statusCode: 400);
+                }
+
+                var existing = config.GetSection($"SimpleRes:Items:{request.ItemId}");
+                if (existing.Exists())
+                {
+                    return Results.Json(new { success = false, message = $"简单响应 {request.ItemId} 已存在" }, statusCode: 400);
+                }
+
+                return await ModifySimpleResPatch(config, simpleres =>
+                {
+                    if (simpleres.ContainsKey(request.ItemId))
+                        return $"简单响应 {request.ItemId} 已存在于补丁中";
+
+                    var item = new Dictionary<string, object>();
+                    if (request.Body != null) item["Body"] = request.Body;
+                    if (request.ContentType != null) item["ContentType"] = request.ContentType;
+                    if (request.StatusCode.HasValue) item["StatusCode"] = request.StatusCode.Value;
+                    if (request.Charset != null) item["Charset"] = request.Charset;
+                    if (request.ShowReq.HasValue) item["ShowReq"] = request.ShowReq.Value;
+                    if (request.Headers != null && request.Headers.Count > 0)
+                        item["Headers"] = request.Headers.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
+
+                    simpleres[request.ItemId] = item;
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"新增简单响应失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 更新简单响应配置（通过补丁）
+        app.MapPost("/api/simpleres/update", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<UpdateSimpleResRequest>();
+                if (request == null || string.IsNullOrEmpty(request.ItemId))
+                {
+                    return Results.Json(new { success = false, message = "ItemId 不能为空" }, statusCode: 400);
+                }
+
+                var itemSection = config.GetSection($"SimpleRes:Items:{request.ItemId}");
+                if (!itemSection.Exists())
+                {
+                    return Results.Json(new { success = false, message = $"简单响应 {request.ItemId} 不存在" }, statusCode: 400);
+                }
+
+                return await ModifySimpleResPatch(config, simpleres =>
+                {
+                    Dictionary<string, object> itemPatch;
+                    if (simpleres.TryGetValue(request.ItemId, out var existObj))
+                    {
+                        if (existObj is System.Text.Json.JsonElement je)
+                            itemPatch = JsonElementToDict(je);
+                        else if (existObj is Dictionary<string, object> dict)
+                            itemPatch = dict;
+                        else
+                            itemPatch = new Dictionary<string, object>();
+                    }
+                    else
+                    {
+                        // 快照当前配置到补丁
+                        itemPatch = new Dictionary<string, object>();
+                        var section = config.GetSection($"SimpleRes:Items:{request.ItemId}");
+                        var body = section["Body"]; if (body != null) itemPatch["Body"] = body;
+                        var ct = section["ContentType"]; if (ct != null) itemPatch["ContentType"] = ct;
+                        var sc = section["StatusCode"]; if (sc != null && int.TryParse(sc, out var scv)) itemPatch["StatusCode"] = scv;
+                        var cs = section["Charset"]; if (cs != null) itemPatch["Charset"] = cs;
+                        var srq = section["ShowReq"]; if (srq != null) itemPatch["ShowReq"] = bool.TryParse(srq, out var srv) && srv;
+
+                        var headersSection = section.GetSection("Headers");
+                        var hDict = new Dictionary<string, object>();
+                        foreach (var h in headersSection.GetChildren())
+                        {
+                            if (h.Value != null) hDict[h.Key] = h.Value;
+                        }
+                        if (hDict.Count > 0) itemPatch["Headers"] = hDict;
+                    }
+
+                    // 应用更新
+                    if (request.Body != null) itemPatch["Body"] = request.Body;
+                    if (request.ContentType != null) itemPatch["ContentType"] = request.ContentType;
+                    if (request.StatusCode.HasValue) itemPatch["StatusCode"] = request.StatusCode.Value;
+                    if (request.Charset != null) itemPatch["Charset"] = request.Charset;
+                    if (request.ShowReq.HasValue) itemPatch["ShowReq"] = request.ShowReq.Value;
+                    if (request.Headers != null)
+                    {
+                        if (request.Headers.Count > 0)
+                            itemPatch["Headers"] = request.Headers.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
+                        else
+                            itemPatch.Remove("Headers");
+                    }
+
+                    simpleres[request.ItemId] = itemPatch;
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"更新简单响应失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除简单响应（仅补丁中新增的）
+        app.MapPost("/api/simpleres/remove", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemoveSimpleResRequest>();
+                if (request == null || string.IsNullOrEmpty(request.ItemId))
+                {
+                    return Results.Json(new { success = false, message = "ItemId 不能为空" }, statusCode: 400);
+                }
+
+                var source = DetectConfigSource(config, $"SimpleRes:Items:{request.ItemId}");
+                if (source != ConfigSource.PatchConfig)
+                {
+                    return Results.Json(new { success = false, message = $"简单响应 {request.ItemId} 来自默认配置，不能删除" }, statusCode: 400);
+                }
+
+                return await ModifySimpleResPatch(config, simpleres =>
+                {
+                    if (!simpleres.Remove(request.ItemId))
+                        return $"补丁中不存在简单响应 {request.ItemId}";
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除简单响应失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除所有简单响应补丁
+        app.MapPost("/api/simpleres/patch/remove", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                return await ModifySimpleResPatch(config, simpleres =>
+                {
+                    simpleres.Clear();
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除简单响应补丁失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         return app;
     }
 
@@ -3447,6 +3878,61 @@ public static class ControlApi
             var routes = EnsurePatchSection(patch, "Routes");
 
             var error = modifier(routes);
+            if (error != null)
+            {
+                return Results.Json(new { success = false, message = error }, statusCode: 400);
+            }
+
+            UpdatePatchSourceTracking(patch);
+            await SavePatchAndReload(patch, config);
+            return Results.Json(new { success = true, message = "配置已更新并重载" });
+        }
+        finally
+        {
+            _lbPatchLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// 修改补丁文件中的 FileServer 节点
+    /// modifier 接收 FileServer 字典，返回 null 表示成功，返回字符串表示错误
+    /// </summary>
+    private static async Task<IResult> ModifyFileServerPatch(IConfiguration config, Func<Dictionary<string, object>, string?> modifier)
+    {
+        await _lbPatchLock.WaitAsync();
+        try
+        {
+            var patch = await ReadPatchFile();
+            var fileservers = EnsurePatchSection(patch, "FileServer");
+
+            var error = modifier(fileservers);
+            if (error != null)
+            {
+                return Results.Json(new { success = false, message = error }, statusCode: 400);
+            }
+
+            UpdatePatchSourceTracking(patch);
+            await SavePatchAndReload(patch, config);
+            return Results.Json(new { success = true, message = "配置已更新并重载" });
+        }
+        finally
+        {
+            _lbPatchLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// 修改补丁文件中的 SimpleRes 节点
+    /// </summary>
+    private static async Task<IResult> ModifySimpleResPatch(IConfiguration config, Func<Dictionary<string, object>, string?> modifier)
+    {
+        await _lbPatchLock.WaitAsync();
+        try
+        {
+            var patch = await ReadPatchFile();
+            var simpleres = EnsurePatchSection(patch, "SimpleRes");
+
+            var error = modifier(simpleres);
             if (error != null)
             {
                 return Results.Json(new { success = false, message = error }, statusCode: 400);
@@ -3924,4 +4410,60 @@ public class AddRouteRequest
 public class RemoveRoutePatchRequest
 {
     public string RouteId { get; set; } = "";
+}
+
+public class AddFileServerRequest
+{
+    public string ItemId { get; set; } = "";
+    public string? Prefix { get; set; }
+    public string? BasePath { get; set; }
+    public bool? Browse { get; set; }
+    public bool? PreCompressed { get; set; }
+    public long? MaxFileSize { get; set; }
+    public List<string>? TryFiles { get; set; }
+    public List<string>? DefaultFiles { get; set; }
+}
+
+public class UpdateFileServerRequest
+{
+    public string ItemId { get; set; } = "";
+    public string? Prefix { get; set; }
+    public string? BasePath { get; set; }
+    public bool? Browse { get; set; }
+    public bool? PreCompressed { get; set; }
+    public long? MaxFileSize { get; set; }
+    public List<string>? TryFiles { get; set; }
+    public List<string>? DefaultFiles { get; set; }
+}
+
+public class RemoveFileServerRequest
+{
+    public string ItemId { get; set; } = "";
+}
+
+public class AddSimpleResRequest
+{
+    public string ItemId { get; set; } = "";
+    public string? Body { get; set; }
+    public string? ContentType { get; set; }
+    public int? StatusCode { get; set; }
+    public string? Charset { get; set; }
+    public bool? ShowReq { get; set; }
+    public Dictionary<string, string>? Headers { get; set; }
+}
+
+public class UpdateSimpleResRequest
+{
+    public string ItemId { get; set; } = "";
+    public string? Body { get; set; }
+    public string? ContentType { get; set; }
+    public int? StatusCode { get; set; }
+    public string? Charset { get; set; }
+    public bool? ShowReq { get; set; }
+    public Dictionary<string, string>? Headers { get; set; }
+}
+
+public class RemoveSimpleResRequest
+{
+    public string ItemId { get; set; } = "";
 }

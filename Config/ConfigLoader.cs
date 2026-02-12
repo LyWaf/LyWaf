@@ -502,6 +502,26 @@ public class LbPatchProvider : ConfigurationProvider
                 }
             }
 
+            // 加载 FileServer 补丁
+            if (root.TryGetProperty("FileServer", out var fsEl))
+            {
+                foreach (var item in fsEl.EnumerateObject())
+                {
+                    var fsPrefix = $"FileServer:Items:{item.Name}";
+                    FlattenJsonElement(fsPrefix, item.Value);
+                }
+            }
+
+            // 加载 SimpleRes 补丁
+            if (root.TryGetProperty("SimpleRes", out var srEl))
+            {
+                foreach (var item in srEl.EnumerateObject())
+                {
+                    var srPrefix = $"SimpleRes:Items:{item.Name}";
+                    FlattenJsonElement(srPrefix, item.Value);
+                }
+            }
+
             if (Data.Count > 0)
             {
                 _logger.Info("补丁已加载: {Path} ({Count} 个配置项)", patchPath, Data.Count);

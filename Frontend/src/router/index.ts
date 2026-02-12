@@ -44,6 +44,18 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/RouteConfig.vue'),
     meta: { title: '配置路由', icon: '🔀' }
   },
+  {
+    path: '/fileserver-config',
+    name: 'FileServerConfig',
+    component: () => import('@/views/FileServerConfig.vue'),
+    meta: { title: '文件服务', icon: '📁' }
+  },
+  {
+    path: '/simpleres-config',
+    name: 'SimpleResConfig',
+    component: () => import('@/views/SimpleResConfig.vue'),
+    meta: { title: '简单响应', icon: '💬' }
+  },
 ]
 
 const router = createRouter({

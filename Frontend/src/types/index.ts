@@ -250,6 +250,33 @@ export interface RouteConfig {
   source: 'original' | 'patch'
 }
 
+// =============== 文件服务配置类型 ===============
+
+export interface FileServerItem {
+  itemId: string
+  prefix: string
+  basePath: string
+  browse: boolean
+  preCompressed: boolean
+  maxFileSize: number
+  tryFiles: string[]
+  defaultFiles: string[]
+  source: 'original' | 'patch'
+}
+
+// =============== 简单响应配置类型 ===============
+
+export interface SimpleResItem {
+  itemId: string
+  body: string
+  contentType: string
+  statusCode: number
+  charset: string
+  showReq: boolean
+  headers: Record<string, string>
+  source: 'original' | 'patch'
+}
+
 // 仪表板数据
 export interface DashboardData {
   system: SystemStatus
