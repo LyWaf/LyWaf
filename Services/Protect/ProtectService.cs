@@ -160,21 +160,34 @@ public class ProtectService : IProtectService
         }
     }
 
-    private List<Regex> BuildRegexesFromFile(string path)
+    private static List<Regex> BuildRegexesFromFile(string path)
     {
         var regexes = new List<Regex>();
+        if (!File.Exists(path))
+        {
+            _logger.Warn("规则文件不存在，已跳过: {Path}", path);
+            return regexes;
+        }
         try
         {
             var lines = File.ReadAllLines(path);
             foreach (var line in lines)
             {
-                var reg = new Regex(line, RegexOptions.IgnoreCase | RegexOptions.Compiled);
-                regexes.Add(reg);
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                try
+                {
+                    var reg = new Regex(line, RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                    regexes.Add(reg);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warn("无效的正则规则: {Pattern}, 错误: {Error}", line, ex.Message);
+                }
             }
         }
         catch (Exception e)
         {
-            _logger.Info("读取正则{}时出错:{}", path, e);
+            _logger.Error("读取规则文件 {Path} 时出错: {Error}", path, e.Message);
         }
         return regexes;
     }

@@ -32,7 +32,7 @@
   
   <ItemGroup>
      <None Update="nlog.config" CopyToOutputDirectory="Always" />
-     <None Update="appsettings.yaml" CopyToOutputDirectory="Always" />
+     <None Update="config.ly" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
   <!-- 确保 control_html 目录复制到输出 -->

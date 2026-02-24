@@ -23,10 +23,6 @@ public class PortMatcherPolicy : MatcherPolicy, IEndpointSelectorPolicy
         // 只要有 YARP 路由就应用此策略
         // YARP 使用 RouteModel 作为端点元数据
         var hasYarpRoute = endpoints.Any(e => e.Metadata.GetMetadata<RouteModel>() != null);
-        
-        _logger.Trace("PortMatcherPolicy.AppliesToEndpoints: {Result}, 端点数: {Count}", 
-            hasYarpRoute, endpoints.Count);
-        
         return hasYarpRoute;
     }
 
