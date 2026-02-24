@@ -49,6 +49,7 @@ public class FileService : IFileService
             entry.AbsoluteExpirationRelativeToNow = _options.CacheDuration;
             if (config.TryFiles != null)
             {
+                FileGetInfo? folder = null;
                 foreach (var f in config.TryFiles)
                 {
                     var v = f.Replace("$path", path);
@@ -57,10 +58,14 @@ public class FileService : IFileService
                     var real = GetRealPath(tryPath, false, config, accepts);
                     if (real != null)
                     {
-                        return real;
+                        if(real.IsDirectory) {
+                            folder = real;
+                        } else {
+                            return real;
+                        }
                     }
                 }
-                return null;
+                return folder;
             }
             else
             {
@@ -177,12 +182,14 @@ public class FileService : IFileService
 
     private static string GetSafePath(string basePath, string requestedPath)
     {
+        var full = Path.GetFullPath(basePath);
         if (requestedPath == "/")
         {
-            return Path.GetFullPath(basePath);
+            return full;
         }
-        var fullPath = Path.GetFullPath(Path.Combine(basePath, requestedPath));
-        if (!fullPath.StartsWith(Path.GetFullPath(basePath)))
+        requestedPath = requestedPath.TrimStart('/');
+        var fullPath = Path.Combine(full, requestedPath);
+        if (!fullPath.StartsWith(full))
             throw new UnauthorizedAccessException("Access denied");
 
         return fullPath;

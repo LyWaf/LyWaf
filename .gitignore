@@ -14,4 +14,4 @@ nul
 .claude
 .lywaf*
 publish
-# wwwroot/*
+wwwroot/*

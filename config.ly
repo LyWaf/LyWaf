@@ -112,10 +112,16 @@ log = "logs/xx"
     respond "OK"
 }
 
-proxy = {
-    to = ["http://httpbin.org@99", "https://httpbin.org@1"]
-    lb_policy = WeightedRoundRobin
+file_server {
+    root = "wwwroot"
+    try_files = "$path $path/index.html"
+    index = "index.html default.html"
 }
+
+#proxy = {
+#    to = ["http://httpbin.org@99", "https://httpbin.org@1"]
+#    lb_policy = WeightedRoundRobin
+#}
 #import res "aaa"
 #respond "hello world {HOST}:{PORT}"
 #status=201
