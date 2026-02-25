@@ -91,13 +91,24 @@ public class StatisticUtil
             backend = destUrl;
         }
         
+        // 获取原始请求的 Host（scheme + host）
+        var originalHost = context.Request.Host.ToString();
+        var scheme = context.Request.Scheme;
+        var originalUrl = $"{scheme}://{originalHost}";
+        
         // Key 包含后端地址，区分不同后端的统计
         var key = string.IsNullOrEmpty(backend) 
             ? $"{method}:{path}" 
             : $"{method}:{path}@{backend}";
         
         SharedData.ApiTimings.DoLockKeyFunc(key, 
-            (k) => new ApiTimingStatistic { Path = path, Method = method, Backend = backend },
+            (k) => new ApiTimingStatistic 
+            { 
+                Path = path, 
+                Method = method, 
+                Backend = backend,
+                OriginalHost = originalUrl
+            },
             (val) =>
             {
                 val.RecordRequest(totalTime, backendTime, statusCode);

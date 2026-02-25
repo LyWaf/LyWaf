@@ -112,11 +112,8 @@ log = "logs/xx"
     respond "OK"
 }
 
-file_server {
-    root = "wwwroot"
-    try_files = "$path $path/index.html"
-    index = "index.html default.html"
-}
+file_server
+root = wwwroot
 
 #proxy = {
 #    to = ["http://httpbin.org@99", "https://httpbin.org@1"]

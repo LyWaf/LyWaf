@@ -187,6 +187,7 @@ export interface ApiTimingStat {
   path: string
   method: string
   backend: string
+  originalHost: string
   requestCount: number
   avgTotalTime: number
   avgBackendTime: number

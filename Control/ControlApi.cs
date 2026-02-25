@@ -150,6 +150,7 @@ public static class ControlApi
                         path = item.Path,
                         method = item.Method,
                         backend = item.Backend,
+                        originalHost = item.OriginalHost,
                         requestCount = item.RequestCount,
                         avgTotalTime = Math.Round(item.AvgTotalTime, 2),
                         avgBackendTime = Math.Round(item.AvgBackendTime, 2),

@@ -424,6 +424,12 @@ public class ApiTimingStatistic : ICloneable
     public DateTime LastRequestTime { get; set; } = DateTime.UtcNow;
 
     /// <summary>
+    /// 原始请求的 Host（如 localhost:5000）
+    /// 用于在控制台点击时回到原始请求的 URL
+    /// </summary>
+    public string OriginalHost { get; set; } = "";
+
+    /// <summary>
     /// 各状态码计数
     /// </summary>
     public Dictionary<int, int> StatusCodeCounts { get; set; } = [];
@@ -472,6 +478,7 @@ public class ApiTimingStatistic : ICloneable
             Path = Path,
             Method = Method,
             Backend = Backend,
+            OriginalHost = OriginalHost,
             RequestCount = RequestCount,
             TotalTime = TotalTime,
             BackendTime = BackendTime,

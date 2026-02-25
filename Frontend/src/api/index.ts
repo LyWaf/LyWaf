@@ -246,6 +246,7 @@ interface TimingRawResponse {
     path: string
     method: string
     backend: string
+    originalHost: string
     requestCount: number
     avgTotalTime: number
     avgBackendTime: number
@@ -287,6 +288,7 @@ export const timingApi = {
       path: item.path,
       method: item.method,
       backend: item.backend,
+      originalHost: item.originalHost || '',
       requestCount: item.requestCount,
       avgTotalTime: item.avgTotalTime,
       avgBackendTime: item.avgBackendTime,
