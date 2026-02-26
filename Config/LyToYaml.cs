@@ -1688,6 +1688,70 @@ public static class LyToAppSettingsConverter
     }
 
     /// <summary>
+    /// 处理 ControlListen 配置
+    /// 支持格式：
+    /// 1. URL 字符串：control_listen = "http://127.0.0.1:7030"
+    /// 2. 地址字符串：control_listen = "127.0.0.1:7030"
+    /// 3. 仅端口：    control_listen = ":7030" 或 control_listen = "7030"
+    /// 4. 对象格式：  control_listen { Host = "127.0.0.1"; Port = 7030 }
+    /// </summary>
+    private static void ProcessControlListenConfig(object value, Dictionary<string, object> wafInfos)
+    {
+        var controlListen = new Dictionary<string, object>();
+
+        if (value is string strValue)
+        {
+            // 纯数字 → 仅端口
+            if (int.TryParse(strValue, out var portOnly))
+            {
+                controlListen["Host"] = "127.0.0.1";
+                controlListen["Port"] = portOnly;
+                controlListen["IsHttps"] = false;
+            }
+            else
+            {
+                // 利用已有的 ParseSiteAddress 解析
+                var (host, port, isHttps) = ParseSiteAddress(strValue);
+                controlListen["Host"] = host ?? "127.0.0.1";
+                controlListen["Port"] = port > 0 ? port : 7030;
+                controlListen["IsHttps"] = isHttps;
+            }
+        }
+        else if (value is Dictionary<string, object> dict)
+        {
+            // 对象格式：control_listen { Host = "127.0.0.1"; Port = 7030; IsHttps = false }
+            foreach (var kv in dict)
+            {
+                var lk = kv.Key.ToLower();
+                switch (lk)
+                {
+                    case "host":
+                        controlListen["Host"] = kv.Value.ToString()!;
+                        break;
+                    case "port":
+                        controlListen["Port"] = int.Parse(kv.Value.ToString()!);
+                        break;
+                    case "ishttps":
+                    case "is_https":
+                    case "https":
+                        controlListen["IsHttps"] = kv.Value is true
+                            || string.Equals(kv.Value.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+                        break;
+                }
+            }
+            // 填充默认值
+            if (!controlListen.ContainsKey("Host")) controlListen["Host"] = "127.0.0.1";
+            if (!controlListen.ContainsKey("Port")) controlListen["Port"] = 7030;
+            if (!controlListen.ContainsKey("IsHttps")) controlListen["IsHttps"] = false;
+        }
+
+        if (controlListen.Count > 0)
+        {
+            wafInfos["ControlListen"] = controlListen;
+        }
+    }
+
+    /// <summary>
     /// 处理站点级别的 log 配置
     /// 支持格式：
     /// 1. 简单格式：log = "logs/example.com"  （指定输出目录）
@@ -1961,6 +2025,18 @@ public static class LyToAppSettingsConverter
 
             case "https_port":
                 ctx.AddListen("0.0.0.0", int.Parse(value.ToString()!), true);
+                break;
+
+            case "control_listen":
+            case "controllisten":
+            case "control":
+                // 控制面板监听地址
+                // 支持格式：
+                //   control_listen = "http://127.0.0.1:7030"
+                //   control_listen = "127.0.0.1:7030"
+                //   control_listen = ":7030"
+                //   control_listen { Host = "127.0.0.1"; Port = 7030 }
+                ProcessControlListenConfig(value, wafInfos);
                 break;
 
             case "debug":

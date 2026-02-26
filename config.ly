@@ -8,6 +8,8 @@ var domain = "example.com"
 var backend = "127.0.0.1:8080"
 var env = "production"
 
+control_listen = "0.0.0.0:7031"
+
 LyLog {
     Enabled = true
     
