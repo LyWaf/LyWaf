@@ -14,12 +14,6 @@ const ruleTypeLabels: Record<CcRuleType, string> = {
   FrequentError: '高频错误限制',
 }
 
-const ruleTypeDescriptions: Record<CcRuleType, string> = {
-  FrequentAccess: '某 IP 在 {period} 秒内请求达到 {threshold} 次，{duration} 秒内再次访问需要进行人机验证',
-  FrequentAttack: '某 IP 在 {period} 秒内触发攻击拦截次数达到 {threshold} 次，{duration} 秒内再次访问需要进行人机验证',
-  FrequentError: '某 IP 在 {period} 秒内触发 错误达到 {threshold} 次，{duration} 秒内再次访问需要进行人机验证',
-}
-
 // 数据
 const loading = ref(false)
 const rules = ref<AdvancedCcRule[]>([])
@@ -111,13 +105,47 @@ const deleteRule = async (rule: AdvancedCcRule) => {
   }
 }
 
+// 匹配目标翻译
+const targetLabels: Record<string, string> = {
+  UrlPath: '路径', FullUrl: 'URL', Method: '请求方法',
+  ContentType: 'Content-Type', UserAgent: 'User-Agent',
+  Referer: 'Referer', Header: '请求头', QueryParam: '查询参数',
+  Cookie: 'Cookie', ClientIp: '客户端 IP', StatusCode: '状态码',
+}
+
+// 匹配操作翻译
+const operatorLabels: Record<string, string> = {
+  Equal: '等于', NotEqual: '不等于', Contains: '包含',
+  NotContains: '不包含', StartsWith: '前缀为', EndsWith: '后缀为',
+  Regex: '匹配正则', Exists: '存在', NotExists: '不存在',
+}
+
+// 动作翻译
+const actionLabels: Record<string, string> = {
+  Captcha: '人机验证', Block: '封禁', Reject: '拒绝',
+  RateLimit: '限速', LogOnly: '仅记录',
+}
+
+// 格式化条件文本
+const formatConditions = (rule: AdvancedCcRule): string => {
+  if (!rule.conditions || rule.conditions.length === 0) return ''
+  return rule.conditions.map(c => {
+    const target = targetLabels[c.target] || c.target
+    const op = operatorLabels[c.operator] || c.operator
+    const vals = c.values.join(', ')
+    return `${target}${op} [${vals}]`
+  }).join('；')
+}
+
 // 格式化规则描述
 const formatRuleDescription = (rule: AdvancedCcRule): string => {
-  const template = ruleTypeDescriptions[rule.type] || ''
-  return template
-    .replace('{period}', String(rule.period))
-    .replace('{threshold}', String(rule.threshold))
-    .replace('{duration}', String(rule.actionSeconds))
+  const actionLabel = actionLabels[rule.action] || rule.action
+  const condText = formatConditions(rule)
+  const base = `某 IP 在 ${rule.period} 秒内请求达到 ${rule.threshold} 次，${rule.actionSeconds} 秒内执行「${actionLabel}」`
+  if (condText) {
+    return `匹配条件：${condText}。${base}`
+  }
+  return base
 }
 
 // 自动刷新
