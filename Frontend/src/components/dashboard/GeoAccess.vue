@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import Section from '@/components/common/Section.vue'
-import { geoApi } from '@/api'
+import { geoApi, dashboardApi } from '@/api'
 import { useToast } from '@/composables/useToast'
 
 const { showSuccess, showError } = useToast()
@@ -10,6 +10,18 @@ const allowCountries = ref<string[]>([])
 const allowRegions = ref<string[]>([])
 const denyCountries = ref<string[]>([])
 const denyRegions = ref<string[]>([])
+
+onMounted(async () => {
+  try {
+    const data = await dashboardApi.getData()
+    if (data.success && data.geoAccess) {
+      allowCountries.value = data.geoAccess.allowCountries || []
+      allowRegions.value = data.geoAccess.allowRegions || []
+      denyCountries.value = data.geoAccess.denyCountries || []
+      denyRegions.value = data.geoAccess.denyRegions || []
+    }
+  } catch { /* 静默处理 */ }
+})
 
 // 添加/移除操作
 const operations = {

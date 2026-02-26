@@ -75,13 +75,17 @@ export const ipApi = {
   removeBlacklist: (ipOrCidr: string) =>
     api.post<ApiResponse>('/ac/blacklist/remove', { ipOrCidr }),
     
-  // 封禁管理 (duration 为 TimeSpan 格式，如 "00:10:00" 表示10分钟)
-  blockIp: (ip: string, reason?: string, durationSeconds?: number) =>
-    api.post<ApiResponse>('/blocked-ips/add', { 
-      ip, 
-      reason, 
-      duration: durationSeconds ? `00:${Math.floor(durationSeconds / 60).toString().padStart(2, '0')}:${(durationSeconds % 60).toString().padStart(2, '0')}` : undefined 
-    }),
+  // 封禁管理 (duration 为 TimeSpan 格式，如 "01:30:00" 表示1小时30分钟)
+  blockIp: (ip: string, reason?: string, durationSeconds?: number) => {
+    let duration: string | undefined
+    if (durationSeconds) {
+      const h = Math.floor(durationSeconds / 3600)
+      const m = Math.floor((durationSeconds % 3600) / 60)
+      const s = durationSeconds % 60
+      duration = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+    }
+    return api.post<ApiResponse>('/blocked-ips/add', { ip, reason, duration })
+  },
     
   unblockIp: (ip: string) =>
     api.post<ApiResponse>('/blocked-ips/remove', { ip }),

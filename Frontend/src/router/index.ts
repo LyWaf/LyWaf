@@ -15,6 +15,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '安全态势', icon: '🛡️' }
   },
   {
+    path: '/feature-status',
+    name: 'FeatureStatus',
+    component: () => import('@/views/FeatureStatus.vue'),
+    meta: { title: '防护应用', icon: '⚙️' }
+  },
+  {
     path: '/cc-protection',
     name: 'CcProtection',
     component: () => import('@/views/CcProtection.vue'),

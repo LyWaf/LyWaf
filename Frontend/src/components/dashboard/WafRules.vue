@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import Section from '@/components/common/Section.vue'
-import { wafApi } from '@/api'
+import { wafApi, dashboardApi } from '@/api'
 import { useToast } from '@/composables/useToast'
 import type { WafRule } from '@/types'
 
@@ -9,6 +9,16 @@ const { showSuccess, showError } = useToast()
 
 const argsRules = ref<WafRule[]>([])
 const postRules = ref<WafRule[]>([])
+
+onMounted(async () => {
+  try {
+    const data = await dashboardApi.getData()
+    if (data.success && data.wafRules) {
+      argsRules.value = (data.wafRules.args || []).map((p, i) => ({ id: `a${i}`, pattern: p, type: 'args' as const }))
+      postRules.value = (data.wafRules.post || []).map((p, i) => ({ id: `p${i}`, pattern: p, type: 'post' as const }))
+    }
+  } catch { /* 静默处理 */ }
+})
 
 // Args 规则操作
 const addArgsRule = async () => {

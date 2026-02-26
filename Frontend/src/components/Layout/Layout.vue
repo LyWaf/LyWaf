@@ -4,17 +4,17 @@ import Topbar from './Topbar.vue'
 </script>
 
 <template>
-  <div class="flex min-h-screen bg-dark-bg">
+  <div class="flex h-screen bg-dark-bg overflow-hidden">
     <!-- 侧边栏 -->
     <Sidebar />
-    
+
     <!-- 主内容区 -->
-    <div class="flex-1 ml-[220px] flex flex-col min-h-screen">
+    <div class="flex-1 ml-[220px] flex flex-col min-h-0">
       <!-- 顶部栏 -->
       <Topbar />
-      
+
       <!-- 内容 -->
-      <main class="flex-1 p-6 overflow-auto">
+      <main class="flex-1 p-6 overflow-y-auto min-h-0">
         <slot />
       </main>
       

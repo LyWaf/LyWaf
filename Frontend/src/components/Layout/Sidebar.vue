@@ -16,11 +16,8 @@ const router = useRouter()
 const menuItems: MenuItem[] = [
   { path: '/', name: '统计报表', icon: '📊' },
   { path: '/security', name: '安全态势', icon: '🛡️' },
-  { name: '防护应用', icon: '⚙️', action: 'feature-status' },
-  { name: '攻击防护', icon: '🔒', action: 'waf-rules' },
-  { name: '黑白名单', icon: '📋', action: 'ip-control' },
+  { path: '/feature-status', name: '防护应用', icon: '⚙️' },
   { path: '/cc-protection', name: 'CC 防护', icon: '⚡' },
-  { name: '地理访问', icon: '🌍', action: 'geo-access' },
   { path: '/api-timing', name: 'API 耗时', icon: '⏱️' },
   {
     name: '配置管理', icon: '📄', children: [
