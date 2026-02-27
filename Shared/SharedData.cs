@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using LyWaf.Services.Captcha;
 using LyWaf.Services.SpeedLimit;
 using LyWaf.Struct;
@@ -174,4 +175,16 @@ public static class SharedData
     /// 用途: 记录按国家和省份维度的访问量和拦截量，用于地图可视化
     /// </summary>
     public static readonly GeoTrafficStatistic GeoTraffic = new();
+
+    /// <summary>
+    /// IP 请求日志监控目标
+    /// Key: 客户端IP地址
+    /// Value: 添加时间
+    /// 用途: 标记需要完整记录请求内容的 IP，所有来自这些 IP 的请求
+    ///       将被完整记录到文件中（含请求头、请求体，每请求最多200KB）
+    /// 支持自动过期清理
+    /// </summary>
+    public static readonly ExpiringSafeDictionary<string, DateTime> IpLogTargets =
+                            new(defaultExpiration: TimeSpan.FromMinutes(10),
+                                cleanupInterval: TimeSpan.FromMinutes(5));
 }

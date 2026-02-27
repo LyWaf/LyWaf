@@ -1184,6 +1184,8 @@ public class Program
             
             // IP访问控制和连接限制（应放在较前面位置）
             proxyApp.UseMiddleware<AccessControlMiddleware>();
+            // IP 请求日志记录（在访问控制之后，WAF 之前捕获完整请求）
+            proxyApp.UseMiddleware<IpLogMiddleware>();
             // 自动 HTTPS 重定向
             proxyApp.UseMiddleware<AutoHttpsMiddleware>();
             proxyApp.UseMiddleware<WafControlMiddleware>();

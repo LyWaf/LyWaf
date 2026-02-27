@@ -53,6 +53,31 @@ export const featureApi = {
     api.post<ApiResponse>('/feature/waf-post/toggle', { enabled }),
 }
 
+// ==================== IP 请求日志类型 ====================
+
+export interface IpLogEntry {
+  index: number
+  time: string
+  method: string
+  url: string
+  host: string
+  requestLine: string
+  headers?: string
+  body?: string
+  raw: string
+}
+
+interface IpLogReadResponse {
+  success: boolean
+  ip: string
+  entries: IpLogEntry[]
+  total: number
+  offset: number
+  limit: number
+  fileSize: number
+  timestamp: string
+}
+
 // ==================== IP 管理 API ====================
 
 export const ipApi = {
@@ -77,7 +102,7 @@ export const ipApi = {
     api.post<ApiResponse>('/ac/blacklist/remove', { ipOrCidr }),
     
   // 封禁管理 (duration 为 TimeSpan 格式，如 "01:30:00" 表示1小时30分钟)
-  blockIp: (ip: string, reason?: string, durationSeconds?: number) => {
+  blockIp: (ip: string, reason?: string, durationSeconds?: number, type?: string, speedLimit?: number) => {
     let duration: string | undefined
     if (durationSeconds) {
       const h = Math.floor(durationSeconds / 3600)
@@ -85,7 +110,7 @@ export const ipApi = {
       const s = durationSeconds % 60
       duration = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
     }
-    return api.post<ApiResponse>('/blocked-ips/add', { ip, reason, duration })
+    return api.post<ApiResponse>('/blocked-ips/add', { ip, reason, duration, type, speedLimit })
   },
     
   unblockIp: (ip: string) =>
@@ -93,6 +118,27 @@ export const ipApi = {
     
   clearBlockedIps: () =>
     api.post<ApiResponse>('/blocked-ips/clear'),
+
+  // IP 请求日志
+  addIpLog: (ip: string, durationSeconds?: number) => {
+    let duration: string | undefined
+    if (durationSeconds && durationSeconds > 0) {
+      const h = Math.floor(durationSeconds / 3600)
+      const m = Math.floor((durationSeconds % 3600) / 60)
+      const s = durationSeconds % 60
+      duration = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+    }
+    return api.post<ApiResponse>('/ip-log/add', { ip, duration })
+  },
+
+  removeIpLog: (ip: string) =>
+    api.post<ApiResponse>('/ip-log/remove', { ip }),
+
+  readIpLog: (ip: string, offset = 0, limit = 50) =>
+    api.get<IpLogReadResponse>(`/ip-log/read/${encodeURIComponent(ip)}`, { params: { offset, limit } }),
+
+  deleteIpLogFile: (ip: string) =>
+    api.post<ApiResponse>('/ip-log/delete-file', { ip }),
 }
 
 // ==================== 地理访问 API ====================

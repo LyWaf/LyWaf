@@ -2,12 +2,14 @@ using System.Diagnostics;
 using System.Text;
 using LyWaf.Services.ABTest;
 using LyWaf.Services.AccessControl;
+using LyWaf.Services.Captcha;
 using LyWaf.Services.Protect;
 using LyWaf.Services.SpeedLimit;
 using LyWaf.Services.Statistic;
 using LyWaf.Services.WafInfo;
 using LyWaf.Config;
 using LyWaf.Shared;
+using LyWaf.Utils;
 using Microsoft.Extensions.FileProviders;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
@@ -335,8 +337,20 @@ public static class ControlApi
                             reason = $"带宽限速: {x.Value.EveryCapacity / 1024}KB/s",
                             remainingSeconds = x.RemainingTime?.TotalSeconds
                         }))
+                    .Concat(SharedData.IpLogTargets.GetValidItemsWithExpiry()
+                        .Select(x =>
+                        {
+                            var (exists, sizeBytes, _) = IpRequestLogger.GetLogFileInfo(x.Key);
+                            return new
+                            {
+                                ip = x.Key,
+                                type = "log",
+                                reason = exists ? $"请求日志记录中 ({sizeBytes / 1024}KB)" : "请求日志记录中",
+                                remainingSeconds = x.RemainingTime?.TotalSeconds
+                            };
+                        }))
                     .ToList();
-                
+
                 // 获取最近5分钟内的客户端
                 var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 var threshold = now - (5 * 60 * 1000);
@@ -1211,6 +1225,19 @@ public static class ControlApi
                         remainingSeconds = x.RemainingTime?.TotalSeconds,
                         expiresAt = SharedData.ClientThrottled.GetExpiration(x.Key)
                     }))
+                .Concat(SharedData.IpLogTargets.GetValidItemsWithExpiry()
+                    .Select(x =>
+                    {
+                        var (exists, sizeBytes, _) = IpRequestLogger.GetLogFileInfo(x.Key);
+                        return new
+                        {
+                            ip = x.Key,
+                            type = "log",
+                            reason = exists ? $"请求日志记录中 ({sizeBytes / 1024}KB)" : "请求日志记录中",
+                            remainingSeconds = x.RemainingTime?.TotalSeconds,
+                            expiresAt = SharedData.IpLogTargets.GetExpiration(x.Key)
+                        };
+                    }))
                 .OrderBy(x => x.ip)
                 .ToList();
 
@@ -1223,7 +1250,7 @@ public static class ControlApi
             });
         }).RequireHost($"*:{controlPort}");
 
-        // 手动封禁 IP
+        // 手动添加 IP 限制（支持 blocked/captcha/throttled/log 类型）
         app.MapPost("/api/blocked-ips/add", async (HttpContext ctx) =>
         {
             try
@@ -1234,16 +1261,53 @@ public static class ControlApi
                     return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
                 }
 
+                var ip = request.Ip.Trim();
                 var duration = request.Duration ?? TimeSpan.FromMinutes(10);
                 var reason = request.Reason ?? "手动封禁";
-                
-                SharedData.ClientFb.Set(request.Ip.Trim(), reason, duration);
+                var type = request.Type ?? "blocked";
+                string message;
+
+                switch (type)
+                {
+                    case "captcha":
+                        var captchaInfo = new CaptchaPendingInfo
+                        {
+                            RuleName = reason.Length > 0 ? reason : "手动验证码",
+                            ActionSeconds = (int)duration.TotalSeconds,
+                            CreatedAt = DateTime.UtcNow
+                        };
+                        SharedData.CaptchaPending.Set(ip, captchaInfo, duration);
+                        message = $"已对 IP 启用验证码: {ip}";
+                        break;
+
+                    case "throttled":
+                        var speedKBps = request.SpeedLimit > 0 ? request.SpeedLimit : 100;
+                        var throttleLimit = new ClientThrottledLimit
+                        {
+                            EveryCapacity = speedKBps * 1024,
+                            LeftToken = speedKBps * 1024,
+                        };
+                        SharedData.ClientThrottled.Set(ip, throttleLimit, duration);
+                        message = $"已对 IP 启用限速: {ip} ({speedKBps}KB/s)";
+                        break;
+
+                    case "log":
+                        SharedData.IpLogTargets.Set(ip, DateTime.Now, duration);
+                        message = $"已开始记录 IP: {ip} 的请求日志 ({duration.TotalMinutes:0}分钟)";
+                        break;
+
+                    default: // "blocked"
+                        SharedData.ClientFb.Set(ip, reason, duration);
+                        message = $"已封禁 IP: {ip}";
+                        break;
+                }
 
                 return Results.Json(new
                 {
                     success = true,
-                    message = $"已封禁 IP: {request.Ip}",
-                    ip = request.Ip,
+                    message = message,
+                    ip = ip,
+                    type = type,
                     reason = reason,
                     duration = duration.ToString(),
                     expiresAt = DateTime.Now.Add(duration),
@@ -1252,7 +1316,7 @@ public static class ControlApi
             }
             catch (Exception ex)
             {
-                return Results.Json(new { success = false, message = $"封禁失败: {ex.Message}" }, statusCode: 500);
+                return Results.Json(new { success = false, message = $"操作失败: {ex.Message}" }, statusCode: 500);
             }
         }).RequireHost($"*:{controlPort}");
 
@@ -1271,7 +1335,8 @@ public static class ControlApi
                 var removed = SharedData.ClientFb.Remove(ip);
                 removed |= SharedData.CaptchaPending.Remove(ip);
                 removed |= SharedData.ClientThrottled.Remove(ip);
-                
+                removed |= SharedData.IpLogTargets.Remove(ip);
+
                 if (removed)
                 {
                     return Results.Json(new
@@ -1296,10 +1361,11 @@ public static class ControlApi
         // 清空所有封禁的 IP
         app.MapPost("/api/blocked-ips/clear", (HttpContext ctx) =>
         {
-            var count = SharedData.ClientFb.Count + SharedData.CaptchaPending.Count + SharedData.ClientThrottled.Count;
+            var count = SharedData.ClientFb.Count + SharedData.CaptchaPending.Count + SharedData.ClientThrottled.Count + SharedData.IpLogTargets.Count;
             SharedData.ClientFb.Clear();
             SharedData.CaptchaPending.Clear();
             SharedData.ClientThrottled.Clear();
+            SharedData.IpLogTargets.Clear();
             return Results.Json(new
             {
                 success = true,
@@ -1309,8 +1375,156 @@ public static class ControlApi
             });
         }).RequireHost($"*:{controlPort}");
 
+        // =============== IP 请求日志 API ===============
+
+        // 获取当前正在监控的 IP 列表
+        app.MapGet("/api/ip-log/list", (HttpContext ctx) =>
+        {
+            var targets = SharedData.IpLogTargets.GetValidItemsWithExpiry()
+                .Select(x =>
+                {
+                    var (exists, sizeBytes, lastWriteTime) = IpRequestLogger.GetLogFileInfo(x.Key);
+                    return new
+                    {
+                        ip = x.Key,
+                        addedAt = x.Value,
+                        remainingSeconds = x.RemainingTime?.TotalSeconds,
+                        logFileExists = exists,
+                        logFileSize = sizeBytes,
+                        lastWriteTime = lastWriteTime,
+                    };
+                })
+                .OrderBy(x => x.ip)
+                .ToList();
+
+            return Results.Json(new
+            {
+                success = true,
+                count = targets.Count,
+                targets = targets,
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 添加 IP 到请求日志监控
+        app.MapPost("/api/ip-log/add", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<IpLogRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Ip))
+                {
+                    return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
+                }
+
+                var ip = request.Ip.Trim();
+                var duration = request.Duration ?? TimeSpan.FromMinutes(10);
+                SharedData.IpLogTargets.Set(ip, DateTime.Now, duration);
+
+                return Results.Json(new
+                {
+                    success = true,
+                    message = $"已开始记录 IP: {ip} 的请求日志",
+                    ip = ip,
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 停止 IP 请求日志监控
+        app.MapPost("/api/ip-log/remove", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<IpLogRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Ip))
+                {
+                    return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
+                }
+
+                var ip = request.Ip.Trim();
+                var removed = SharedData.IpLogTargets.Remove(ip);
+
+                return Results.Json(new
+                {
+                    success = removed,
+                    message = removed ? $"已停止记录 IP: {ip}" : "IP 不在监控列表中",
+                    ip = ip,
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 读取 IP 的请求日志（分页，按条目解析）
+        app.MapGet("/api/ip-log/read/{ip}", async (HttpContext ctx, string ip, int offset = 0, int limit = 50) =>
+        {
+            var (exists, sizeBytes, lastWriteTime) = IpRequestLogger.GetLogFileInfo(ip);
+            if (!exists)
+            {
+                return Results.Json(new
+                {
+                    success = true,
+                    ip = ip,
+                    entries = Array.Empty<object>(),
+                    total = 0,
+                    fileSize = 0L,
+                    timestamp = DateTime.Now
+                });
+            }
+
+            var entries = await IpRequestLogger.ReadEntriesAsync(ip, offset, limit);
+            var total = await IpRequestLogger.CountEntriesAsync(ip);
+
+            return Results.Json(new
+            {
+                success = true,
+                ip = ip,
+                entries = entries,
+                total = total,
+                offset = offset,
+                limit = limit,
+                fileSize = sizeBytes,
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除 IP 的日志文件
+        app.MapPost("/api/ip-log/delete-file", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<IpLogRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Ip))
+                {
+                    return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
+                }
+
+                var ip = request.Ip.Trim();
+                var deleted = IpRequestLogger.DeleteLog(ip);
+
+                return Results.Json(new
+                {
+                    success = deleted,
+                    message = deleted ? $"已删除 {ip} 的日志文件" : "日志文件不存在",
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         // =============== WAF 规则管理 API ===============
-        
+
         // 获取 WAF 规则列表
         app.MapGet("/api/waf/rules", (HttpContext ctx, IProtectService protectService) =>
         {
@@ -4221,6 +4435,14 @@ public class BlockIpRequest
     public string Ip { get; set; } = "";
     public string? Reason { get; set; }
     public TimeSpan? Duration { get; set; }
+    /// <summary>
+    /// 限制类型: blocked(封禁), captcha(验证码), throttled(限速), log(日志记录)
+    /// </summary>
+    public string? Type { get; set; }
+    /// <summary>
+    /// 限速速度（KB/s），仅 type=throttled 时有效
+    /// </summary>
+    public int SpeedLimit { get; set; }
 }
 
 public class UnblockIpRequest
@@ -4373,6 +4595,14 @@ public class SaveConfigRequest
 public class ConvertConfigRequest
 {
     public string Content { get; set; } = "";
+}
+
+// =============== IP 请求日志请求模型 ===============
+
+public class IpLogRequest
+{
+    public string Ip { get; set; } = "";
+    public TimeSpan? Duration { get; set; }
 }
 
 // =============== 负载均衡请求模型 ===============
