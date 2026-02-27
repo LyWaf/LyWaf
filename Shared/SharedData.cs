@@ -19,10 +19,11 @@ public static class SharedData
     public static string ConfigFilePath { get; set; } = "config.ly";
 
     /// <summary>
-    /// 是否使用草稿配置（通过 API 保存并重载后设为 true）
-    /// 启动时为 false，确保首次加载读取原始配置文件
+    /// 是否存在有效的草稿配置文件
+    /// 由配置加载器在 Load() 时自动检测并设置
+    /// 用于 API 返回给前端判断当前运行的是否为草稿配置
     /// </summary>
-    public static bool UseDraftConfig { get; set; } = false;
+    public static bool ExistsDraftConfig { get; set; } = false;
 
     /// <summary>
     /// 是否请求重启 WebApplication（端口变更时设为 true）

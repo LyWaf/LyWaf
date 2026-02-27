@@ -134,20 +134,32 @@ public class LyConfigProvider : ConfigurationProvider
 
         try
         {
-            // 仅在 API 触发重载时才读取草稿文件
+            // 检测草稿文件：存在且格式正常则优先读取
             var content = File.ReadAllText(_source.FilePath);
-            if (SharedData.UseDraftConfig)
-            {
-                var dir = Path.GetDirectoryName(_source.FilePath) ?? ".";
-                var ext = Path.GetExtension(_source.FilePath);
-                var draftPath = Path.Combine(dir, $".lywaf.draft{ext}");
+            var usingDraft = false;
 
-                if (File.Exists(draftPath))
+            var dir = Path.GetDirectoryName(_source.FilePath) ?? ".";
+            var ext = Path.GetExtension(_source.FilePath);
+            var draftPath = Path.Combine(dir, $".lywaf.draft{ext}");
+
+            if (File.Exists(draftPath))
+            {
+                try
                 {
-                    content = File.ReadAllText(draftPath);
+                    var draftContent = File.ReadAllText(draftPath);
+                    // 验证草稿格式是否正常（能成功解析）
+                    LyConfigParser.Parse(draftContent, _source.Variables);
+                    content = draftContent;
+                    usingDraft = true;
                     _logger.Info("使用草稿配置: {Path}", draftPath);
                 }
+                catch (Exception ex)
+                {
+                    _logger.Warn("草稿配置格式异常，使用原始配置: {Message}", ex.Message);
+                }
             }
+
+            SharedData.ExistsDraftConfig = usingDraft;
 
             var config = LyConfigParser.Parse(content, _source.Variables);
 
@@ -155,7 +167,7 @@ public class LyConfigProvider : ConfigurationProvider
             var appSettings = LyToAppSettingsConverter.TransformToAppSettings(config);
 
             FlattenDictionary(appSettings, "");
-            _logger.Info("LyWaf 配置已加载: {Path}", _source.FilePath);
+            _logger.Info("LyWaf 配置已加载: {Path} {DraftInfo}", _source.FilePath, usingDraft ? "(草稿)" : "(原始)");
         }
         catch (Exception ex)
         {
@@ -261,24 +273,36 @@ public class DraftAwareYamlProvider : ConfigurationProvider
 
         try
         {
-            // 仅在 API 触发重载时才读取草稿文件
+            // 检测草稿文件：存在且格式正常则优先读取
             var filePath = _source.FilePath;
-            if (SharedData.UseDraftConfig)
-            {
-                var dir = Path.GetDirectoryName(_source.FilePath) ?? ".";
-                var ext = Path.GetExtension(_source.FilePath);
-                var draftPath = Path.Combine(dir, $".lywaf.draft{ext}");
+            var usingDraft = false;
 
-                if (File.Exists(draftPath))
+            var dir = Path.GetDirectoryName(_source.FilePath) ?? ".";
+            var ext = Path.GetExtension(_source.FilePath);
+            var draftPath = Path.Combine(dir, $".lywaf.draft{ext}");
+
+            if (File.Exists(draftPath))
+            {
+                try
                 {
+                    // 验证草稿 YAML 格式是否正常（能成功解析）
+                    using var testStream = File.OpenRead(draftPath);
+                    YamlConfigurationFileParser.Parse(testStream);
                     filePath = draftPath;
+                    usingDraft = true;
                     _logger.Info("使用草稿配置: {Path}", draftPath);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warn("草稿配置格式异常，使用原始配置: {Message}", ex.Message);
                 }
             }
 
+            SharedData.ExistsDraftConfig = usingDraft;
+
             using var stream = File.OpenRead(filePath);
             Data = YamlConfigurationFileParser.Parse(stream);
-            _logger.Info("YAML 配置已加载: {Path}", filePath);
+            _logger.Info("YAML 配置已加载: {Path} {DraftInfo}", filePath, usingDraft ? "(草稿)" : "(原始)");
         }
         catch (Exception ex)
         {

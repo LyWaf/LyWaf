@@ -498,10 +498,23 @@ export const configFileApi = {
     api.get<ConfigFileResponse>('/config/file'),
 
   saveFile: (content: string, reload: boolean = false) =>
-    api.post<ApiResponse>('/config/file', { content, reload }),
+    api.post<ApiResponse & { portsChanged?: boolean }>('/config/file', { content, reload }),
 
   convert: (content: string) =>
     api.post<ConvertResponse>('/config/convert', { content }),
+}
+
+// ==================== 服务管理 API ====================
+
+export const serviceApi = {
+  reload: () =>
+    api.get<ApiResponse & { portsChanged?: boolean }>('/reload'),
+
+  restart: () =>
+    api.get<ApiResponse>('/restart'),
+
+  stop: () =>
+    api.get<ApiResponse>('/stop'),
 }
 
 // ==================== 集群配置 API ====================

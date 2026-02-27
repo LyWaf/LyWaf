@@ -601,7 +601,7 @@ public static class ControlApi
             return Results.Json(new { message = "服务正在停止..." });
         }).RequireHost($"*:{controlPort}");
         
-        app.MapGet("/api/reload", (HttpContext ctx, IConfiguration config, IHostApplicationLifetime lifetime) =>
+        app.MapGet("/api/reload", (HttpContext ctx, IConfiguration config) =>
         {
             if (config is not IConfigurationRoot configRoot)
             {
@@ -610,35 +610,37 @@ public static class ControlApi
 
             configRoot.Reload();
 
-            // 检测端口是否变化，变化时标记重启
+            // 检测端口是否变化（仅通知前端，由用户确认后调用 /api/restart 重启）
             var newWafInfos = new WafInfoOptions();
             config.GetSection("WafInfos").Bind(newWafInfos);
             var oldPorts = wafInfos.Listens.Select(l => (l.Host, l.Port, l.IsHttps)).OrderBy(x => x).ToList();
             var newPorts = newWafInfos.Listens.Select(l => (l.Host, l.Port, l.IsHttps)).OrderBy(x => x).ToList();
             var portsChanged = !oldPorts.SequenceEqual(newPorts);
 
-            if (portsChanged)
-            {
-                SharedData.RestartRequested = true;
-                _ = Task.Run(async () =>
-                {
-                    await Task.Delay(500); // 等待响应发送完毕
-                    lifetime.StopApplication();
-                });
-                return Results.Json(new
-                {
-                    success = true,
-                    message = "配置已重新加载，检测到端口变更，服务正在重启以应用新端口...",
-                    portsChanged = true,
-                    timestamp = DateTime.Now
-                });
-            }
-
             return Results.Json(new
             {
                 success = true,
-                message = "配置已重新加载",
-                portsChanged = false,
+                message = portsChanged
+                    ? "配置已重新加载，检测到端口变更，需要重启服务才能生效"
+                    : "配置已重新加载",
+                portsChanged,
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 重启服务（用于端口变更后由前端确认触发）
+        app.MapGet("/api/restart", (HttpContext ctx, IHostApplicationLifetime lifetime) =>
+        {
+            SharedData.RestartRequested = true;
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(500); // 等待响应发送完毕
+                lifetime.StopApplication();
+            });
+            return Results.Json(new
+            {
+                success = true,
+                message = "服务正在重启...",
                 timestamp = DateTime.Now
             });
         }).RequireHost($"*:{controlPort}");
@@ -660,13 +662,13 @@ public static class ControlApi
                 var fileName = Path.GetFileName(filePath);
                 var format = filePath.EndsWith(".ly", StringComparison.OrdinalIgnoreCase) ? "ly" : "yaml";
 
-                // 检查是否存在草稿文件（仅在已加载草稿配置时才返回草稿内容）
+                // 检查是否存在草稿文件
                 var dir = Path.GetDirectoryName(filePath) ?? ".";
                 var ext = Path.GetExtension(filePath);
                 var draftPath = Path.Combine(dir, $".lywaf.draft{ext}");
                 var draftExists = File.Exists(draftPath);
                 string? draftContent = null;
-                if (draftExists && SharedData.UseDraftConfig)
+                if (draftExists)
                 {
                     draftContent = File.ReadAllText(draftPath, Encoding.UTF8);
                 }
@@ -679,7 +681,7 @@ public static class ControlApi
                     content = originalContent,
                     draftContent,
                     hasDraft = draftExists,
-                    draftLoaded = SharedData.UseDraftConfig && draftExists
+                    draftLoaded = SharedData.ExistsDraftConfig
                 });
             }
             catch (Exception ex)
@@ -689,7 +691,7 @@ public static class ControlApi
         }).RequireHost($"*:{controlPort}");
 
         // 保存配置文件内容（保存到草稿文件，不覆盖原始配置）
-        app.MapPost("/api/config/file", async (HttpContext ctx, IConfiguration config, IHostApplicationLifetime lifetime) =>
+        app.MapPost("/api/config/file", async (HttpContext ctx, IConfiguration config) =>
         {
             try
             {
@@ -725,17 +727,16 @@ public static class ControlApi
                 var message = $"草稿已保存到 {Path.GetFileName(draftPath)}";
                 var portsChanged = false;
 
-                // 如果需要重载配置，设置标志后 Reload
-                // LyConfigProvider / DraftAwareYamlProvider 检查此标志决定是否读取草稿
+                // 如果需要重载配置，直接 Reload
+                // LyConfigProvider / DraftAwareYamlProvider 会自动检测草稿文件并优先读取
                 if (request.Reload)
                 {
                     if (config is IConfigurationRoot configRoot)
                     {
-                        SharedData.UseDraftConfig = true;
                         configRoot.Reload();
                         message = "草稿已保存，配置已重新加载";
 
-                        // 检测端口是否变化
+                        // 检测端口是否变化（仅通知前端，由用户确认后调用 /api/restart 重启）
                         var newWafInfos = new WafInfoOptions();
                         config.GetSection("WafInfos").Bind(newWafInfos);
                         var oldPorts = wafInfos.Listens.Select(l => (l.Host, l.Port, l.IsHttps)).OrderBy(x => x).ToList();
@@ -744,13 +745,7 @@ public static class ControlApi
 
                         if (portsChanged)
                         {
-                            SharedData.RestartRequested = true;
-                            _ = Task.Run(async () =>
-                            {
-                                await Task.Delay(500);
-                                lifetime.StopApplication();
-                            });
-                            message = "草稿已保存，配置已重新加载，检测到端口变更，服务正在重启以应用新端口...";
+                            message = "草稿已保存，配置已重新加载，检测到端口变更，需要重启服务才能生效";
                         }
                     }
                 }

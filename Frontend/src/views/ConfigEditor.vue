@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { configFileApi } from '@/api'
+import { configFileApi, serviceApi } from '@/api'
 import { useToast } from '@/composables/useToast'
 
 const { showSuccess, showError } = useToast()
@@ -33,7 +33,7 @@ const loadFile = async () => {
       originalContent.value = response.content
       hasDraft.value = response.hasDraft
 
-      // 仅在运行时已加载草稿配置时，默认显示草稿内容
+      // 当前运行的是草稿配置时，默认显示草稿内容
       if (response.draftLoaded && response.draftContent) {
         content.value = response.draftContent
         lastSavedContent.value = response.draftContent
@@ -84,6 +84,11 @@ const saveConfig = async (reload: boolean = false) => {
       lastSavedContent.value = content.value
       hasDraft.value = true
       showSuccess(response.message || '草稿已保存')
+
+      // 检测到端口变更，询问用户是否重启
+      if (response.portsChanged) {
+        showRestartConfirm.value = true
+      }
     } else {
       showError(response.message || '保存失败')
     }
@@ -91,6 +96,23 @@ const saveConfig = async (reload: boolean = false) => {
     showError(error?.response?.data?.message || '保存失败')
   } finally {
     saving.value = false
+  }
+}
+
+// 重启确认
+const showRestartConfirm = ref(false)
+const restarting = ref(false)
+
+const confirmRestart = async () => {
+  restarting.value = true
+  try {
+    await serviceApi.restart()
+    showSuccess('服务正在重启，请稍后刷新页面...')
+    showRestartConfirm.value = false
+  } catch {
+    showError('重启请求发送失败')
+  } finally {
+    restarting.value = false
   }
 }
 
@@ -247,5 +269,31 @@ onMounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- 端口变更重启确认对话框 -->
+    <Teleport to="body">
+      <div v-if="showRestartConfirm" class="fixed inset-0 z-50 flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/60" @click="showRestartConfirm = false"></div>
+        <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
+          <h3 class="text-lg font-semibold text-gray-100 mb-2">检测到端口变更</h3>
+          <p class="text-sm text-gray-400 mb-4">
+            配置已重新加载，但监听端口发生了变化。端口变更需要重启服务才能生效，重启期间服务将短暂不可用。
+          </p>
+          <p class="text-sm text-amber-400 mb-5">
+            是否立即重启服务以应用新的端口配置？
+          </p>
+          <div class="flex justify-end gap-3">
+            <button @click="showRestartConfirm = false" class="btn btn-sm btn-secondary">
+              稍后再说
+            </button>
+            <button @click="confirmRestart" :disabled="restarting"
+              class="btn btn-sm bg-amber-600 hover:bg-amber-500 text-white flex items-center gap-1.5">
+              <span v-if="restarting" class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
+              <span>{{ restarting ? '重启中...' : '立即重启' }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
