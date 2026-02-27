@@ -354,24 +354,21 @@ public class AccessControlService : IAccessControlService, IDisposable
     private void InitializeGeoService()
     {
         var geoConfig = _options.GeoControl;
-        if (!geoConfig.Enabled)
-        {
-            _logger.Info("地理位置访问控制未启用");
-            return;
-        }
 
         try
         {
             if (!File.Exists(geoConfig.DatabasePath))
             {
-                _logger.Warn("IP2Region 数据库文件不存在: {Path}，地理位置访问控制将被禁用", geoConfig.DatabasePath);
+                _logger.Warn("IP2Region 数据库文件不存在: {Path}，地理位置服务将不可用", geoConfig.DatabasePath);
                 return;
             }
 
             // 使用完全基于内存的查询（最快）
+            // 无论 GeoControl 是否启用都初始化 searcher，供地理流量统计使用
             _geoSearcher = new Searcher(CachePolicy.Content, geoConfig.DatabasePath);
             _geoInitialized = true;
-            _logger.Info("地理位置访问控制已初始化，数据库: {Path}", geoConfig.DatabasePath);
+            _logger.Info("地理位置服务已初始化，数据库: {Path}，访问控制: {Enabled}",
+                geoConfig.DatabasePath, geoConfig.Enabled ? "启用" : "未启用");
         }
         catch (Exception ex)
         {

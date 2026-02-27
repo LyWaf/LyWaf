@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import StatCard from '@/components/common/StatCard.vue'
 import TrafficAnalysis from '@/components/dashboard/TrafficAnalysis.vue'
+import GeoTrafficMap from '@/components/dashboard/GeoTrafficMap.vue'
 import BlockedIps from '@/components/dashboard/BlockedIps.vue'
 import RecentClients from '@/components/dashboard/RecentClients.vue'
 import { trafficApi, dashboardApi } from '@/api'
@@ -123,6 +124,9 @@ const resetTraffic = async () => {
 
     <!-- 最近访问 -->
     <RecentClients :clients="recentClients" />
+
+    <!-- 地理流量分布 -->
+    <GeoTrafficMap />
 
     <!-- 封禁列表 -->
     <BlockedIps :initial-data="blockedIps" @refresh="loadData" />

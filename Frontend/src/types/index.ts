@@ -182,6 +182,19 @@ export interface SecurityStats {
   }
 }
 
+// 地理位置流量数据
+export interface GeoTrafficItem {
+  name: string
+  value: number
+}
+
+export interface GeoTrafficStats {
+  countryVisits: GeoTrafficItem[]
+  countryIntercepts: GeoTrafficItem[]
+  regionVisits: GeoTrafficItem[]
+  regionIntercepts: GeoTrafficItem[]
+}
+
 // API 耗时统计
 export interface ApiTimingStat {
   path: string

@@ -248,7 +248,38 @@ public static class ControlApi
             try
             {
                 SharedData.Traffic.Reset();
+                SharedData.GeoTraffic.Reset();
                 return Results.Json(new { success = true, message = "流量统计数据已重置" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = ex.Message });
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 地理位置流量统计 API ===============
+
+        app.MapGet("/api/geo-traffic/stats", (HttpContext ctx) =>
+        {
+            try
+            {
+                var snapshot = SharedData.GeoTraffic.GetSnapshot();
+                return Results.Json(new
+                {
+                    success = true,
+                    countryVisits = snapshot.CountryVisits
+                        .OrderByDescending(kv => kv.Value)
+                        .Select(kv => new { name = kv.Key, value = kv.Value }),
+                    countryIntercepts = snapshot.CountryIntercepts
+                        .OrderByDescending(kv => kv.Value)
+                        .Select(kv => new { name = kv.Key, value = kv.Value }),
+                    regionVisits = snapshot.RegionVisits
+                        .OrderByDescending(kv => kv.Value)
+                        .Select(kv => new { name = kv.Key, value = kv.Value }),
+                    regionIntercepts = snapshot.RegionIntercepts
+                        .OrderByDescending(kv => kv.Value)
+                        .Select(kv => new { name = kv.Key, value = kv.Value }),
+                });
             }
             catch (Exception ex)
             {

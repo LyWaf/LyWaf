@@ -168,4 +168,10 @@ public static class SharedData
     /// 用途: 记录各类安全事件的历史数据、攻击源统计、趋势分析
     /// </summary>
     public static readonly SecurityStatistic Security = new();
+
+    /// <summary>
+    /// 地理位置流量统计
+    /// 用途: 记录按国家和省份维度的访问量和拦截量，用于地图可视化
+    /// </summary>
+    public static readonly GeoTrafficStatistic GeoTraffic = new();
 }

@@ -1,4 +1,5 @@
 
+using LyWaf.Services.AccessControl;
 using LyWaf.Services.Statistic;
 using LyWaf.Shared;
 using NLog;
@@ -52,7 +53,19 @@ public class StatisticUtil
         var isPageView = IsPageView(context.Request.Path);
         var visitorId = GetVisitorId(context);
         SharedData.Traffic.RecordRequest(client_ip, statusCode, isPageView, visitorId);
-        
+
+        // 记录地理位置流量统计
+        try
+        {
+            var accessControlService = context.RequestServices.GetService<IAccessControlService>();
+            var geoInfo = accessControlService?.GetGeoInfo(client_ip);
+            if (geoInfo != null && !string.IsNullOrEmpty(geoInfo.Country))
+            {
+                SharedData.GeoTraffic.RecordVisit(geoInfo.Country, geoInfo.Region);
+            }
+        }
+        catch { /* 地理统计为 best-effort，不影响请求处理 */ }
+
         // 白名单, 不进行后续的分析统计
         if(statisticService.IsWhitePath(path)) {
             return;
@@ -130,6 +143,18 @@ public class StatisticUtil
     {
         var clientIp = RequestUtil.GetClientIp(context.Request);
         SharedData.Traffic.RecordIntercept(clientIp, statusCode, isAttack);
+
+        // 记录地理位置拦截统计
+        try
+        {
+            var accessControlService = context.RequestServices.GetService<IAccessControlService>();
+            var geoInfo = accessControlService?.GetGeoInfo(clientIp);
+            if (geoInfo != null && !string.IsNullOrEmpty(geoInfo.Country))
+            {
+                SharedData.GeoTraffic.RecordIntercept(geoInfo.Country, geoInfo.Region);
+            }
+        }
+        catch { /* best-effort */ }
     }
     
     /// <summary>

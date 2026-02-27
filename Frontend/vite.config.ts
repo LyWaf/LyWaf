@@ -23,6 +23,17 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     sourcemap: false,
-    minify: 'esbuild', // 使用内置的 esbuild 压缩
+    minify: 'esbuild',
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('echarts') && id.includes('node_modules') ||
+              id.includes('zrender') && id.includes('node_modules')) {
+            return 'echarts'
+          }
+        },
+      },
+    },
   },
 })

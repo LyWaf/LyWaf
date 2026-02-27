@@ -155,10 +155,10 @@ public class ProxyCommandOptions : CommonOptions
 public class RunCommandOptions : CommonOptions
 {
     /// <summary>
-    /// 指定配置文件路径（默认：appsettings.yaml）。
+    /// 指定配置文件路径（默认：config.ly）。
     /// </summary>
     [Option('c', "config", HelpText = "加载配置地址")]
-    public string Config { get; set; } = "appsettings.yaml";
+    public string Config { get; set; } = "config.ly";
 }
 
 /// <summary>
@@ -171,7 +171,7 @@ public class StopCommandOptions : CommonOptions
     /// 配置文件路径，用于读取 pid 文件地址。
     /// </summary>
     [Option('c', "config", HelpText = "配置文件地址，用于获取pid文件路径")]
-    public string Config { get; set; } = "appsettings.yaml";
+    public string Config { get; set; } = "config.ly";
 }
 
 /// <summary>
@@ -184,7 +184,7 @@ public class EnvironCommandOptions : CommonOptions
     /// 配置文件路径（如果需要）。
     /// </summary>
     [Option('c', "config", HelpText = "配置文件地址")]
-    public string Config { get; set; } = "appsettings.yaml";
+    public string Config { get; set; } = "config.ly";
 }
 
 /// <summary>
@@ -197,7 +197,7 @@ public class ReloadCommandOptions : CommonOptions
     /// 配置文件路径。
     /// </summary>
     [Option('c', "config", HelpText = "配置文件地址")]
-    public string Config { get; set; } = "appsettings.yaml";
+    public string Config { get; set; } = "config.ly";
 }
 
 /// <summary>
@@ -207,10 +207,10 @@ public class ReloadCommandOptions : CommonOptions
 public class StartCommandOptions : CommonOptions
 {
     /// <summary>
-    /// 配置文件路径（默认：appsettings.yaml）。
+    /// 配置文件路径（默认：config.ly）。
     /// </summary>
     [Option('c', "config", HelpText = "加载配置地址")]
-    public string Config { get; set; } = "appsettings.yaml";
+    public string Config { get; set; } = "config.ly";
 }
 
 /// <summary>
@@ -223,7 +223,7 @@ public class ValidateCommandOptions: CommonOptions
     /// 配置文件路径。
     /// </summary>
     [Option('c', "config", HelpText = "配置文件地址")]
-    public string Config { get; set; } = "appsettings.yaml";
+    public string Config { get; set; } = "config.ly";
 }
 
 /// <summary>

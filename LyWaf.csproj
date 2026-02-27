@@ -37,7 +37,7 @@
 
   <!-- 确保 control_html 目录复制到输出 -->
   <ItemGroup>
-    <Content Include="control_html\**" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="control_html\**" CopyToOutputDirectory="PreserveNewest" Exclude="@(Content)" />
   </ItemGroup>
 
   <!-- 确保 templates 目录复制到输出 -->

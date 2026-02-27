@@ -1,10 +1,11 @@
 import axios from 'axios'
-import type { 
-  ApiResponse, 
-  TrafficStats, 
-  SecurityStats, 
+import type {
+  ApiResponse,
+  TrafficStats,
+  SecurityStats,
   ApiTimingStat,
-  ApiTimingSummary 
+  ApiTimingSummary,
+  GeoTrafficStats
 } from '@/types'
 
 const http = axios.create({
@@ -322,6 +323,13 @@ export const securityApi = {
 
   reset: () =>
     api.post<ApiResponse>('/security/reset'),
+}
+
+// ==================== 地理位置流量 API ====================
+
+export const geoTrafficApi = {
+  getStats: () =>
+    api.get<{ success: boolean } & GeoTrafficStats>('/geo-traffic/stats'),
 }
 
 // ==================== API 耗时统计 ====================

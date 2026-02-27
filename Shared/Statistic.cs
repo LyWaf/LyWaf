@@ -790,3 +790,90 @@ public class SecurityStatisticSnapshot
     public long TotalInterceptCount { get; init; }
     public int UniqueAttackIps { get; init; }
 }
+
+/// <summary>
+/// 地理位置流量统计
+/// 记录按国家和省份维度的访问量和拦截量，用于地图可视化
+/// </summary>
+public class GeoTrafficStatistic
+{
+    private readonly object _lock = new();
+    private readonly Dictionary<string, long> _countryVisits = new();
+    private readonly Dictionary<string, long> _countryIntercepts = new();
+    private readonly Dictionary<string, long> _regionVisits = new();
+    private readonly Dictionary<string, long> _regionIntercepts = new();
+
+    /// <summary>
+    /// 记录一次访问
+    /// </summary>
+    public void RecordVisit(string country, string region)
+    {
+        if (string.IsNullOrEmpty(country)) return;
+        lock (_lock)
+        {
+            _countryVisits[country] = _countryVisits.GetValueOrDefault(country) + 1;
+            if (!string.IsNullOrEmpty(region))
+            {
+                _regionVisits[region] = _regionVisits.GetValueOrDefault(region) + 1;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 记录一次拦截
+    /// </summary>
+    public void RecordIntercept(string country, string region)
+    {
+        if (string.IsNullOrEmpty(country)) return;
+        lock (_lock)
+        {
+            _countryIntercepts[country] = _countryIntercepts.GetValueOrDefault(country) + 1;
+            if (!string.IsNullOrEmpty(region))
+            {
+                _regionIntercepts[region] = _regionIntercepts.GetValueOrDefault(region) + 1;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 获取快照
+    /// </summary>
+    public GeoTrafficSnapshot GetSnapshot()
+    {
+        lock (_lock)
+        {
+            return new GeoTrafficSnapshot
+            {
+                CountryVisits = new Dictionary<string, long>(_countryVisits),
+                CountryIntercepts = new Dictionary<string, long>(_countryIntercepts),
+                RegionVisits = new Dictionary<string, long>(_regionVisits),
+                RegionIntercepts = new Dictionary<string, long>(_regionIntercepts),
+            };
+        }
+    }
+
+    /// <summary>
+    /// 重置统计
+    /// </summary>
+    public void Reset()
+    {
+        lock (_lock)
+        {
+            _countryVisits.Clear();
+            _countryIntercepts.Clear();
+            _regionVisits.Clear();
+            _regionIntercepts.Clear();
+        }
+    }
+}
+
+/// <summary>
+/// 地理位置流量快照
+/// </summary>
+public class GeoTrafficSnapshot
+{
+    public Dictionary<string, long> CountryVisits { get; init; } = new();
+    public Dictionary<string, long> CountryIntercepts { get; init; } = new();
+    public Dictionary<string, long> RegionVisits { get; init; } = new();
+    public Dictionary<string, long> RegionIntercepts { get; init; } = new();
+}
