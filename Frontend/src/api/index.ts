@@ -233,10 +233,93 @@ export const trafficApi = {
 
 // ==================== 安全统计 API ====================
 
+// 后端返回的原始安全统计格式
+interface SecurityRawResponse {
+  snapshot: {
+    startTime: string
+    wafInterceptCount: number
+    blacklistBlockCount: number
+    ccAttackCount: number
+    crawlerDetectCount: number
+    geoBlockCount: number
+    rateLimitCount: number
+    totalInterceptCount: number
+    uniqueAttackIps: number
+  }
+  timeSlots: Array<{
+    time: string
+    wafIntercept: number
+    blacklistBlock: number
+    ccAttack: number
+    crawlerDetect: number
+    geoBlock: number
+    rateLimit: number
+    total: number
+  }>
+  topAttackSources: Array<{ ip: string; count: number }>
+  topWafSources: Array<{ ip: string; count: number }>
+  topCcSources: Array<{ ip: string; count: number }>
+  topBlacklistSources: Array<{ ip: string; count: number }>
+  topGeoSources: Array<{ ip: string; count: number }>
+  topCrawlerSources: Array<{ ip: string; count: number }>
+}
+
+// 时间槽中事件类型到字段的映射
+const timeSlotFieldMap: Record<string, keyof SecurityRawResponse['timeSlots'][0]> = {
+  WafIntercept: 'wafIntercept',
+  CcAttack: 'ccAttack',
+  BlacklistBlock: 'blacklistBlock',
+  GeoBlock: 'geoBlock',
+  CrawlerDetect: 'crawlerDetect',
+  RateLimit: 'rateLimit',
+}
+
+// Top 来源字段映射
+const topSourcesFieldMap: Record<string, keyof SecurityRawResponse> = {
+  WafIntercept: 'topWafSources',
+  CcAttack: 'topCcSources',
+  BlacklistBlock: 'topBlacklistSources',
+  GeoBlock: 'topGeoSources',
+  CrawlerDetect: 'topCrawlerSources',
+}
+
+function transformSecurityStats(raw: SecurityRawResponse): SecurityStats {
+  const s = raw.snapshot
+
+  // 将 timeSlots 按事件类型分组为 history
+  const history: Record<string, Array<{ time: string; count: number }>> = {}
+  for (const [eventType, field] of Object.entries(timeSlotFieldMap)) {
+    history[eventType] = (raw.timeSlots || []).map(slot => ({
+      time: slot.time,
+      count: (slot[field] as number) || 0,
+    }))
+  }
+
+  // 将各类型 Top 来源合并到 topAttackSources
+  const topAttackSources: Record<string, Array<{ ip: string; count: number }>> = {}
+  for (const [eventType, field] of Object.entries(topSourcesFieldMap)) {
+    topAttackSources[eventType] = (raw[field] as Array<{ ip: string; count: number }>) || []
+  }
+
+  return {
+    wafIntercepts: s?.wafInterceptCount || 0,
+    ccAttacks: s?.ccAttackCount || 0,
+    blacklistBlocks: s?.blacklistBlockCount || 0,
+    geoBlocks: s?.geoBlockCount || 0,
+    crawlerDetects: s?.crawlerDetectCount || 0,
+    rateLimits: s?.rateLimitCount || 0,
+    totalEvents: s?.totalInterceptCount || 0,
+    history,
+    topAttackSources,
+  }
+}
+
 export const securityApi = {
-  getStats: (hours = 24) =>
-    api.get<SecurityStats>('/security/stats', { params: { hours } }),
-    
+  getStats: async (hours = 24): Promise<SecurityStats> => {
+    const raw = await api.get<SecurityRawResponse>('/security/stats', { params: { hours } })
+    return transformSecurityStats(raw)
+  },
+
   reset: () =>
     api.post<ApiResponse>('/security/reset'),
 }

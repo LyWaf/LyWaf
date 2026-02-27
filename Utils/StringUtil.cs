@@ -1,5 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using LyWaf.Services;
+using LyWaf.Services.AccessControl;
 
 namespace LyWaf.Utils;
 
@@ -147,7 +149,7 @@ public static partial class StringUtil
     public static Dictionary<string, string?> CreateContextPlaceholders(HttpContext context)
     {
         var clientIp = RequestUtil.GetClientIp(context.Request);
-        return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        var dict = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             ["ClientIp"] = clientIp,
             ["ip"] = clientIp,
@@ -161,6 +163,27 @@ public static partial class StringUtil
             ["UserAgent"] = context.Request.Headers.UserAgent.ToString(),
             ["Referer"] = context.Request.Headers.Referer.ToString(),
         };
+
+        // 尝试获取 GeoIP 信息，为模板提供 Country/Region/City/Isp 默认值
+        try
+        {
+            var accessControlService = ServiceLocator.GetService<IAccessControlService>();
+            var geoInfo = accessControlService?.GetGeoInfo(clientIp);
+            dict["Country"] = geoInfo?.Country ?? "";
+            dict["Region"] = geoInfo?.Region ?? "";
+            dict["City"] = geoInfo?.City ?? "";
+            dict["Isp"] = geoInfo?.Isp ?? "";
+        }
+        catch
+        {
+            // GeoIP 查询失败时使用空值，不影响模板渲染
+            dict.TryAdd("Country", "");
+            dict.TryAdd("Region", "");
+            dict.TryAdd("City", "");
+            dict.TryAdd("Isp", "");
+        }
+
+        return dict;
     }
 
     /// <summary>

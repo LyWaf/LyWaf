@@ -150,8 +150,8 @@ export interface AbTest {
   mode: string
 }
 
-// 安全事件类型
-export type SecurityEventType = 'WafIntercept' | 'CcAttack' | 'Blacklist' | 'GeoDeny' | 'CrawlerDetect' | 'RateLimit'
+// 安全事件类型（与后端 SecurityEventType 枚举一致）
+export type SecurityEventType = 'WafIntercept' | 'CcAttack' | 'BlacklistBlock' | 'GeoBlock' | 'CrawlerDetect' | 'RateLimit'
 
 // 安全统计时间槽
 export interface SecurityTimeSlot {

@@ -27,8 +27,8 @@ const timeRanges = [
 const eventTypes: { key: SecurityEventType; label: string; color: string; bgColor: string }[] = [
   { key: 'WafIntercept', label: '攻击拦截', color: '#ef4444', bgColor: 'rgba(239, 68, 68, 0.2)' },
   { key: 'CcAttack', label: 'CC攻击', color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.2)' },
-  { key: 'Blacklist', label: '黑名单拦截', color: '#8b5cf6', bgColor: 'rgba(139, 92, 246, 0.2)' },
-  { key: 'GeoDeny', label: '地理拦截', color: '#3b82f6', bgColor: 'rgba(59, 130, 246, 0.2)' },
+  { key: 'BlacklistBlock', label: '黑名单拦截', color: '#8b5cf6', bgColor: 'rgba(139, 92, 246, 0.2)' },
+  { key: 'GeoBlock', label: '地理拦截', color: '#3b82f6', bgColor: 'rgba(59, 130, 246, 0.2)' },
   { key: 'CrawlerDetect', label: '爬虫检测', color: '#10b981', bgColor: 'rgba(16, 185, 129, 0.2)' },
   { key: 'RateLimit', label: '频率限制', color: '#ec4899', bgColor: 'rgba(236, 72, 153, 0.2)' },
 ]
