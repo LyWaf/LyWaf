@@ -25,6 +25,12 @@ public static class SharedData
     public static bool UseDraftConfig { get; set; } = false;
 
     /// <summary>
+    /// 是否请求重启 WebApplication（端口变更时设为 true）
+    /// DoStartRun 中的重启循环会检测此标记，重建 WebApplication 以应用新端口
+    /// </summary>
+    public static volatile bool RestartRequested = false;
+
+    /// <summary>
     /// IP 通用数据字典
     /// Key: IP地址
     /// Value: 任意对象数据

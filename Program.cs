@@ -294,28 +294,37 @@ public class Program
 
     public static void DoStartRun(string[] args, RunCommandOptions run)
     {
-        var builder = WebApplication.CreateBuilder(args);
-        
-        // 根据文件扩展名选择加载方式
         var configPath = run.Config;
         SharedData.ConfigFilePath = Path.GetFullPath(configPath);
 
-        if (configPath.EndsWith(".ly", StringComparison.OrdinalIgnoreCase))
+        // 重启循环：端口变更时 ControlApi 设置 RestartRequested 并 StopApplication()
+        // app.Run() 返回后检测标记，重建 WebApplication 以应用新端口监听
+        do
         {
-            // 加载 .ly 配置文件
-            builder.Configuration.AddLyConfig(configPath, optional: false);
-            _logger.Info("使用 LyWaf 配置格式: {Path}", configPath);
-        }
-        else
-        {
-            // 加载 YAML 配置文件（支持草稿优先读取）
-            builder.Configuration.AddDraftAwareYamlFile(configPath, optional: false);
-        }
+            SharedData.RestartRequested = false;
 
-        // 加载负载均衡补丁（最后加载，以补丁方式覆盖主配置中的 Clusters）
-        builder.Configuration.AddLbPatch();
+            var builder = WebApplication.CreateBuilder(args);
 
-        DoStartWaf(builder, run, null, null);
+            if (configPath.EndsWith(".ly", StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Configuration.AddLyConfig(configPath, optional: false);
+                _logger.Info("使用 LyWaf 配置格式: {Path}", configPath);
+            }
+            else
+            {
+                builder.Configuration.AddDraftAwareYamlFile(configPath, optional: false);
+            }
+
+            // 加载负载均衡补丁（最后加载，以补丁方式覆盖主配置中的 Clusters）
+            builder.Configuration.AddLbPatch();
+
+            DoStartWaf(builder, run, null, null);
+
+            if (SharedData.RestartRequested)
+            {
+                _logger.Info("检测到端口变更，正在重启 WebApplication 以应用新端口监听...");
+            }
+        } while (SharedData.RestartRequested);
     }
 
     public static void DoStop(string[] args, StopCommandOptions stop)

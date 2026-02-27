@@ -601,14 +601,46 @@ public static class ControlApi
             return Results.Json(new { message = "服务正在停止..." });
         }).RequireHost($"*:{controlPort}");
         
-        app.MapGet("/api/reload", (HttpContext ctx, IConfiguration config) =>
+        app.MapGet("/api/reload", (HttpContext ctx, IConfiguration config, IHostApplicationLifetime lifetime) =>
         {
-            if (config is IConfigurationRoot configRoot)
+            if (config is not IConfigurationRoot configRoot)
             {
-                configRoot.Reload();
-                return Results.Json(new { message = "配置已重新加载", timestamp = DateTime.Now });
+                return Results.Json(new { success = false, message = "配置重载失败：不支持的配置类型" }, statusCode: 500);
             }
-            return Results.Json(new { message = "配置重载失败：不支持的配置类型" }, statusCode: 500);
+
+            configRoot.Reload();
+
+            // 检测端口是否变化，变化时标记重启
+            var newWafInfos = new WafInfoOptions();
+            config.GetSection("WafInfos").Bind(newWafInfos);
+            var oldPorts = wafInfos.Listens.Select(l => (l.Host, l.Port, l.IsHttps)).OrderBy(x => x).ToList();
+            var newPorts = newWafInfos.Listens.Select(l => (l.Host, l.Port, l.IsHttps)).OrderBy(x => x).ToList();
+            var portsChanged = !oldPorts.SequenceEqual(newPorts);
+
+            if (portsChanged)
+            {
+                SharedData.RestartRequested = true;
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(500); // 等待响应发送完毕
+                    lifetime.StopApplication();
+                });
+                return Results.Json(new
+                {
+                    success = true,
+                    message = "配置已重新加载，检测到端口变更，服务正在重启以应用新端口...",
+                    portsChanged = true,
+                    timestamp = DateTime.Now
+                });
+            }
+
+            return Results.Json(new
+            {
+                success = true,
+                message = "配置已重新加载",
+                portsChanged = false,
+                timestamp = DateTime.Now
+            });
         }).RequireHost($"*:{controlPort}");
 
         // =============== 配置文件管理 API ===============
@@ -657,7 +689,7 @@ public static class ControlApi
         }).RequireHost($"*:{controlPort}");
 
         // 保存配置文件内容（保存到草稿文件，不覆盖原始配置）
-        app.MapPost("/api/config/file", async (HttpContext ctx, IConfiguration config) =>
+        app.MapPost("/api/config/file", async (HttpContext ctx, IConfiguration config, IHostApplicationLifetime lifetime) =>
         {
             try
             {
@@ -691,6 +723,7 @@ public static class ControlApi
                 await File.WriteAllTextAsync(draftPath, request.Content, Encoding.UTF8);
 
                 var message = $"草稿已保存到 {Path.GetFileName(draftPath)}";
+                var portsChanged = false;
 
                 // 如果需要重载配置，设置标志后 Reload
                 // LyConfigProvider / DraftAwareYamlProvider 检查此标志决定是否读取草稿
@@ -700,7 +733,25 @@ public static class ControlApi
                     {
                         SharedData.UseDraftConfig = true;
                         configRoot.Reload();
-                        message = "草稿已保存，配置已重新加载（端口监听等信息需重启服务才能生效）";
+                        message = "草稿已保存，配置已重新加载";
+
+                        // 检测端口是否变化
+                        var newWafInfos = new WafInfoOptions();
+                        config.GetSection("WafInfos").Bind(newWafInfos);
+                        var oldPorts = wafInfos.Listens.Select(l => (l.Host, l.Port, l.IsHttps)).OrderBy(x => x).ToList();
+                        var newPorts = newWafInfos.Listens.Select(l => (l.Host, l.Port, l.IsHttps)).OrderBy(x => x).ToList();
+                        portsChanged = !oldPorts.SequenceEqual(newPorts);
+
+                        if (portsChanged)
+                        {
+                            SharedData.RestartRequested = true;
+                            _ = Task.Run(async () =>
+                            {
+                                await Task.Delay(500);
+                                lifetime.StopApplication();
+                            });
+                            message = "草稿已保存，配置已重新加载，检测到端口变更，服务正在重启以应用新端口...";
+                        }
                     }
                 }
 
@@ -708,6 +759,7 @@ public static class ControlApi
                 {
                     success = true,
                     message,
+                    portsChanged,
                     draftFile = Path.GetFileName(draftPath)
                 });
             }
