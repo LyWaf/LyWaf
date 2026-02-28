@@ -77,7 +77,6 @@ const submitListen = async () => {
   if (!isValidIP(host)) { showError('监听地址必须是合法的 IP 地址（如 0.0.0.0、127.0.0.1、::）'); return }
   if (port <= 0 || port > 65535) { showError('端口号无效（1-65535）'); return }
   const hosts = listenHosts.value.filter(h => h.trim())
-  if (hosts.length === 0) { showError('至少需要一个 Host 绑定地址'); return }
   listenSaving.value = true
   try {
     const res = await listenApi.add({ host, port, isHttps })
@@ -96,7 +95,7 @@ const submitListen = async () => {
       const routeRes = await routeApi.addRoute({
         routeId,
         clusterId: 'cluster_unuse',
-        match: { path: '{**catch-all}', hosts },
+        match: { path: '{**catch-all}', hosts: hosts.length > 0 ? hosts : [`*:${port}`] },
       })
       if (!routeRes.success) {
         showError(`端口已添加，但创建默认路由失败: ${routeRes.message || '未知错误'}`)
@@ -154,6 +153,7 @@ const addForm = ref({
   defaultFiles: '',
   clusterId: '',
   path: '{**catch-all}',
+  order: null as number | null,
 })
 
 // 常用 Content-Type 选项
@@ -216,6 +216,7 @@ const openAddDialog = (listen: ListenInfo) => {
     defaultFiles: '',
     clusterId: clusterOptions.value[0] || '',
     path: '{**catch-all}',
+    order: null,
   }
   showAddDialog.value = true
 }
@@ -245,6 +246,7 @@ const submitAdd = async () => {
   try {
     const hosts = addHosts.value.filter(h => h.trim())
     const path = addForm.value.path.trim() || '{**catch-all}'
+    const order = addForm.value.order != null ? addForm.value.order : undefined
 
     if (addServiceType.value === 'simpleres') {
       const hdrs: Record<string, string> = {}
@@ -259,7 +261,7 @@ const submitAdd = async () => {
         headers: Object.keys(hdrs).length > 0 ? hdrs : undefined,
       })
       if (!itemRes.success) { showError(itemRes.message || '添加简单响应失败'); saving.value = false; return }
-      const routeRes = await routeApi.addRoute({ routeId: id, clusterId: 'cluster_unuse', match: { path, hosts } })
+      const routeRes = await routeApi.addRoute({ routeId: id, clusterId: 'cluster_unuse', order, match: { path, hosts } })
       if (!routeRes.success) { showError(routeRes.message || '添加路由失败'); saving.value = false; return }
       showSuccess('简单响应已添加')
     } else if (addServiceType.value === 'fileserver') {
@@ -275,7 +277,7 @@ const submitAdd = async () => {
         defaultFiles: defaultFiles.length > 0 ? defaultFiles : undefined,
       })
       if (!itemRes.success) { showError(itemRes.message || '添加文件服务失败'); saving.value = false; return }
-      const routeRes = await routeApi.addRoute({ routeId: id, clusterId: 'cluster_unuse', match: { path, hosts } })
+      const routeRes = await routeApi.addRoute({ routeId: id, clusterId: 'cluster_unuse', order, match: { path, hosts } })
       if (!routeRes.success) { showError(routeRes.message || '添加路由失败'); saving.value = false; return }
       showSuccess('文件服务已添加')
     } else {
@@ -283,6 +285,7 @@ const submitAdd = async () => {
       const routeRes = await routeApi.addRoute({
         routeId: id,
         clusterId: addForm.value.clusterId,
+        order,
         match: { path, hosts },
       })
       if (!routeRes.success) { showError(routeRes.message || '添加路由失败'); saving.value = false; return }
@@ -312,6 +315,8 @@ const editSimpleRes = ref({
   charset: 'utf-8',
   showReq: false,
   headers: [] as { key: string; value: string }[],
+  path: '{**catch-all}',
+  order: 0,
 })
 
 // 文件服务编辑表单
@@ -322,6 +327,8 @@ const editFileServer = ref({
   preCompressed: false,
   tryFiles: '',
   defaultFiles: '',
+  path: '{**catch-all}',
+  order: 0,
 })
 
 // 代理路由编辑表单
@@ -364,6 +371,8 @@ const openEditDialog = async (route: ListenBoundRoute) => {
           charset: item.charset ?? 'utf-8',
           showReq: item.showReq ?? false,
           headers: hdrs,
+          path: routeItem?.match?.path ?? '{**catch-all}',
+          order: routeItem?.order ?? 0,
         }
       } else {
         showError(`未找到简单响应配置: ${route.routeId}`)
@@ -380,6 +389,8 @@ const openEditDialog = async (route: ListenBoundRoute) => {
           preCompressed: item.preCompressed ?? false,
           tryFiles: item.tryFiles?.join(', ') ?? '',
           defaultFiles: item.defaultFiles?.join(', ') ?? '',
+          path: routeItem?.match?.path ?? '{**catch-all}',
+          order: routeItem?.order ?? 0,
         }
       } else {
         showError(`未找到文件服务配置: ${route.routeId}`)
@@ -430,8 +441,15 @@ const submitEdit = async () => {
         headers: hdrs,
       })
       if (!res.success) { showError(res.message || '更新失败'); return }
-      // 同步更新路由 hosts
-      await routeApi.updateRoute({ routeId: route.routeId, match: { hosts: newHosts.length > 0 ? newHosts : undefined } })
+      // 同步更新路由 hosts、path、order
+      await routeApi.updateRoute({
+        routeId: route.routeId,
+        order: editSimpleRes.value.order,
+        match: {
+          path: editSimpleRes.value.path || undefined,
+          hosts: newHosts.length > 0 ? newHosts : undefined,
+        },
+      })
       showSuccess('简单响应已更新')
 
     } else if (route.serviceType === 'fileserver') {
@@ -447,8 +465,15 @@ const submitEdit = async () => {
         defaultFiles,
       })
       if (!res.success) { showError(res.message || '更新失败'); return }
-      // 同步更新路由 hosts
-      await routeApi.updateRoute({ routeId: route.routeId, match: { hosts: newHosts.length > 0 ? newHosts : undefined } })
+      // 同步更新路由 hosts、path、order
+      await routeApi.updateRoute({
+        routeId: route.routeId,
+        order: editFileServer.value.order,
+        match: {
+          path: editFileServer.value.path || undefined,
+          hosts: newHosts.length > 0 ? newHosts : undefined,
+        },
+      })
       showSuccess('文件服务已更新')
 
     } else {
@@ -862,6 +887,12 @@ onMounted(() => {
                 </div>
               </div>
             </div>
+            <!-- Order 优先级 -->
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Order 优先级 <span class="text-gray-600">(留空自动分配)</span></label>
+              <input v-model.number="addForm.order" type="number"
+                class="input w-full font-mono text-sm" placeholder="留空则自动从 1000 开始分配" />
+            </div>
             <template v-if="addServiceType === 'simpleres'">
               <div>
                 <label class="block text-xs text-gray-400 mb-1">响应内容</label>
@@ -1058,6 +1089,19 @@ onMounted(() => {
                 </div>
               </div>
             </div>
+            <!-- 路由配置：Path / Order -->
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs text-gray-400 mb-1">匹配路径 (Path)</label>
+                <input v-model="editSimpleRes.path" type="text"
+                  class="input w-full font-mono text-sm" placeholder="{**catch-all}" />
+              </div>
+              <div>
+                <label class="block text-xs text-gray-400 mb-1">Order</label>
+                <input v-model.number="editSimpleRes.order" type="number"
+                  class="input w-full text-sm" />
+              </div>
+            </div>
             <!-- Hosts 编辑 -->
             <div>
               <div class="flex items-center justify-between mb-1">
@@ -1115,6 +1159,19 @@ onMounted(() => {
               <label class="block text-xs text-gray-400 mb-1">DefaultFiles <span class="text-gray-600">(逗号分隔)</span></label>
               <input v-model="editFileServer.defaultFiles" type="text"
                 class="input w-full font-mono text-sm" placeholder="index.html, index.htm" />
+            </div>
+            <!-- 路由配置：Path / Order -->
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs text-gray-400 mb-1">匹配路径 (Path)</label>
+                <input v-model="editFileServer.path" type="text"
+                  class="input w-full font-mono text-sm" placeholder="{**catch-all}" />
+              </div>
+              <div>
+                <label class="block text-xs text-gray-400 mb-1">Order</label>
+                <input v-model.number="editFileServer.order" type="number"
+                  class="input w-full text-sm" />
+              </div>
             </div>
             <!-- Hosts 编辑 -->
             <div>
@@ -1251,7 +1308,7 @@ onMounted(() => {
             <!-- Hosts 绑定地址 -->
             <div>
               <div class="flex items-center justify-between mb-1">
-                <label class="text-xs text-gray-400">Hosts 绑定 <span class="text-gray-600">(域名:端口)</span></label>
+                <label class="text-xs text-gray-400">Hosts 绑定 <span class="text-gray-600">(可选，留空表示匹配所有)</span></label>
                 <button type="button" @click="listenHosts.push('')"
                   class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
               </div>

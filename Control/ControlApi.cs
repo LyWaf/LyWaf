@@ -3594,20 +3594,54 @@ public static class ControlApi
                         routePatch["ClusterId"] = request.ClusterId;
 
                     if (request.Order.HasValue)
+                    {
                         routePatch["Order"] = request.Order.Value;
+                    }
+                    else
+                    {
+                        // 自动分配 Order：从 1000 开始，取所有已有路由 Order 的最大值 +1
+                        var usedOrders = new HashSet<int>();
+                        foreach (var rs in config.GetSection("ReverseProxy:Routes").GetChildren())
+                        {
+                            if (int.TryParse(rs["Order"], out var o)) usedOrders.Add(o);
+                        }
+                        // 也检查补丁中已有路由的 Order
+                        foreach (var kv in routes)
+                        {
+                            if (kv.Value is Dictionary<string, object> rDict && rDict.TryGetValue("Order", out var oVal))
+                            {
+                                if (oVal is int oi) usedOrders.Add(oi);
+                                else if (oVal is string os && int.TryParse(os, out var op)) usedOrders.Add(op);
+                            }
+                        }
+                        var nextOrder = 1000;
+                        while (usedOrders.Contains(nextOrder)) nextOrder++;
+                        routePatch["Order"] = nextOrder;
+                    }
 
+                    var matchPatch = new Dictionary<string, object>();
                     if (request.Match != null)
                     {
-                        var matchPatch = new Dictionary<string, object>();
                         if (request.Match.Path != null)
                             matchPatch["Path"] = request.Match.Path;
                         if (request.Match.Hosts != null && request.Match.Hosts.Count > 0)
                             matchPatch["Hosts"] = request.Match.Hosts.ToList<object>();
                         if (request.Match.Methods != null && request.Match.Methods.Count > 0)
                             matchPatch["Methods"] = request.Match.Methods.ToList<object>();
-                        if (matchPatch.Count > 0)
-                            routePatch["Match"] = matchPatch;
                     }
+
+                    // 保证路由必须有 Hosts：若未指定，则尝试从 routeId 中提取端口号生成默认 *:port
+                    if (!matchPatch.ContainsKey("Hosts"))
+                    {
+                        var defaultPort = ExtractPortFromRouteId(request.RouteId);
+                        if (defaultPort.HasValue)
+                        {
+                            matchPatch["Hosts"] = new List<object> { $"*:{defaultPort.Value}" };
+                        }
+                    }
+
+                    if (matchPatch.Count > 0)
+                        routePatch["Match"] = matchPatch;
 
                     routes[request.RouteId] = routePatch;
                     return null;
@@ -3725,6 +3759,19 @@ public static class ControlApi
                                 matchPatch.Remove("Methods");
                         }
                         routePatch["Match"] = matchPatch;
+                    }
+
+                    // 保证路由有 Hosts：若 Match 中无 Hosts，则从 routeId 提取端口号生成默认 *:port
+                    if (routePatch.TryGetValue("Match", out var finalMatchObj) && finalMatchObj is Dictionary<string, object> finalMatch)
+                    {
+                        if (!finalMatch.ContainsKey("Hosts"))
+                        {
+                            var defaultPort = ExtractPortFromRouteId(request.RouteId);
+                            if (defaultPort.HasValue)
+                            {
+                                finalMatch["Hosts"] = new List<object> { $"*:{defaultPort.Value}" };
+                            }
+                        }
                     }
 
                     routes[request.RouteId] = routePatch;
@@ -4963,6 +5010,17 @@ public static class ControlApi
         var newDict = new Dictionary<string, object>();
         parent[key] = newDict;
         return newDict;
+    }
+
+    /// <summary>
+    /// 从路由 ID 中提取端口号，支持 listen_{port}_default / simpleres_listen_{port}_default 等格式
+    /// </summary>
+    private static int? ExtractPortFromRouteId(string routeId)
+    {
+        var listenIdx = routeId.IndexOf("listen_", StringComparison.Ordinal);
+        if (listenIdx < 0 || !routeId.EndsWith("_default")) return null;
+        var portStr = routeId[(listenIdx + "listen_".Length)..^"_default".Length];
+        return int.TryParse(portStr, out var port) ? port : null;
     }
 
     private static object? GetSectionValue(IConfigurationSection section)
