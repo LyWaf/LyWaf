@@ -654,10 +654,21 @@ public static class ControlApi
                 }
 
                 // 判断路由是否匹配某个监听端口
-                static bool RouteMatchesPort(List<string> routeHosts, int listenPort)
+                static bool RouteMatchesPort(string routeId, List<string> routeHosts, int listenPort)
                 {
-                    // 没有 Hosts 限制 = 匹配所有端口（通配）
-                    if (routeHosts.Count == 0) return true;
+                    if (routeHosts.Count == 0)
+                    {
+                        // 从路由 ID 中提取 listen_XXXX_default 的端口号（兼容 simpleres_listen_XXXX_default 等前缀）
+                        var listenIdx = routeId.IndexOf("listen_", StringComparison.Ordinal);
+                        if (listenIdx >= 0 && routeId.EndsWith("_default"))
+                        {
+                            var portStr = routeId[(listenIdx + "listen_".Length)..^"_default".Length];
+                            if (int.TryParse(portStr, out var routePort))
+                                return routePort == listenPort;
+                        }
+                        // 其他无 Hosts 限制的路由匹配所有端口
+                        return true;
+                    }
                     foreach (var h in routeHosts)
                     {
                         var p = ExtractPort(h);
@@ -674,11 +685,42 @@ public static class ControlApi
                     return "proxy";
                 }
 
+                // 读取补丁中的监听端口（包含尚未重启生效的新端口）
+                var patchListenIndices = new HashSet<string>();
+                var pendingPatchListens = new List<(string Host, int Port, bool IsHttps, int? AutoHttpsPort)>();
+                try
+                {
+                    var patchPath = LbPatchConfig.GetPatchFilePath();
+                    if (File.Exists(patchPath))
+                    {
+                        var patchJson = File.ReadAllText(patchPath, Encoding.UTF8);
+                        using var patchDoc = System.Text.Json.JsonDocument.Parse(patchJson);
+                        if (patchDoc.RootElement.TryGetProperty("Listens", out var patchListensEl))
+                        {
+                            foreach (var prop in patchListensEl.EnumerateObject())
+                            {
+                                patchListenIndices.Add(prop.Name);
+                                // 索引 >= wafInfos.Listens.Count 表示是新增的、尚未重启生效的端口
+                                if (int.TryParse(prop.Name, out var pIdx) && pIdx >= wafInfos.Listens.Count)
+                                {
+                                    var pHost = prop.Value.TryGetProperty("Host", out var hEl) ? hEl.GetString() ?? "0.0.0.0" : "0.0.0.0";
+                                    var pPort = prop.Value.TryGetProperty("Port", out var pEl) ? pEl.GetInt32() : 0;
+                                    var pHttps = prop.Value.TryGetProperty("IsHttps", out var sEl) && sEl.GetBoolean();
+                                    int? pAutoHttps = prop.Value.TryGetProperty("AutoHttpsPort", out var aEl) && aEl.ValueKind == System.Text.Json.JsonValueKind.Number
+                                        ? aEl.GetInt32() : null;
+                                    if (pPort > 0) pendingPatchListens.Add((pHost, pPort, pHttps, pAutoHttps));
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { /* ignore */ }
+
                 // 为每个监听端口匹配关联的路由和服务
-                var listens = wafInfos.Listens.Select(l =>
+                var listens = wafInfos.Listens.Select((l, idx) =>
                 {
                     var boundRoutes = allRoutes
-                        .Where(r => RouteMatchesPort(r.Hosts, l.Port))
+                        .Where(r => RouteMatchesPort(r.RouteId, r.Hosts, l.Port))
                         .Select(r => new
                         {
                             routeId = r.RouteId,
@@ -696,9 +738,37 @@ public static class ControlApi
                         port = l.Port,
                         isHttps = l.IsHttps,
                         autoHttpsPort = l.AutoHttpsPort,
-                        routes = boundRoutes
+                        routes = boundRoutes,
+                        source = patchListenIndices.Contains(idx.ToString()) ? "patch" : "original"
                     };
                 }).ToList();
+
+                // 追加尚未重启生效的补丁端口（已在补丁中但不在 wafInfos.Listens 中）
+                foreach (var pl in pendingPatchListens)
+                {
+                    var boundRoutes = allRoutes
+                        .Where(r => RouteMatchesPort(r.RouteId, r.Hosts, pl.Port))
+                        .Select(r => new
+                        {
+                            routeId = r.RouteId,
+                            clusterId = r.ClusterId,
+                            path = r.Path,
+                            hosts = r.Hosts,
+                            serviceType = GetServiceType(r.RouteId),
+                            source = r.Source
+                        })
+                        .ToList();
+
+                    listens.Add(new
+                    {
+                        host = pl.Host,
+                        port = pl.Port,
+                        isHttps = pl.IsHttps,
+                        autoHttpsPort = pl.AutoHttpsPort,
+                        routes = boundRoutes,
+                        source = "patch"
+                    });
+                }
 
                 return Results.Json(new
                 {
@@ -924,7 +994,116 @@ public static class ControlApi
                     variables[keyStr] = Environment.GetEnvironmentVariable(keyStr) ?? "";
                 }
 
-                var yaml = LyToAppSettingsConverter.Convert(request.Content, variables);
+                // 分步转换：先得到 appsettings 字典，合并补丁后再输出 YAML
+                var config = LyConfigParser.Parse(request.Content, variables);
+                var appSettings = LyToAppSettingsConverter.TransformToAppSettings(config);
+
+                // 读取补丁文件并合并到 appSettings
+                try
+                {
+                    var patchPath = LbPatchConfig.GetPatchFilePath();
+                    if (File.Exists(patchPath))
+                    {
+                        var patchJson = await File.ReadAllTextAsync(patchPath, Encoding.UTF8);
+                        using var patchDoc = System.Text.Json.JsonDocument.Parse(patchJson);
+                        var root = patchDoc.RootElement;
+
+                        // 合并 Routes 补丁 → ReverseProxy.Routes
+                        if (root.TryGetProperty("Routes", out var routesEl))
+                        {
+                            var rp = EnsureNestedDict(appSettings, "ReverseProxy");
+                            var routes = EnsureNestedDict(rp, "Routes");
+                            foreach (var route in routesEl.EnumerateObject())
+                            {
+                                routes[route.Name] = JsonElementToYamlDict(route.Value);
+                            }
+                        }
+
+                        // 合并 Clusters 补丁 → ReverseProxy.Clusters
+                        if (root.TryGetProperty("Clusters", out var clustersEl))
+                        {
+                            var rp = EnsureNestedDict(appSettings, "ReverseProxy");
+                            var clusters = EnsureNestedDict(rp, "Clusters");
+                            foreach (var cluster in clustersEl.EnumerateObject())
+                            {
+                                clusters[cluster.Name] = JsonElementToYamlDict(cluster.Value);
+                            }
+                        }
+
+                        // 合并 FileServer 补丁 → FileServer.Items
+                        if (root.TryGetProperty("FileServer", out var fsEl))
+                        {
+                            var fs = EnsureNestedDict(appSettings, "FileServer");
+                            var items = EnsureNestedDict(fs, "Items");
+                            foreach (var item in fsEl.EnumerateObject())
+                            {
+                                items[item.Name] = JsonElementToYamlDict(item.Value);
+                            }
+                        }
+
+                        // 合并 SimpleRes 补丁 → SimpleRes.Items
+                        if (root.TryGetProperty("SimpleRes", out var srEl))
+                        {
+                            var sr = EnsureNestedDict(appSettings, "SimpleRes");
+                            var items = EnsureNestedDict(sr, "Items");
+                            foreach (var item in srEl.EnumerateObject())
+                            {
+                                items[item.Name] = JsonElementToYamlDict(item.Value);
+                            }
+                        }
+
+                        // 合并 Listens 补丁 → WafInfos.Listens
+                        if (root.TryGetProperty("Listens", out var listensEl))
+                        {
+                            var waf = EnsureNestedDict(appSettings, "WafInfos");
+                            // Listens 是一个列表
+                            List<object> listensList;
+                            if (waf.TryGetValue("Listens", out var existingListens) && existingListens is List<object> el)
+                            {
+                                listensList = el;
+                            }
+                            else
+                            {
+                                listensList = new List<object>();
+                                waf["Listens"] = listensList;
+                            }
+
+                            foreach (var listen in listensEl.EnumerateObject())
+                            {
+                                if (int.TryParse(listen.Name, out var idx))
+                                {
+                                    var listenDict = JsonElementToYamlDict(listen.Value);
+                                    if (idx < listensList.Count)
+                                    {
+                                        // 覆盖已有项
+                                        if (listensList[idx] is Dictionary<string, object> existing)
+                                        {
+                                            foreach (var kv in listenDict)
+                                                existing[kv.Key] = kv.Value;
+                                        }
+                                        else
+                                        {
+                                            listensList[idx] = listenDict;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // 补齐空位并追加
+                                        while (listensList.Count < idx)
+                                            listensList.Add(new Dictionary<string, object>());
+                                        listensList.Add(listenDict);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // 合并补丁失败时继续使用基础配置
+                }
+
+                var yaml = LyToYamlConverter.DictToYaml(appSettings);
                 return Results.Json(new { success = true, yaml });
             }
             catch (LyConfigException ex)
@@ -4057,6 +4236,122 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // =============== 监听端口管理 ===============
+
+        // 添加监听端口
+        app.MapPost("/api/listen/add", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                using var reader = new StreamReader(ctx.Request.Body);
+                var body = await reader.ReadToEndAsync();
+                var request = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(body);
+
+                var host = request.TryGetProperty("host", out var hostEl) ? hostEl.GetString() ?? "0.0.0.0" : "0.0.0.0";
+                var port = request.TryGetProperty("port", out var portEl) ? portEl.GetInt32() : 0;
+                var isHttps = request.TryGetProperty("isHttps", out var httpsEl) && httpsEl.GetBoolean();
+                int? autoHttpsPort = request.TryGetProperty("autoHttpsPort", out var ahpEl) && ahpEl.ValueKind == System.Text.Json.JsonValueKind.Number
+                    ? ahpEl.GetInt32() : null;
+
+                if (port <= 0 || port > 65535)
+                {
+                    return Results.Json(new { success = false, message = "端口号无效（1-65535）" }, statusCode: 400);
+                }
+
+                // 检查端口是否已存在
+                if (wafInfos.Listens.Any(l => l.Port == port && l.Host == host))
+                {
+                    return Results.Json(new { success = false, message = $"监听 {host}:{port} 已存在" }, statusCode: 400);
+                }
+
+                // 计算下一个索引
+                var nextIndex = wafInfos.Listens.Count;
+
+                return await ModifyListenPatch(config, listens =>
+                {
+                    // 检查补丁中是否已有更大的索引
+                    var maxIdx = nextIndex - 1;
+                    foreach (var key in listens.Keys)
+                    {
+                        if (int.TryParse(key, out var idx) && idx > maxIdx) maxIdx = idx;
+                    }
+                    var newIdx = (maxIdx + 1).ToString();
+
+                    var listenData = new Dictionary<string, object>
+                    {
+                        ["Host"] = host,
+                        ["Port"] = port,
+                        ["IsHttps"] = isHttps
+                    };
+                    if (autoHttpsPort.HasValue)
+                    {
+                        listenData["AutoHttpsPort"] = autoHttpsPort.Value;
+                    }
+                    listens[newIdx] = listenData;
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"添加监听端口失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除监听端口（仅限补丁添加的）
+        app.MapPost("/api/listen/remove", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                using var reader = new StreamReader(ctx.Request.Body);
+                var body = await reader.ReadToEndAsync();
+                var request = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(body);
+
+                var port = request.TryGetProperty("port", out var portEl) ? portEl.GetInt32() : 0;
+                var host = request.TryGetProperty("host", out var hostEl) ? hostEl.GetString() ?? "" : "";
+
+                if (port <= 0)
+                {
+                    return Results.Json(new { success = false, message = "端口号无效" }, statusCode: 400);
+                }
+
+                return await ModifyListenPatch(config, listens =>
+                {
+                    string? removeKey = null;
+                    foreach (var (key, val) in listens)
+                    {
+                        Dictionary<string, object>? listenDict = null;
+                        if (val is System.Text.Json.JsonElement je)
+                            listenDict = JsonElementToDict(je);
+                        else if (val is Dictionary<string, object> d)
+                            listenDict = d;
+
+                        if (listenDict == null) continue;
+
+                        var lPort = listenDict.TryGetValue("Port", out var pObj) ? Convert.ToInt32(pObj) : 0;
+                        var lHost = listenDict.TryGetValue("Host", out var hObj) ? hObj?.ToString() ?? "" : "";
+
+                        if (lPort == port && (string.IsNullOrEmpty(host) || lHost == host))
+                        {
+                            removeKey = key;
+                            break;
+                        }
+                    }
+
+                    if (removeKey == null)
+                    {
+                        return $"补丁中不存在监听 {host}:{port}，原始配置中的监听不能在此删除";
+                    }
+
+                    listens.Remove(removeKey);
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除监听端口失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         return app;
     }
 
@@ -4094,6 +4389,10 @@ public static class ControlApi
                 if (patchKey.StartsWith("ReverseProxy:"))
                 {
                     patchKey = patchKey.Substring("ReverseProxy:".Length);
+                }
+                else if (patchKey.StartsWith("WafInfos:Listens:"))
+                {
+                    patchKey = patchKey.Substring("WafInfos:".Length);
                 }
                 
                 if (FindValueInJsonElement(doc.RootElement, patchKey))
@@ -4202,9 +4501,16 @@ public static class ControlApi
         if (File.Exists(patchPath))
         {
             var json = await File.ReadAllTextAsync(patchPath, Encoding.UTF8);
-            patch = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json,
+            try
+            {
+                patch = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json,
                 new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = false }) ?? new();
-        }
+            }
+            catch (System.Exception)
+            {
+                patch = new Dictionary<string, object>();
+            }
+            }
         else
         {
             patch = new Dictionary<string, object>();
@@ -4374,6 +4680,40 @@ public static class ControlApi
 
             UpdatePatchSourceTracking(patch);
             await SavePatchAndReload(patch, config);
+            return Results.Json(new { success = true, message = "配置已更新并重载" });
+        }
+        finally
+        {
+            _lbPatchLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// 修改补丁文件中的 Listens 节点（监听端口）
+    /// modifier 接收 Listens 字典（key 为索引），返回 null 表示成功，返回字符串表示错误
+    /// </summary>
+    private static async Task<IResult> ModifyListenPatch(IConfiguration config, Func<Dictionary<string, object>, string?> modifier,
+        bool restartRequired = true)
+    {
+        await _lbPatchLock.WaitAsync();
+        try
+        {
+            var patch = await ReadPatchFile();
+            var listens = EnsurePatchSection(patch, "Listens");
+
+            var error = modifier(listens);
+            if (error != null)
+            {
+                return Results.Json(new { success = false, message = error }, statusCode: 400);
+            }
+
+            UpdatePatchSourceTracking(patch);
+            await SavePatchAndReload(patch, config);
+
+            if (restartRequired)
+            {
+                return Results.Json(new { success = true, message = "监听端口已更新，需要重启服务才能生效", restartRequired = true });
+            }
             return Results.Json(new { success = true, message = "配置已更新并重载" });
         }
         finally
@@ -4563,17 +4903,66 @@ public static class ControlApi
 
         foreach (var prop in element.EnumerateObject())
         {
-            dict[prop.Name] = prop.Value.ValueKind switch
-            {
-                System.Text.Json.JsonValueKind.Object => JsonElementToDict(prop.Value),
-                System.Text.Json.JsonValueKind.String => prop.Value.GetString() ?? "",
-                System.Text.Json.JsonValueKind.Number => prop.Value.ToString(),
-                System.Text.Json.JsonValueKind.True => "true",
-                System.Text.Json.JsonValueKind.False => "false",
-                _ => prop.Value.ToString()
-            };
+            dict[prop.Name] = JsonElementToValue(prop.Value);
         }
         return dict;
+    }
+
+    private static object JsonElementToValue(System.Text.Json.JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.Object => JsonElementToDict(value),
+            System.Text.Json.JsonValueKind.Array => value.EnumerateArray().Select(JsonElementToValue).ToList<object>(),
+            System.Text.Json.JsonValueKind.String => value.GetString() ?? "",
+            System.Text.Json.JsonValueKind.Number => value.ToString(),
+            System.Text.Json.JsonValueKind.True => "true",
+            System.Text.Json.JsonValueKind.False => "false",
+            _ => value.ToString()
+        };
+    }
+
+    /// <summary>
+    /// 将 JsonElement 转换为 YAML 兼容的字典（保留原生类型：bool/int/string/List/Dict）
+    /// </summary>
+    private static Dictionary<string, object> JsonElementToYamlDict(System.Text.Json.JsonElement element)
+    {
+        var dict = new Dictionary<string, object>();
+        if (element.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return dict;
+
+        foreach (var prop in element.EnumerateObject())
+        {
+            dict[prop.Name] = JsonElementToYamlValue(prop.Value);
+        }
+        return dict;
+    }
+
+    private static object JsonElementToYamlValue(System.Text.Json.JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.Object => JsonElementToYamlDict(value),
+            System.Text.Json.JsonValueKind.Array => value.EnumerateArray().Select(JsonElementToYamlValue).ToList(),
+            System.Text.Json.JsonValueKind.String => value.GetString() ?? "",
+            System.Text.Json.JsonValueKind.Number => value.TryGetInt32(out var i) ? i : (object)value.GetDouble(),
+            System.Text.Json.JsonValueKind.True => true,
+            System.Text.Json.JsonValueKind.False => false,
+            _ => value.ToString()
+        };
+    }
+
+    /// <summary>
+    /// 确保字典中存在指定 key 的子字典，不存在则创建
+    /// </summary>
+    private static Dictionary<string, object> EnsureNestedDict(Dictionary<string, object> parent, string key)
+    {
+        if (parent.TryGetValue(key, out var existing) && existing is Dictionary<string, object> dict)
+            return dict;
+
+        var newDict = new Dictionary<string, object>();
+        parent[key] = newDict;
+        return newDict;
     }
 
     private static object? GetSectionValue(IConfigurationSection section)

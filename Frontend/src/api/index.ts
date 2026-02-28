@@ -512,6 +512,13 @@ export const overviewApi = {
     api.get<OverviewData>('/overview'),
 }
 
+export const listenApi = {
+  add: (data: { host: string; port: number; isHttps: boolean; autoHttpsPort?: number }) =>
+    api.post<ApiResponse & { restartRequired?: boolean }>('/listen/add', data),
+  remove: (data: { host: string; port: number }) =>
+    api.post<ApiResponse & { restartRequired?: boolean }>('/listen/remove', data),
+}
+
 // ==================== 服务管理 API ====================
 
 export const serviceApi = {

@@ -1115,7 +1115,11 @@ public class Program
                 }
                 else
                 {
-                    options.Listen(IPAddress.Parse(url.Host), url.Port);
+                    if(IPAddress.TryParse(url.Host, out var ip)) {
+                        options.Listen(ip, url.Port);
+                    } else {
+                        options.Listen(IPAddress.Loopback, url.Port);
+                    }
                 }
             }
         });

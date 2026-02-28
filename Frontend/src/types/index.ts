@@ -308,6 +308,7 @@ export interface ListenInfo {
   isHttps: boolean
   autoHttpsPort: number | null
   routes: ListenBoundRoute[]
+  source: 'original' | 'patch'
 }
 
 export interface CertInfo {

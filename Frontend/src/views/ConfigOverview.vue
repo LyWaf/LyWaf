@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { overviewApi, routeApi, simpleResApi, fileServerApi } from '@/api'
+import { overviewApi, routeApi, simpleResApi, fileServerApi, listenApi, serviceApi } from '@/api'
 import { useToast } from '@/composables/useToast'
 import type { ListenInfo, CertInfo, OverviewCluster, ListenBoundRoute, SimpleResItem, FileServerItem, RouteConfig } from '@/types'
 
@@ -32,7 +32,104 @@ const loadData = async () => {
   }
 }
 
-// ============== 新增对话框 ==============
+// ============== 新增监听端口 ==============
+const showListenDialog = ref(false)
+const listenSaving = ref(false)
+const listenForm = ref({ host: '0.0.0.0', port: 0, isHttps: false })
+const listenHosts = ref<string[]>([])
+
+// IP 地址校验（IPv4 / IPv6）
+const isValidIP = (ip: string): boolean => {
+  // IPv4
+  if (/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(ip)) {
+    return ip.split('.').every(n => Number(n) >= 0 && Number(n) <= 255)
+  }
+  // IPv6 常见简写: ::, ::1, 0:0:0:0:0:0:0:0 等
+  if (/^[0-9a-fA-F:]+$/.test(ip) && ip.includes(':')) return true
+  return false
+}
+
+// 重启确认
+const showRestartConfirm = ref(false)
+const restarting = ref(false)
+
+const confirmRestart = async () => {
+  restarting.value = true
+  try {
+    await serviceApi.restart()
+    showSuccess('服务正在重启...')
+    showRestartConfirm.value = false
+  } catch (error: any) {
+    showError(error?.response?.data?.message || error?.message || '重启失败')
+  } finally {
+    restarting.value = false
+  }
+}
+
+const openListenDialog = () => {
+  listenForm.value = { host: '0.0.0.0', port: 0, isHttps: false }
+  listenHosts.value = ['']
+  showListenDialog.value = true
+}
+
+const submitListen = async () => {
+  const { host, port, isHttps } = listenForm.value
+  if (!isValidIP(host)) { showError('监听地址必须是合法的 IP 地址（如 0.0.0.0、127.0.0.1、::）'); return }
+  if (port <= 0 || port > 65535) { showError('端口号无效（1-65535）'); return }
+  const hosts = listenHosts.value.filter(h => h.trim())
+  if (hosts.length === 0) { showError('至少需要一个 Host 绑定地址'); return }
+  listenSaving.value = true
+  try {
+    const res = await listenApi.add({ host, port, isHttps })
+    if (!res.success) { showError(res.message || '添加失败'); return }
+    // 自动创建默认 SimpleRes 路由
+    const routeId = `simpleres_listen_${port}_default`
+    const itemRes = await simpleResApi.addItem({
+      itemId: routeId,
+      body: `<!DOCTYPE html><html><head><meta charset="utf-8"><title>LyWaf - Port ${port}</title></head><body><h1>LyWaf</h1><p>Port ${port} is running.</p></body></html>`,
+      contentType: 'text/html',
+      statusCode: 200,
+    })
+    if (!itemRes.success) {
+      showError(`端口已添加，但创建默认响应失败: ${itemRes.message || '未知错误'}`)
+    } else {
+      const routeRes = await routeApi.addRoute({
+        routeId,
+        clusterId: 'cluster_unuse',
+        match: { path: '{**catch-all}', hosts },
+      })
+      if (!routeRes.success) {
+        showError(`端口已添加，但创建默认路由失败: ${routeRes.message || '未知错误'}`)
+      } else {
+        showSuccess('监听端口和默认响应已添加')
+      }
+    }
+    showListenDialog.value = false
+    await loadData()
+    // 弹出重启确认
+    showRestartConfirm.value = true
+  } catch (error: any) {
+    showError(error?.response?.data?.message || error?.message || '添加失败')
+  } finally {
+    listenSaving.value = false
+  }
+}
+
+const deleteListen = async (listen: ListenInfo) => {
+  if (listen.source !== 'patch') { showError('原始配置中的监听不能在此删除'); return }
+  try {
+    const res = await listenApi.remove({ host: listen.host, port: listen.port })
+    if (!res.success) { showError(res.message || '删除失败'); return }
+    showSuccess('监听端口已删除')
+    await loadData()
+    // 弹出重启确认
+    showRestartConfirm.value = true
+  } catch (error: any) {
+    showError(error?.response?.data?.message || error?.message || '删除失败')
+  }
+}
+
+// ============== 新增服务对话框 ==============
 type ServiceType = 'simpleres' | 'fileserver' | 'proxy'
 
 const showAddDialog = ref(false)
@@ -41,6 +138,7 @@ const addPort = ref(0)
 const addHost = ref('')
 const addServiceType = ref<ServiceType>('simpleres')
 const saving = ref(false)
+const addHosts = ref<string[]>([])
 
 const addForm = ref({
   itemId: '',
@@ -102,6 +200,8 @@ const openAddDialog = (listen: ListenInfo) => {
   addStep.value = 'type'
   addServiceType.value = 'simpleres'
   addCtCustom.value = false
+  const host = listen.host === '0.0.0.0' || listen.host === '::' ? '*' : listen.host
+  addHosts.value = [`${host}:${listen.port}`]
   addForm.value = {
     itemId: '',
     body: 'Hello World',
@@ -137,18 +237,13 @@ const selectType = (type: ServiceType) => {
 const parseList = (str: string): string[] =>
   str.split(/[,\s]+/).map(s => s.trim()).filter(s => s.length > 0)
 
-const buildHosts = () => {
-  const host = addHost.value === '0.0.0.0' || addHost.value === '::' ? '*' : addHost.value
-  return [`${host}:${addPort.value}`]
-}
-
 const submitAdd = async () => {
   const id = addForm.value.itemId.trim()
   if (!id) { showError('ID 不能为空'); return }
 
   saving.value = true
   try {
-    const hosts = buildHosts()
+    const hosts = addHosts.value.filter(h => h.trim())
     const path = addForm.value.path.trim() || '{**catch-all}'
 
     if (addServiceType.value === 'simpleres') {
@@ -164,7 +259,7 @@ const submitAdd = async () => {
         headers: Object.keys(hdrs).length > 0 ? hdrs : undefined,
       })
       if (!itemRes.success) { showError(itemRes.message || '添加简单响应失败'); saving.value = false; return }
-      const routeRes = await routeApi.addRoute({ routeId: id, match: { path, hosts } })
+      const routeRes = await routeApi.addRoute({ routeId: id, clusterId: 'cluster_unuse', match: { path, hosts } })
       if (!routeRes.success) { showError(routeRes.message || '添加路由失败'); saving.value = false; return }
       showSuccess('简单响应已添加')
     } else if (addServiceType.value === 'fileserver') {
@@ -180,7 +275,7 @@ const submitAdd = async () => {
         defaultFiles: defaultFiles.length > 0 ? defaultFiles : undefined,
       })
       if (!itemRes.success) { showError(itemRes.message || '添加文件服务失败'); saving.value = false; return }
-      const routeRes = await routeApi.addRoute({ routeId: id, match: { path, hosts } })
+      const routeRes = await routeApi.addRoute({ routeId: id, clusterId: 'cluster_unuse', match: { path, hosts } })
       if (!routeRes.success) { showError(routeRes.message || '添加路由失败'); saving.value = false; return }
       showSuccess('文件服务已添加')
     } else {
@@ -232,11 +327,13 @@ const editFileServer = ref({
 // 代理路由编辑表单
 const editProxy = ref({
   path: '',
-  hosts: '',
   methods: '',
   order: 0,
   clusterId: '',
 })
+
+// 所有类型共用的 hosts 编辑
+const editHosts = ref<string[]>([])
 
 const openEditDialog = async (route: ListenBoundRoute) => {
   editRoute.value = route
@@ -244,6 +341,11 @@ const openEditDialog = async (route: ListenBoundRoute) => {
   showEditDialog.value = true
 
   try {
+    // 加载路由信息（获取 hosts，所有类型都需要）
+    const routeRes = await routeApi.getRoutes()
+    const routeItem = routeRes.routes?.find((r: RouteConfig) => r.routeId === route.routeId)
+    editHosts.value = routeItem?.match?.hosts?.slice() ?? []
+
     if (route.serviceType === 'simpleres') {
       const res = await simpleResApi.getItems()
       const item = res.items?.find((it: SimpleResItem) => it.itemId === route.routeId)
@@ -284,15 +386,12 @@ const openEditDialog = async (route: ListenBoundRoute) => {
         showEditDialog.value = false
       }
     } else {
-      const res = await routeApi.getRoutes()
-      const item = res.routes?.find((r: RouteConfig) => r.routeId === route.routeId)
-      if (item) {
+      if (routeItem) {
         editProxy.value = {
-          path: item.match?.path ?? '',
-          hosts: item.match?.hosts?.join(', ') ?? '',
-          methods: item.match?.methods?.join(', ') ?? '',
-          order: item.order ?? 0,
-          clusterId: item.clusterId ?? '',
+          path: routeItem.match?.path ?? '',
+          methods: routeItem.match?.methods?.join(', ') ?? '',
+          order: routeItem.order ?? 0,
+          clusterId: routeItem.clusterId ?? '',
         }
       } else {
         showError(`未找到路由配置: ${route.routeId}`)
@@ -313,6 +412,9 @@ const submitEdit = async () => {
 
   editSaving.value = true
   try {
+    // 更新路由 hosts（所有类型共用）
+    const newHosts = editHosts.value.filter(h => h.trim())
+
     if (route.serviceType === 'simpleres') {
       const hdrs: Record<string, string> = {}
       for (const h of editSimpleRes.value.headers) {
@@ -328,6 +430,8 @@ const submitEdit = async () => {
         headers: hdrs,
       })
       if (!res.success) { showError(res.message || '更新失败'); return }
+      // 同步更新路由 hosts
+      await routeApi.updateRoute({ routeId: route.routeId, match: { hosts: newHosts.length > 0 ? newHosts : undefined } })
       showSuccess('简单响应已更新')
 
     } else if (route.serviceType === 'fileserver') {
@@ -343,10 +447,11 @@ const submitEdit = async () => {
         defaultFiles,
       })
       if (!res.success) { showError(res.message || '更新失败'); return }
+      // 同步更新路由 hosts
+      await routeApi.updateRoute({ routeId: route.routeId, match: { hosts: newHosts.length > 0 ? newHosts : undefined } })
       showSuccess('文件服务已更新')
 
     } else {
-      const hosts = parseList(editProxy.value.hosts)
       const methods = parseList(editProxy.value.methods).map(m => m.toUpperCase())
       const res = await routeApi.updateRoute({
         routeId: route.routeId,
@@ -354,7 +459,7 @@ const submitEdit = async () => {
         order: editProxy.value.order,
         match: {
           path: editProxy.value.path || undefined,
-          hosts: hosts.length > 0 ? hosts : undefined,
+          hosts: newHosts.length > 0 ? newHosts : undefined,
           methods: methods.length > 0 ? methods : undefined,
         },
       })
@@ -453,11 +558,17 @@ onMounted(() => {
         <div class="flex items-center gap-3">
           <h2 class="text-lg font-semibold text-gray-100">配置概览</h2>
         </div>
-        <button @click="loadData" :disabled="loading"
-          class="btn btn-sm btn-secondary flex items-center gap-1.5">
-          <span v-if="loading" class="w-3.5 h-3.5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></span>
-          <span>刷新</span>
-        </button>
+        <div class="flex items-center gap-2">
+          <button @click="openListenDialog"
+            class="btn btn-sm btn-primary flex items-center gap-1 text-xs">
+            <span>+ 新增端口</span>
+          </button>
+          <button @click="loadData" :disabled="loading"
+            class="btn btn-sm btn-secondary flex items-center gap-1.5">
+            <span v-if="loading" class="w-3.5 h-3.5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></span>
+            <span>刷新</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -501,11 +612,17 @@ onMounted(() => {
                 {{ listen.routes.length }} 个服务绑定
               </div>
             </div>
-            <!-- 新增按钮 -->
-            <button @click="openAddDialog(listen)"
-              class="btn btn-sm btn-primary flex items-center gap-1 text-xs">
-              <span>+ 新增</span>
-            </button>
+            <!-- 操作按钮 -->
+            <div class="flex items-center gap-2">
+              <button @click="openAddDialog(listen)"
+                class="btn btn-sm btn-primary flex items-center gap-1 text-xs">
+                <span>+ 新增</span>
+              </button>
+              <button v-if="listen.source === 'patch'" @click="deleteListen(listen)"
+                class="btn btn-sm text-xs bg-red-600/20 text-red-400 hover:bg-red-600/30 border border-red-500/30">
+                删除端口
+              </button>
+            </div>
           </div>
 
           <!-- 绑定的路由/服务列表 -->
@@ -729,6 +846,22 @@ onMounted(() => {
               <input v-model="addForm.path" type="text"
                 class="input w-full font-mono text-sm" placeholder="{**catch-all}" />
             </div>
+            <!-- Hosts 动态数组 -->
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-xs text-gray-400">Hosts <span class="text-gray-600">(域名:端口)</span></label>
+                <button type="button" @click="addHosts.push('')"
+                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+              </div>
+              <div class="space-y-2">
+                <div v-for="(_h, hi) in addHosts" :key="hi" class="flex items-center gap-2">
+                  <input v-model="addHosts[hi]" type="text"
+                    class="input flex-1 font-mono text-sm" placeholder="localhost:5002" />
+                  <button v-if="addHosts.length > 1" type="button" @click="addHosts.splice(hi, 1)"
+                    class="text-gray-500 hover:text-red-400 transition-colors text-sm px-1 flex-shrink-0">×</button>
+                </div>
+              </div>
+            </div>
             <template v-if="addServiceType === 'simpleres'">
               <div>
                 <label class="block text-xs text-gray-400 mb-1">响应内容</label>
@@ -823,9 +956,6 @@ onMounted(() => {
               </div>
             </template>
             <div class="pt-2 border-t border-dark-border/50">
-              <div class="text-xs text-gray-500 mb-3">
-                将绑定到 <span class="font-mono text-gray-400">{{ buildHosts()[0] }}</span>
-              </div>
               <div class="flex justify-end gap-2">
                 <button @click="showAddDialog = false" class="btn btn-sm btn-secondary">取消</button>
                 <button @click="submitAdd" :disabled="saving" class="btn btn-sm btn-primary flex items-center gap-1.5">
@@ -928,6 +1058,23 @@ onMounted(() => {
                 </div>
               </div>
             </div>
+            <!-- Hosts 编辑 -->
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-xs text-gray-400">Hosts <span class="text-gray-600">(域名:端口)</span></label>
+                <button type="button" @click="editHosts.push('')"
+                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+              </div>
+              <div v-if="editHosts.length === 0" class="text-xs text-gray-600 py-1">无 Host 限制（匹配所有端口）</div>
+              <div v-else class="space-y-2">
+                <div v-for="(_h, hi) in editHosts" :key="hi" class="flex items-center gap-2">
+                  <input v-model="editHosts[hi]" type="text"
+                    class="input flex-1 font-mono text-sm" placeholder="localhost:5002" />
+                  <button type="button" @click="editHosts.splice(hi, 1)"
+                    class="text-gray-500 hover:text-red-400 transition-colors text-sm px-1 flex-shrink-0">×</button>
+                </div>
+              </div>
+            </div>
             <div class="flex justify-end gap-2 pt-2 border-t border-dark-border/50">
               <button @click="showEditDialog = false" class="btn btn-sm btn-secondary">取消</button>
               <button @click="submitEdit" :disabled="editSaving" class="btn btn-sm btn-primary flex items-center gap-1.5">
@@ -969,6 +1116,23 @@ onMounted(() => {
               <input v-model="editFileServer.defaultFiles" type="text"
                 class="input w-full font-mono text-sm" placeholder="index.html, index.htm" />
             </div>
+            <!-- Hosts 编辑 -->
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-xs text-gray-400">Hosts <span class="text-gray-600">(域名:端口)</span></label>
+                <button type="button" @click="editHosts.push('')"
+                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+              </div>
+              <div v-if="editHosts.length === 0" class="text-xs text-gray-600 py-1">无 Host 限制（匹配所有端口）</div>
+              <div v-else class="space-y-2">
+                <div v-for="(_h, hi) in editHosts" :key="hi" class="flex items-center gap-2">
+                  <input v-model="editHosts[hi]" type="text"
+                    class="input flex-1 font-mono text-sm" placeholder="localhost:5002" />
+                  <button type="button" @click="editHosts.splice(hi, 1)"
+                    class="text-gray-500 hover:text-red-400 transition-colors text-sm px-1 flex-shrink-0">×</button>
+                </div>
+              </div>
+            </div>
             <div class="flex justify-end gap-2 pt-2 border-t border-dark-border/50">
               <button @click="showEditDialog = false" class="btn btn-sm btn-secondary">取消</button>
               <button @click="submitEdit" :disabled="editSaving" class="btn btn-sm btn-primary flex items-center gap-1.5">
@@ -991,10 +1155,22 @@ onMounted(() => {
               <input v-model="editProxy.path" type="text"
                 class="input w-full font-mono text-sm" placeholder="{**catch-all}" />
             </div>
+            <!-- Hosts 编辑 -->
             <div>
-              <label class="block text-xs text-gray-400 mb-1">Hosts <span class="text-gray-600">(逗号分隔)</span></label>
-              <input v-model="editProxy.hosts" type="text"
-                class="input w-full font-mono text-sm" placeholder="localhost:5002, *.example.com" />
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-xs text-gray-400">Hosts <span class="text-gray-600">(域名:端口)</span></label>
+                <button type="button" @click="editHosts.push('')"
+                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+              </div>
+              <div v-if="editHosts.length === 0" class="text-xs text-gray-600 py-1">无 Host 限制（匹配所有端口）</div>
+              <div v-else class="space-y-2">
+                <div v-for="(_h, hi) in editHosts" :key="hi" class="flex items-center gap-2">
+                  <input v-model="editHosts[hi]" type="text"
+                    class="input flex-1 font-mono text-sm" placeholder="localhost:5002" />
+                  <button type="button" @click="editHosts.splice(hi, 1)"
+                    class="text-gray-500 hover:text-red-400 transition-colors text-sm px-1 flex-shrink-0">×</button>
+                </div>
+              </div>
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div>
@@ -1038,6 +1214,87 @@ onMounted(() => {
               <button @click="executeDelete" :disabled="!!deleting" class="btn btn-sm bg-red-600 hover:bg-red-500 text-white flex items-center gap-1.5">
                 <span v-if="deleting" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
                 <span>确认删除</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ============== 新增监听端口对话框 ============== -->
+    <Teleport to="body">
+      <div v-if="showListenDialog" class="fixed inset-0 z-[100] flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/60" @click="showListenDialog = false"></div>
+        <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-sm mx-4">
+          <div class="flex items-center justify-between px-5 py-4 border-b border-dark-border">
+            <h3 class="text-base font-semibold text-gray-100">新增监听端口</h3>
+            <button @click="showListenDialog = false" class="text-gray-400 hover:text-gray-200 text-lg">×</button>
+          </div>
+          <div class="p-5 space-y-4">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">监听地址 <span class="text-gray-600">(IP 地址)</span></label>
+              <input v-model="listenForm.host" type="text"
+                class="input w-full font-mono text-sm" placeholder="0.0.0.0" />
+              <p v-if="listenForm.host && !isValidIP(listenForm.host)" class="text-xs text-red-400 mt-1">
+                请输入合法的 IP 地址（如 0.0.0.0、127.0.0.1、::）
+              </p>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">端口号</label>
+              <input v-model.number="listenForm.port" type="number" min="1" max="65535"
+                class="input w-full text-sm" placeholder="5080" />
+            </div>
+            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+              <input type="checkbox" v-model="listenForm.isHttps" class="rounded border-gray-600" />
+              <span>启用 HTTPS</span>
+            </label>
+            <!-- Hosts 绑定地址 -->
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-xs text-gray-400">Hosts 绑定 <span class="text-gray-600">(域名:端口)</span></label>
+                <button type="button" @click="listenHosts.push('')"
+                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+              </div>
+              <div class="space-y-2">
+                <div v-for="(_h, hi) in listenHosts" :key="hi" class="flex items-center gap-2">
+                  <input v-model="listenHosts[hi]" type="text"
+                    class="input flex-1 font-mono text-sm" placeholder="*:5080" />
+                  <button v-if="listenHosts.length > 1" type="button" @click="listenHosts.splice(hi, 1)"
+                    class="text-gray-500 hover:text-red-400 transition-colors text-sm px-1 flex-shrink-0">×</button>
+                </div>
+              </div>
+              <p class="text-xs text-gray-600 mt-1">用于路由匹配，如 *:5080、localhost:5080</p>
+            </div>
+            <div class="flex justify-end gap-2 pt-2 border-t border-dark-border/50">
+              <button @click="showListenDialog = false" class="btn btn-sm btn-secondary">取消</button>
+              <button @click="submitListen" :disabled="listenSaving" class="btn btn-sm btn-primary flex items-center gap-1.5">
+                <span v-if="listenSaving" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+                <span>确认添加</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ============== 重启确认对话框 ============== -->
+    <Teleport to="body">
+      <div v-if="showRestartConfirm" class="fixed inset-0 z-[100] flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/60" @click="showRestartConfirm = false"></div>
+        <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-sm mx-4">
+          <div class="p-5">
+            <h3 class="text-base font-semibold text-gray-100 mb-3">是否立即重启？</h3>
+            <p class="text-sm text-gray-400 mb-4">
+              监听端口变更需要重启服务才能生效。确定要立即重启吗？
+            </p>
+            <div class="text-xs text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 mb-4">
+              重启期间服务将短暂不可用
+            </div>
+            <div class="flex justify-end gap-2">
+              <button @click="showRestartConfirm = false" class="btn btn-sm btn-secondary">稍后重启</button>
+              <button @click="confirmRestart" :disabled="restarting" class="btn btn-sm bg-amber-600 hover:bg-amber-500 text-white flex items-center gap-1.5">
+                <span v-if="restarting" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+                <span>立即重启</span>
               </button>
             </div>
           </div>

@@ -546,6 +546,16 @@ public class LbPatchProvider : ConfigurationProvider
                 }
             }
 
+            // 加载 Listens 补丁（监听端口）
+            if (root.TryGetProperty("Listens", out var listensEl))
+            {
+                foreach (var listen in listensEl.EnumerateObject())
+                {
+                    var listenPrefix = $"WafInfos:Listens:{listen.Name}";
+                    FlattenJsonElement(listenPrefix, listen.Value);
+                }
+            }
+
             if (Data.Count > 0)
             {
                 _logger.Info("补丁已加载: {Path} ({Count} 个配置项)", patchPath, Data.Count);
