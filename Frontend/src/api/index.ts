@@ -5,7 +5,8 @@ import type {
   SecurityStats,
   ApiTimingStat,
   ApiTimingSummary,
-  GeoTrafficStats
+  GeoTrafficStats,
+  OverviewData
 } from '@/types'
 
 const http = axios.create({
@@ -502,6 +503,13 @@ export const configFileApi = {
 
   convert: (content: string) =>
     api.post<ConvertResponse>('/config/convert', { content }),
+}
+
+// ==================== 配置概览 API ====================
+
+export const overviewApi = {
+  getData: () =>
+    api.get<OverviewData>('/overview'),
 }
 
 // ==================== 服务管理 API ====================

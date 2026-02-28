@@ -22,6 +22,7 @@ const menuItems: MenuItem[] = [
   {
     name: '配置管理', icon: '📄', children: [
       { path: '/config', name: '配置文件' },
+      { path: '/config-overview', name: '配置概览' },
       { path: '/cluster-config', name: '配置集群' },
       { path: '/route-config', name: '配置路由' },
       { path: '/fileserver-config', name: '文件服务' },

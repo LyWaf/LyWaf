@@ -574,7 +574,148 @@ public static class ControlApi
                 threads = process.Threads.Count
             });
         }).RequireHost($"*:{controlPort}");
-        
+
+        // =============== 配置概览 API ===============
+        app.MapGet("/api/overview", (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                // 控制台监听
+                var cl = wafInfos.GetControlListen();
+
+                // 证书信息
+                var certs = wafInfos.Certs.Select(c => new
+                {
+                    host = c.Host,
+                    pemFile = Path.GetFileName(c.PemFile),
+                    hasKey = !string.IsNullOrEmpty(c.KeyFile)
+                }).ToList();
+
+                // 收集所有路由信息（含 hosts 和 source）
+                var rpRoutes = config.GetSection("ReverseProxy:Routes");
+                var allRoutes = new List<(string RouteId, string ClusterId, string Path, List<string> Hosts, string Source)>();
+                foreach (var rs in rpRoutes.GetChildren())
+                {
+                    var matchSection = rs.GetSection("Match");
+                    var hosts = new List<string>();
+                    foreach (var h in matchSection.GetSection("Hosts").GetChildren())
+                    {
+                        if (h.Value != null) hosts.Add(h.Value);
+                    }
+                    var source = DetectConfigSource(config, $"ReverseProxy:Routes:{rs.Key}");
+                    var sourceText = source == ConfigSource.PatchConfig ? "patch" : "original";
+                    allRoutes.Add((rs.Key, rs["ClusterId"] ?? "", matchSection["Path"] ?? "", hosts, sourceText));
+                }
+
+                // 收集所有集群信息
+                var rpClusters = config.GetSection("ReverseProxy:Clusters");
+                var allClusters = new Dictionary<string, object>();
+                foreach (var cs in rpClusters.GetChildren())
+                {
+                    var destinations = new List<object>();
+                    foreach (var dest in cs.GetSection("Destinations").GetChildren())
+                    {
+                        destinations.Add(new
+                        {
+                            id = dest.Key,
+                            address = dest["Address"] ?? ""
+                        });
+                    }
+                    allClusters[cs.Key] = new
+                    {
+                        id = cs.Key,
+                        policy = cs["LoadBalancingPolicy"] ?? "RoundRobin",
+                        destinationCount = destinations.Count,
+                        destinations
+                    };
+                }
+
+                // 辅助方法：解析 host 模式中的端口
+                static int? ExtractPort(string pattern)
+                {
+                    if (string.IsNullOrEmpty(pattern)) return null;
+                    // IPv6 格式 [::1]:8080
+                    if (pattern.StartsWith('['))
+                    {
+                        var bracketEnd = pattern.IndexOf(']');
+                        if (bracketEnd >= 0 && bracketEnd + 1 < pattern.Length && pattern[bracketEnd + 1] == ':')
+                        {
+                            if (int.TryParse(pattern[(bracketEnd + 2)..], out var p)) return p;
+                        }
+                        return null;
+                    }
+                    // 普通格式 host:port
+                    var colonIdx = pattern.LastIndexOf(':');
+                    if (colonIdx > 0 && int.TryParse(pattern[(colonIdx + 1)..], out var port))
+                    {
+                        return port;
+                    }
+                    return null;
+                }
+
+                // 判断路由是否匹配某个监听端口
+                static bool RouteMatchesPort(List<string> routeHosts, int listenPort)
+                {
+                    // 没有 Hosts 限制 = 匹配所有端口（通配）
+                    if (routeHosts.Count == 0) return true;
+                    foreach (var h in routeHosts)
+                    {
+                        var p = ExtractPort(h);
+                        if (p == listenPort) return true;
+                    }
+                    return false;
+                }
+
+                // 确定路由的服务类型
+                static string GetServiceType(string routeId)
+                {
+                    if (routeId.StartsWith("fileserver_", StringComparison.OrdinalIgnoreCase)) return "fileserver";
+                    if (routeId.StartsWith("simpleres_", StringComparison.OrdinalIgnoreCase)) return "simpleres";
+                    return "proxy";
+                }
+
+                // 为每个监听端口匹配关联的路由和服务
+                var listens = wafInfos.Listens.Select(l =>
+                {
+                    var boundRoutes = allRoutes
+                        .Where(r => RouteMatchesPort(r.Hosts, l.Port))
+                        .Select(r => new
+                        {
+                            routeId = r.RouteId,
+                            clusterId = r.ClusterId,
+                            path = r.Path,
+                            hosts = r.Hosts,
+                            serviceType = GetServiceType(r.RouteId),
+                            source = r.Source
+                        })
+                        .ToList();
+
+                    return new
+                    {
+                        host = l.Host,
+                        port = l.Port,
+                        isHttps = l.IsHttps,
+                        autoHttpsPort = l.AutoHttpsPort,
+                        routes = boundRoutes
+                    };
+                }).ToList();
+
+                return Results.Json(new
+                {
+                    success = true,
+                    listens,
+                    controlListen = new { host = cl.Host, port = cl.Port },
+                    certs,
+                    clusters = allClusters.Values.ToList(),
+                    timestamp = DateTime.Now
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"获取概览数据失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         app.MapGet("/api/config", (HttpContext ctx, IConfiguration config) =>
         {
             var configDict = new Dictionary<string, object?>();

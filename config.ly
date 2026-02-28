@@ -99,6 +99,8 @@ plugins {
     status 201
     show-req true
 }
+localhost:5002
+import res "aaa"
 
 localhost:5003, localhost:5004, 0.0.0.0:5005, example.com:5006
 log = "logs/xx"

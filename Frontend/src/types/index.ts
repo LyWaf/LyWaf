@@ -291,6 +291,52 @@ export interface SimpleResItem {
   source: 'original' | 'patch'
 }
 
+// =============== 配置概览类型 ===============
+
+export interface ListenBoundRoute {
+  routeId: string
+  clusterId: string
+  path: string
+  hosts: string[]
+  serviceType: 'proxy' | 'fileserver' | 'simpleres'
+  source: 'original' | 'patch'
+}
+
+export interface ListenInfo {
+  host: string
+  port: number
+  isHttps: boolean
+  autoHttpsPort: number | null
+  routes: ListenBoundRoute[]
+}
+
+export interface CertInfo {
+  host: string
+  pemFile: string
+  hasKey: boolean
+}
+
+export interface OverviewClusterDest {
+  id: string
+  address: string
+}
+
+export interface OverviewCluster {
+  id: string
+  policy: string
+  destinationCount: number
+  destinations: OverviewClusterDest[]
+}
+
+export interface OverviewData {
+  success: boolean
+  listens: ListenInfo[]
+  controlListen: { host: string; port: number }
+  certs: CertInfo[]
+  clusters: OverviewCluster[]
+  timestamp: string
+}
+
 // 仪表板数据
 export interface DashboardData {
   system: SystemStatus

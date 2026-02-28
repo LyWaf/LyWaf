@@ -39,6 +39,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '配置文件', icon: '📄' }
   },
   {
+    path: '/config-overview',
+    name: 'ConfigOverview',
+    component: () => import('@/views/ConfigOverview.vue'),
+    meta: { title: '配置概览', icon: '📋' }
+  },
+  {
     path: '/cluster-config',
     name: 'ClusterConfig',
     component: () => import('@/views/ClusterConfig.vue'),

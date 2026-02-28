@@ -112,6 +112,8 @@ public class SimpleResMiddleware
     /// <summary>
     /// 格式化响应体，替换占位符
     /// 使用单次遍历方式提高效率
+    /// 占位符名称只允许字母、数字和下划线，遇到其他字符时 { 作为普通字符处理
+    /// 这样可以正确处理 JSON 格式，例如 {"port": {PORT}} → {"port": 5002}
     /// </summary>
     private static string FormatResponseBody(string body, HttpContext context)
     {
@@ -139,10 +141,31 @@ public class SimpleResMiddleware
 
         while (openBrace >= 0)
         {
-            var closeBrace = body.IndexOf('}', openBrace + 1);
-            if (closeBrace < 0)
+            // 扫描占位符名称：只允许字母、数字和下划线
+            var closeBrace = -1;
+            var validName = true;
+            for (var i = openBrace + 1; i < body.Length; i++)
             {
-                break;
+                var ch = body[i];
+                if (ch == '}')
+                {
+                    closeBrace = i;
+                    break;
+                }
+                if (!char.IsLetterOrDigit(ch) && ch != '_')
+                {
+                    validName = false;
+                    break;
+                }
+            }
+
+            // 不是合法占位符格式（含非法字符、无闭合、或为空 {}），将 { 作为普通字符
+            if (!validName || closeBrace < 0 || closeBrace == openBrace + 1)
+            {
+                sb.Append(body, lastPos, openBrace - lastPos + 1);
+                lastPos = openBrace + 1;
+                openBrace = body.IndexOf('{', lastPos);
+                continue;
             }
 
             // 添加 { 之前的内容
