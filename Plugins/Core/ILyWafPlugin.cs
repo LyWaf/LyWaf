@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LyWaf.Plugins.Core;
@@ -67,6 +68,13 @@ public class PluginMetadata
     
     /// <summary>是否默认启用</summary>
     public bool EnabledByDefault { get; init; } = true;
+
+    /// <summary>
+    /// 插件默认配置选项实例
+    /// 设置后前端可读取默认属性并提供编辑界面
+    /// 例如: DefaultOptions = new ImageProcessOptions()
+    /// </summary>
+    public object? DefaultOptions { get; init; }
 }
 
 /// <summary>
@@ -134,14 +142,49 @@ public abstract class LyWafPluginBase : ILyWafPlugin
     
     public virtual void ConfigureServices(IServiceCollection services, IConfiguration configuration)
     {
-        // 默认不注册任何服务
+        // 如果设置了 DefaultOptions，自动注册 services.Configure<T>(section)
+        if (Metadata.DefaultOptions is { } options)
+        {
+            var section = configuration.GetSection($"Plugins:{Metadata.Id}");
+            // 反射调用 services.Configure<T>(IConfigurationSection)
+            typeof(OptionsConfigurationServiceCollectionExtensions)
+                .GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)
+                .First(m => m.Name == "Configure" && m.IsGenericMethodDefinition
+                    && m.GetParameters().Length == 2
+                    && m.GetParameters()[1].ParameterType == typeof(IConfigurationSection))
+                .MakeGenericMethod(options.GetType())
+                .Invoke(null, [services, section]);
+        }
     }
-    
+
     public virtual Task InitializeAsync(IPluginContext context)
     {
         Context = context;
+        // 自动将配置绑定到 DefaultOptions 实例（清空 List/Dictionary 后再 Bind，避免重复）
+        BindOptionsFromConfig(context.Configuration);
         State = PluginState.Initialized;
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 将配置绑定到 Metadata.DefaultOptions 实例上
+    /// 自动清空 List/Dictionary 属性，避免 Bind() 追加导致重复
+    /// </summary>
+    private void BindOptionsFromConfig(IConfiguration configuration)
+    {
+        var options = Metadata.DefaultOptions;
+        if (options == null) return;
+        // Bind() 对 List/Dictionary 是追加操作，必须先清空
+        foreach (var prop in options.GetType().GetProperties(
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            if (!prop.CanRead) continue;
+            object? value;
+            try { value = prop.GetValue(options); } catch { continue; }
+            if (value is System.Collections.IList list) list.Clear();
+            else if (value is System.Collections.IDictionary dict) dict.Clear();
+        }
+        configuration.GetSection($"Plugins:{Metadata.Id}").Bind(options);
     }
     
     public virtual void ConfigureMiddleware(IApplicationBuilder app)

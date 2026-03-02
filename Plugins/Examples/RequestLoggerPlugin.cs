@@ -1,7 +1,5 @@
 using LyWaf.Plugins.Core;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
-using System.Diagnostics;
 
 namespace LyWaf.Plugins.Examples;
 
@@ -11,11 +9,7 @@ namespace LyWaf.Plugins.Examples;
 /// </summary>
 public class RequestLoggerPlugin : LyWafPluginBase
 {
-    private RequestLoggerOptions _options = new();
-    private IDisposable? _eventSubscriptionStart;
-    private IDisposable? _eventSubscriptionComplete;
-
-    public override PluginMetadata Metadata => new()
+    private readonly PluginMetadata _metadata = new()
     {
         Id = "request-logger",
         Name = "请求日志记录器",
@@ -23,19 +17,21 @@ public class RequestLoggerPlugin : LyWafPluginBase
         Description = "记录所有 HTTP 请求的详细信息",
         Author = "LyWaf Team",
         Priority = PluginPriority.High,  // 高优先级，尽早记录
-        EnabledByDefault = true
+        EnabledByDefault = true,
+        DefaultOptions = new RequestLoggerOptions()
     };
 
-    public override void ConfigureServices(IServiceCollection services, IConfiguration configuration)
-    {
-        // 注册配置
-        services.Configure<RequestLoggerOptions>(configuration.GetSection("Plugins:request-logger"));
-    }
+    public override PluginMetadata Metadata => _metadata;
+
+    /// <summary>运行时配置，与 Metadata.DefaultOptions 是同一实例</summary>
+    private RequestLoggerOptions Options => (RequestLoggerOptions)_metadata.DefaultOptions!;
+
+    private IDisposable? _eventSubscriptionStart;
+    private IDisposable? _eventSubscriptionComplete;
 
     public override Task InitializeAsync(IPluginContext context)
     {
-        // 获取插件配置
-        _options = context.GetPluginConfig<RequestLoggerOptions>();
+        base.InitializeAsync(context);
 
         // 订阅请求完成事件（来自其他插件）
         _eventSubscriptionStart = context.SubscribeEvent<RequestStartedEvent>(async e =>
@@ -58,7 +54,7 @@ public class RequestLoggerPlugin : LyWafPluginBase
         });
 
         context.Logger.Info("请求日志记录器已初始化");
-        return base.InitializeAsync(context);
+        return Task.CompletedTask;
     }
 
     public override void ConfigureProxyPipeline(IApplicationBuilder proxyApp)

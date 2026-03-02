@@ -1,7 +1,6 @@
 using LyWaf.Plugins.Core;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using NLog;
 using SkiaSharp;
 
@@ -13,9 +12,7 @@ namespace LyWaf.Plugins.Sys;
 /// </summary>
 public class ImageProcessPlugin : LyWafPluginBase
 {
-    private ImageProcessOptions _options = new();
-
-    public override PluginMetadata Metadata => new()
+    private readonly PluginMetadata _metadata = new()
     {
         Id = "image-process",
         Name = "图片处理器",
@@ -23,19 +20,20 @@ public class ImageProcessPlugin : LyWafPluginBase
         Description = "实时处理图片：缩放、旋转、裁剪、格式转换",
         Author = "LyWaf Team",
         Priority = PluginPriority.Normal,
-        EnabledByDefault = false  // 默认不启用
+        EnabledByDefault = false,  // 默认不启用
+        DefaultOptions = new ImageProcessOptions()
     };
 
-    public override void ConfigureServices(IServiceCollection services, IConfiguration configuration)
-    {
-        services.Configure<ImageProcessOptions>(configuration.GetSection("Plugins:image-process"));
-    }
+    public override PluginMetadata Metadata => _metadata;
+
+    /// <summary>运行时配置，与 Metadata.DefaultOptions 是同一实例</summary>
+    private ImageProcessOptions Options => (ImageProcessOptions)_metadata.DefaultOptions!;
 
     public override Task InitializeAsync(IPluginContext context)
     {
-        _options = context.GetPluginConfig<ImageProcessOptions>();
-        context.Logger.Info("图片处理器已初始化，支持格式: {Formats}", string.Join(", ", _options.SupportedFormats));
-        return base.InitializeAsync(context);
+        base.InitializeAsync(context);
+        context.Logger.Info("图片处理器已初始化，支持格式: {Formats}", string.Join(", ", Options.SupportedFormats));
+        return Task.CompletedTask;
     }
 
     public override void ConfigureProxyPipeline(IApplicationBuilder proxyApp)

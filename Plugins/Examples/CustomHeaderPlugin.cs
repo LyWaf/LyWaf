@@ -1,6 +1,5 @@
 using LyWaf.Plugins.Core;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace LyWaf.Plugins.Examples;
 
@@ -10,9 +9,7 @@ namespace LyWaf.Plugins.Examples;
 /// </summary>
 public class CustomHeaderPlugin : LyWafPluginBase
 {
-    private CustomHeaderOptions _options = new();
-    
-    public override PluginMetadata Metadata => new()
+    private readonly PluginMetadata _metadata = new()
     {
         Id = "custom-header",
         Name = "自定义响应头",
@@ -20,31 +17,32 @@ public class CustomHeaderPlugin : LyWafPluginBase
         Description = "为所有响应添加自定义 HTTP 头",
         Author = "LyWaf Team",
         Priority = PluginPriority.Low,  // 低优先级，在其他处理之后
-        EnabledByDefault = false  // 默认禁用
+        EnabledByDefault = false,  // 默认禁用
+        DefaultOptions = new CustomHeaderOptions()
     };
-    
-    public override void ConfigureServices(IServiceCollection services, IConfiguration configuration)
-    {
-        services.Configure<CustomHeaderOptions>(configuration.GetSection("Plugins:custom-header"));
-    }
-    
+
+    public override PluginMetadata Metadata => _metadata;
+
+    /// <summary>运行时配置，与 Metadata.DefaultOptions 是同一实例</summary>
+    private CustomHeaderOptions Options => (CustomHeaderOptions)_metadata.DefaultOptions!;
+
     public override Task InitializeAsync(IPluginContext context)
     {
-        _options = context.GetPluginConfig<CustomHeaderOptions>();
-        context.Logger.Info("自定义响应头插件已初始化，共 {Count} 个头", _options.Headers.Count);
-        return base.InitializeAsync(context);
+        base.InitializeAsync(context);
+        context.Logger.Info("自定义响应头插件已初始化，共 {Count} 个头", Options.Headers.Count);
+        return Task.CompletedTask;
     }
-    
+
     public override void ConfigureProxyPipeline(IApplicationBuilder proxyApp)
     {
-        if (_options.Enabled && _options.Headers.Count > 0)
+        if (Options.Enabled && Options.Headers.Count > 0)
         {
             proxyApp.Use(async (context, next) =>
             {
                 // 在响应开始前注册回调
                 context.Response.OnStarting(() =>
                 {
-                    foreach (var (key, value) in _options.Headers)
+                    foreach (var (key, value) in Options.Headers)
                     {
                         if (!context.Response.Headers.ContainsKey(key))
                         {
@@ -53,7 +51,7 @@ public class CustomHeaderPlugin : LyWafPluginBase
                     }
                     return Task.CompletedTask;
                 });
-                
+
                 await next(context);
             });
         }

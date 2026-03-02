@@ -4454,6 +4454,7 @@ public static class ControlApi
                                  || pluginManager.GetPluginState(pluginId) == PluginState.Initialized,
                         isSystem = pluginManager.IsSystemPlugin(pluginId),
                         enabledByDefault = meta.EnabledByDefault,
+                        hasOptions = meta.DefaultOptions != null,
                     };
                 }).OrderBy(p => p.isSystem ? 0 : 1).ThenBy(p => p.name).ToList();
 
@@ -4520,16 +4521,28 @@ public static class ControlApi
                     return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
                 }
 
-                // 从 IConfiguration 读取 Plugins:{pluginId} 下的所有配置
-                var section = config.GetSection($"Plugins:{pluginId}");
-                var configDict = new Dictionary<string, string>();
-
-                foreach (var child in section.GetChildren())
+                // 1. 创建一个新的 Options 实例来获取原始默认值
+                //    （因为 Metadata.DefaultOptions 是运行时实例，已被 BindOptionsFromConfig 覆盖）
+                var defaults = new Dictionary<string, string>();
+                var defaultOptions = plugin.Metadata.DefaultOptions;
+                if (defaultOptions != null)
                 {
-                    FlattenConfigSection(child, child.Key, configDict);
+                    var freshDefaults = Activator.CreateInstance(defaultOptions.GetType());
+                    if (freshDefaults != null)
+                    {
+                        SerializeOptionsToFlat(freshDefaults, "", defaults);
+                    }
                 }
 
-                return Results.Json(new { success = true, pluginId, config = configDict });
+                // 2. 从运行时 DefaultOptions 实例序列化当前配置
+                //    （它就是运行时 Options，已被 BindOptionsFromConfig 绑定过）
+                var current = new Dictionary<string, string>();
+                if (defaultOptions != null)
+                {
+                    SerializeOptionsToFlat(defaultOptions, "", current);
+                }
+
+                return Results.Json(new { success = true, pluginId, config = current, defaults });
             }
             catch (Exception ex)
             {
@@ -4555,13 +4568,23 @@ public static class ControlApi
                     return Results.Json(new { success = false, message = "请求体不能为空" }, statusCode: 400);
                 }
 
-                return await ModifyPluginConfigPatch(config, pluginId, pluginConfigs =>
+                var result = await ModifyPluginConfigPatch(config, pluginId, pluginConfigs =>
                 {
                     // 将 flat key-value 转为嵌套结构后写入
                     var nested = FlatKeysToNestedDict(body);
                     pluginConfigs[pluginId] = nested;
                     return null;
                 });
+
+                // 配置已重载，同步绑定到 Metadata.DefaultOptions 实例上
+                // 注意：Bind() 对 List/Dictionary 是追加而非替换，必须先清空
+                if (plugin.Metadata.DefaultOptions != null)
+                {
+                    ClearCollectionProperties(plugin.Metadata.DefaultOptions);
+                    config.GetSection($"Plugins:{pluginId}").Bind(plugin.Metadata.DefaultOptions);
+                }
+
+                return result;
             }
             catch (Exception ex)
             {
@@ -4585,6 +4608,118 @@ public static class ControlApi
         foreach (var child in section.GetChildren())
         {
             FlattenConfigSection(child, $"{prefix}:{child.Key}", result);
+        }
+    }
+
+    /// <summary>
+    /// 清空对象上所有 List/Dictionary 属性，防止 Bind() 追加导致重复
+    /// </summary>
+    private static void ClearCollectionProperties(object obj)
+    {
+        if (obj == null) return;
+        foreach (var prop in obj.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            if (!prop.CanRead) continue;
+            object? value;
+            try { value = prop.GetValue(obj); } catch { continue; }
+            if (value is System.Collections.IList list)
+                list.Clear();
+            else if (value is System.Collections.IDictionary dict)
+                dict.Clear();
+        }
+    }
+
+    /// <summary>
+    /// 将 Options 对象实例的公共属性序列化为 flat key-value（支持嵌套对象、列表、字典）
+    /// 跳过仅有 setter 的别名属性（如 ConfigurationKeyName 别名）
+    /// </summary>
+    private static void SerializeOptionsToFlat(object obj, string prefix, Dictionary<string, string> result)
+    {
+        if (obj == null) return;
+        var type = obj.GetType();
+
+        foreach (var prop in type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            // 跳过只有 setter 没有 getter 的属性（别名属性）
+            if (!prop.CanRead) continue;
+            // 跳过 nullable setter-only 别名（getter 返回 null 的可空别名属性）
+            if (prop.PropertyType.IsGenericType &&
+                prop.PropertyType.GetGenericTypeDefinition() == typeof(Nullable<>) &&
+                !prop.CanWrite) continue;
+
+            // 跳过 set-only 别名属性（只有 set 没有真实 get）
+            var getter = prop.GetGetMethod();
+            if (getter == null) continue;
+
+            object? value;
+            try { value = prop.GetValue(obj); }
+            catch { continue; }
+
+            // 通过 ConfigurationKeyName 获取配置键名
+            var keyAttr = prop.GetCustomAttributes(typeof(Microsoft.Extensions.Configuration.ConfigurationKeyNameAttribute), false)
+                .FirstOrDefault() as Microsoft.Extensions.Configuration.ConfigurationKeyNameAttribute;
+            var key = keyAttr?.Name ?? prop.Name;
+
+            // 跳过别名属性（属性类型是 Nullable，且名称以 Alias 结尾）
+            if (prop.Name.EndsWith("Alias", StringComparison.Ordinal)) continue;
+
+            var fullKey = string.IsNullOrEmpty(prefix) ? key : $"{prefix}:{key}";
+
+            if (value == null)
+            {
+                continue;
+            }
+            else if (value is string s)
+            {
+                result[fullKey] = s;
+            }
+            else if (value is bool b)
+            {
+                result[fullKey] = b ? "true" : "false";
+            }
+            else if (value is int or long or float or double or decimal)
+            {
+                result[fullKey] = value.ToString() ?? "";
+            }
+            else if (value is System.Collections.IList list)
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var item = list[i];
+                    if (item is string || item?.GetType().IsPrimitive == true)
+                    {
+                        result[$"{fullKey}:{i}"] = item?.ToString() ?? "";
+                    }
+                    else if (item != null)
+                    {
+                        SerializeOptionsToFlat(item, $"{fullKey}:{i}", result);
+                    }
+                }
+            }
+            else if (value is System.Collections.IDictionary dict)
+            {
+                foreach (System.Collections.DictionaryEntry entry in dict)
+                {
+                    var entryKey = entry.Key?.ToString() ?? "";
+                    var entryVal = entry.Value;
+                    if (entryVal is string || entryVal?.GetType().IsPrimitive == true)
+                    {
+                        result[$"{fullKey}:{entryKey}"] = entryVal?.ToString() ?? "";
+                    }
+                    else if (entryVal != null)
+                    {
+                        SerializeOptionsToFlat(entryVal, $"{fullKey}:{entryKey}", result);
+                    }
+                }
+            }
+            else if (value.GetType().IsClass)
+            {
+                SerializeOptionsToFlat(value, fullKey, result);
+            }
+            else
+            {
+                result[fullKey] = value.ToString() ?? "";
+            }
         }
     }
 

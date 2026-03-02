@@ -765,6 +765,7 @@ export interface PluginItem {
   isEnabled: boolean
   isSystem: boolean
   enabledByDefault: boolean
+  hasOptions: boolean
 }
 
 export interface PluginsResponse {
@@ -776,6 +777,7 @@ export interface PluginConfigResponse {
   success: boolean
   pluginId: string
   config: Record<string, string>
+  defaults: Record<string, string>
 }
 
 export const pluginApi = {
