@@ -3,6 +3,12 @@ import type { RouteRecordRaw } from 'vue-router'
 
 const routes: RouteRecordRaw[] = [
   {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/Login.vue'),
+    meta: { title: '登录' }
+  },
+  {
     path: '/',
     name: 'Dashboard',
     component: () => import('@/views/Dashboard.vue'),
@@ -83,6 +89,25 @@ const router = createRouter({
 
 router.beforeEach((to, _from, next) => {
   document.title = `${to.meta.title || 'LyWaf'} - LyWaf 控制面板`
+
+  const token = localStorage.getItem('lywaf_token')
+
+  // 登录页：已登录则跳到首页
+  if (to.path === '/login') {
+    if (token) {
+      next('/')
+    } else {
+      next()
+    }
+    return
+  }
+
+  // 其他页面：未登录则跳转登录
+  if (!token) {
+    next('/login')
+    return
+  }
+
   next()
 })
 

@@ -9,6 +9,7 @@ using LyWaf.Services.Statistic;
 using LyWaf.Services.WafInfo;
 using LyWaf.Config;
 using LyWaf.Plugins.Core;
+using LyWaf.Services.Auth;
 using LyWaf.Shared;
 using LyWaf.Utils;
 using Microsoft.Extensions.FileProviders;
@@ -139,6 +140,142 @@ public static class ControlApi
             // 返回 SPA index.html
             return Results.Content(GetIndexHtml(), "text/html; charset=utf-8");
         }).RequireHost($"*:{controlPort}");
+
+        // =============== 认证端点（免认证） ===============
+
+        app.MapPost("/api/auth/login", async (HttpContext ctx) =>
+        {
+            var authService = ctx.RequestServices.GetRequiredService<IAuthService>();
+            var request = await ctx.Request.ReadFromJsonAsync<LoginRequest>();
+            if (request == null || string.IsNullOrEmpty(request.Username) || string.IsNullOrEmpty(request.PasswordHash))
+            {
+                return Results.Json(new { success = false, message = "用户名和密码不能为空" }, statusCode: 400);
+            }
+            var result = authService.Login(request.Username, request.PasswordHash, request.Timestamp);
+            if (!result.Success)
+            {
+                return Results.Json(new
+                {
+                    success = false,
+                    message = result.Message ?? "用户名或密码错误",
+                    retryAfterSeconds = result.RetryAfterSeconds
+                }, statusCode: 401);
+            }
+            return Results.Json(new
+            {
+                success = true,
+                token = result.Token,
+                username = result.Username,
+                expiresAt = result.ExpiresAt
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapGet("/api/auth/time", (HttpContext ctx) =>
+        {
+            var authService = ctx.RequestServices.GetRequiredService<IAuthService>();
+            return Results.Json(new { timestamp = authService.GetServerTimestamp() });
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapGet("/api/auth/check", () =>
+        {
+            return Results.Json(new { success = true, authRequired = true });
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== JWT 认证中间件 ===============
+
+        app.Use(async (context, next) =>
+        {
+            // 仅对控制端口生效
+            if (context.Connection.LocalPort != controlPort)
+            {
+                await next();
+                return;
+            }
+
+            var path = context.Request.Path.Value ?? "";
+
+            // 跳过非 API 路径（静态文件、SPA 页面）
+            if (!path.StartsWith("/api/"))
+            {
+                await next();
+                return;
+            }
+
+            // 跳过免认证端点
+            if (path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals("/api/auth/time", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals("/api/auth/check", StringComparison.OrdinalIgnoreCase))
+            {
+                await next();
+                return;
+            }
+
+            // 验证 JWT Token
+            var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
+            if (authHeader == null || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                context.Response.StatusCode = 401;
+                await context.Response.WriteAsJsonAsync(new { success = false, message = "未授权访问" });
+                return;
+            }
+
+            var token = authHeader["Bearer ".Length..];
+            var authService = context.RequestServices.GetRequiredService<IAuthService>();
+            if (!authService.ValidateToken(token))
+            {
+                context.Response.StatusCode = 401;
+                await context.Response.WriteAsJsonAsync(new { success = false, message = "令牌无效或已过期" });
+                return;
+            }
+
+            await next();
+        });
+
+        // =============== 认证端点（需认证） ===============
+
+        app.MapPost("/api/auth/refresh", (HttpContext ctx) =>
+        {
+            var authService = ctx.RequestServices.GetRequiredService<IAuthService>();
+            var authHeader = ctx.Request.Headers.Authorization.FirstOrDefault();
+            var token = authHeader?["Bearer ".Length..] ?? "";
+            var result = authService.RefreshToken(token);
+            if (!result.Success)
+            {
+                return Results.Json(new { success = false, message = "刷新令牌失败" }, statusCode: 401);
+            }
+            return Results.Json(new { success = true, token = result.Token, expiresAt = result.ExpiresAt });
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapGet("/api/auth/me", (HttpContext ctx) =>
+        {
+            var authService = ctx.RequestServices.GetRequiredService<IAuthService>();
+            var authHeader = ctx.Request.Headers.Authorization.FirstOrDefault();
+            var token = authHeader?["Bearer ".Length..] ?? "";
+            var username = authService.GetUsername(token);
+            return Results.Json(new { success = true, username });
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapPost("/api/auth/change-password", async (HttpContext ctx) =>
+        {
+            var authService = ctx.RequestServices.GetRequiredService<IAuthService>();
+            var request = await ctx.Request.ReadFromJsonAsync<ChangePasswordRequest>();
+            if (request == null || string.IsNullOrEmpty(request.CurrentPassword) || string.IsNullOrEmpty(request.NewPassword))
+            {
+                return Results.Json(new { success = false, message = "密码不能为空" }, statusCode: 400);
+            }
+            if (request.NewPassword.Length < 6)
+            {
+                return Results.Json(new { success = false, message = "新密码长度至少6位" }, statusCode: 400);
+            }
+            var ok = authService.ChangePassword(request.CurrentPassword, request.NewPassword);
+            if (!ok)
+            {
+                return Results.Json(new { success = false, message = "当前密码错误" }, statusCode: 400);
+            }
+            return Results.Json(new { success = true, message = "密码修改成功" });
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 业务 API（以下均受认证保护） ===============
 
         // API 耗时统计数据列表
         app.MapGet("/api/timing/list", (HttpContext ctx) =>
@@ -5786,4 +5923,19 @@ public class PluginConfigUpdateRequest
 {
     public string PluginId { get; set; } = "";
     public Dictionary<string, string> Config { get; set; } = new();
+}
+
+public class LoginRequest
+{
+    public string Username { get; set; } = "";
+    /// <summary>SHA256(SHA256(password) + timestamp)</summary>
+    public string PasswordHash { get; set; } = "";
+    /// <summary>客户端时间戳（Unix 秒，经服务器时间校准）</summary>
+    public long Timestamp { get; set; }
+}
+
+public class ChangePasswordRequest
+{
+    public string CurrentPassword { get; set; } = "";
+    public string NewPassword { get; set; } = "";
 }

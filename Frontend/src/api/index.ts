@@ -17,10 +17,27 @@ const http = axios.create({
   },
 })
 
-// 响应拦截器 - 直接返回 data
+// 请求拦截器 - 注入 JWT Token
+http.interceptors.request.use((config) => {
+  const token = localStorage.getItem('lywaf_token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+// 响应拦截器 - 直接返回 data，401 自动跳转登录
 http.interceptors.response.use(
   (response) => response.data,
   (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('lywaf_token')
+      localStorage.removeItem('lywaf_username')
+      if (!window.location.hash.includes('/login')) {
+        window.location.hash = '#/login'
+      }
+      return Promise.reject(error)
+    }
     // 如果服务端返回了 JSON body（如 400），直接返回 data 让业务层处理
     if (error.response?.data) {
       return error.response.data
@@ -792,6 +809,32 @@ export const pluginApi = {
 
   saveConfig: (pluginId: string, config: Record<string, string>) =>
     api.post<ApiResponse>(`/plugins/${encodeURIComponent(pluginId)}/config`, config),
+}
+
+// ==================== 认证 API ====================
+
+export const authApi = {
+  /** 登录：发送 SHA256(SHA256(password) + timestamp) + timestamp */
+  login: (username: string, passwordHash: string, timestamp: number) =>
+    axios.post('/api/auth/login', { username, passwordHash, timestamp }).then(r => r.data) as Promise<{
+      success: boolean; token?: string; username?: string; expiresAt?: string; message?: string; retryAfterSeconds?: number
+    }>,
+
+  /** 获取服务器 Unix 时间戳（秒），用于校准客户端时间 */
+  time: () =>
+    axios.get('/api/auth/time').then(r => r.data) as Promise<{ timestamp: number }>,
+
+  check: () =>
+    api.get<{ success: boolean; authRequired: boolean }>('/auth/check'),
+
+  refresh: () =>
+    api.post<{ success: boolean; token?: string; expiresAt?: string }>('/auth/refresh'),
+
+  me: () =>
+    api.get<{ success: boolean; username: string }>('/auth/me'),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    api.post<ApiResponse>('/auth/change-password', { currentPassword, newPassword }),
 }
 
 export default http

@@ -1077,6 +1077,9 @@ public class Program
         // 注册错误模板服务
         builder.Services.AddSingleton<LyWaf.Services.ErrorTemplate.IErrorTemplateService, LyWaf.Services.ErrorTemplate.ErrorTemplateService>();
 
+        // 注册认证服务
+        builder.Services.AddSingleton<LyWaf.Services.Auth.IAuthService, LyWaf.Services.Auth.AuthService>();
+
         // 注册插件系统
         builder.Services.AddLyWafPlugins(builder.Configuration);
 
@@ -1174,6 +1177,10 @@ public class Program
         // 初始化插件系统
         var pluginManager = app.Services.GetRequiredService<PluginManager>();
         pluginManager.InitializePluginsAsync(app.Services).GetAwaiter().GetResult();
+
+        // 初始化认证服务（加载或创建 .lywaf.auth.json）
+        var authService = app.Services.GetRequiredService<LyWaf.Services.Auth.IAuthService>();
+        authService.Initialize();
 
         // 注册控制台 API
         app.MapControlApi(wafInfos);
