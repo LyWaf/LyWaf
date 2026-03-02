@@ -752,4 +752,44 @@ export const dashboardApi = {
     api.get<DashboardResponse>('/dashboard'),
 }
 
+// ==================== 插件管理 API ====================
+
+export interface PluginItem {
+  id: string
+  name: string
+  version: string
+  description: string
+  author: string
+  priority: string
+  state: string
+  isEnabled: boolean
+  isSystem: boolean
+  enabledByDefault: boolean
+}
+
+export interface PluginsResponse {
+  success: boolean
+  plugins: PluginItem[]
+}
+
+export interface PluginConfigResponse {
+  success: boolean
+  pluginId: string
+  config: Record<string, string>
+}
+
+export const pluginApi = {
+  getPlugins: () =>
+    api.get<PluginsResponse>('/plugins'),
+
+  togglePlugin: (pluginId: string) =>
+    api.post<ApiResponse & { state: string; isEnabled: boolean }>('/plugins/toggle', { pluginId }),
+
+  getConfig: (pluginId: string) =>
+    api.get<PluginConfigResponse>(`/plugins/${encodeURIComponent(pluginId)}/config`),
+
+  saveConfig: (pluginId: string, config: Record<string, string>) =>
+    api.post<ApiResponse>(`/plugins/${encodeURIComponent(pluginId)}/config`, config),
+}
+
 export default http

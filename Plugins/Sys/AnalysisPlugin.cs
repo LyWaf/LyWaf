@@ -56,8 +56,6 @@ public class AnalysisPlugin : LyWafPluginBase
         _workerThread = new Thread(DoWork);
         _workerThread.Start();
 
-
-
         return base.StartAsync(cancellationToken);
     }
 

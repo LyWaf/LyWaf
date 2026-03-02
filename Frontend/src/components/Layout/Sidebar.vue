@@ -29,6 +29,7 @@ const menuItems: MenuItem[] = [
       { path: '/simpleres-config', name: '简单响应' },
     ]
   },
+  { path: '/plugin-management', name: '插件管理', icon: '🧩' },
 ]
 
 // 展开状态：默认展开「配置管理」

@@ -68,6 +68,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/SimpleResConfig.vue'),
     meta: { title: '简单响应', icon: '💬' }
   },
+  {
+    path: '/plugin-management',
+    name: 'PluginManagement',
+    component: () => import('@/views/PluginManagement.vue'),
+    meta: { title: '插件管理', icon: '🧩' }
+  },
 ]
 
 const router = createRouter({

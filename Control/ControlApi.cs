@@ -8,6 +8,7 @@ using LyWaf.Services.SpeedLimit;
 using LyWaf.Services.Statistic;
 using LyWaf.Services.WafInfo;
 using LyWaf.Config;
+using LyWaf.Plugins.Core;
 using LyWaf.Shared;
 using LyWaf.Utils;
 using Microsoft.Extensions.FileProviders;
@@ -4122,7 +4123,7 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
-        // 新增简单响应配置（通过补丁）
+        // 新增或更新简单响应配置（通过补丁），存在则自动更新
         app.MapPost("/api/simpleres/add", async (HttpContext ctx, IConfiguration config) =>
         {
             try
@@ -4133,49 +4134,82 @@ public static class ControlApi
                     return Results.Json(new { success = false, message = "ItemId 不能为空" }, statusCode: 400);
                 }
 
-                var existing = config.GetSection($"SimpleRes:Items:{request.ItemId}");
-                if (existing.Exists())
-                {
-                    return Results.Json(new { success = false, message = $"简单响应 {request.ItemId} 已存在" }, statusCode: 400);
-                }
-
                 return await ModifySimpleResPatch(config, simpleres =>
                 {
-                    if (simpleres.ContainsKey(request.ItemId))
-                        return $"简单响应 {request.ItemId} 已存在于补丁中";
+                    Dictionary<string, object> itemPatch;
+                    // 已存在于补丁中 → 在原有基础上更新
+                    if (simpleres.TryGetValue(request.ItemId, out var existObj))
+                    {
+                        if (existObj is System.Text.Json.JsonElement je)
+                            itemPatch = JsonElementToDict(je);
+                        else if (existObj is Dictionary<string, object> dict)
+                            itemPatch = dict;
+                        else
+                            itemPatch = new Dictionary<string, object>();
+                    }
+                    // 已存在于原始配置 → 快照到补丁再更新
+                    else if (config.GetSection($"SimpleRes:Items:{request.ItemId}").Exists())
+                    {
+                        itemPatch = new Dictionary<string, object>();
+                        var section = config.GetSection($"SimpleRes:Items:{request.ItemId}");
+                        var body = section["Body"]; if (body != null) itemPatch["Body"] = body;
+                        var ct = section["ContentType"]; if (ct != null) itemPatch["ContentType"] = ct;
+                        var sc = section["StatusCode"]; if (sc != null && int.TryParse(sc, out var scv)) itemPatch["StatusCode"] = scv;
+                        var cs = section["Charset"]; if (cs != null) itemPatch["Charset"] = cs;
+                        var srq = section["ShowReq"]; if (srq != null) itemPatch["ShowReq"] = bool.TryParse(srq, out var srv) && srv;
 
-                    var item = new Dictionary<string, object>();
-                    if (request.Body != null) item["Body"] = request.Body;
-                    if (request.ContentType != null) item["ContentType"] = request.ContentType;
-                    if (request.StatusCode.HasValue) item["StatusCode"] = request.StatusCode.Value;
-                    if (request.Charset != null) item["Charset"] = request.Charset;
-                    if (request.ShowReq.HasValue) item["ShowReq"] = request.ShowReq.Value;
-                    if (request.Headers != null && request.Headers.Count > 0)
-                        item["Headers"] = request.Headers.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
+                        var headersSection = section.GetSection("Headers");
+                        var hDict = new Dictionary<string, object>();
+                        foreach (var h in headersSection.GetChildren())
+                        {
+                            if (h.Value != null) hDict[h.Key] = h.Value;
+                        }
+                        if (hDict.Count > 0) itemPatch["Headers"] = hDict;
+                    }
+                    // 全新项
+                    else
+                    {
+                        itemPatch = new Dictionary<string, object>();
+                    }
 
-                    simpleres[request.ItemId] = item;
+                    // 应用字段
+                    if (request.Body != null) itemPatch["Body"] = request.Body;
+                    if (request.ContentType != null) itemPatch["ContentType"] = request.ContentType;
+                    if (request.StatusCode.HasValue) itemPatch["StatusCode"] = request.StatusCode.Value;
+                    if (request.Charset != null) itemPatch["Charset"] = request.Charset;
+                    if (request.ShowReq.HasValue) itemPatch["ShowReq"] = request.ShowReq.Value;
+                    if (request.Headers != null)
+                    {
+                        if (request.Headers.Count > 0)
+                            itemPatch["Headers"] = request.Headers.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
+                        else
+                            itemPatch.Remove("Headers");
+                    }
+
+                    simpleres[request.ItemId] = itemPatch;
                     return null;
                 });
             }
             catch (Exception ex)
             {
-                return Results.Json(new { success = false, message = $"新增简单响应失败: {ex.Message}" }, statusCode: 500);
+                return Results.Json(new { success = false, message = $"保存简单响应失败: {ex.Message}" }, statusCode: 500);
             }
         }).RequireHost($"*:{controlPort}");
 
-        // 更新简单响应配置（通过补丁）
+        // 兼容旧接口：/api/simpleres/update 转发到 /api/simpleres/add 同一逻辑
         app.MapPost("/api/simpleres/update", async (HttpContext ctx, IConfiguration config) =>
         {
             try
             {
-                var request = await ctx.Request.ReadFromJsonAsync<UpdateSimpleResRequest>();
+                var request = await ctx.Request.ReadFromJsonAsync<AddSimpleResRequest>();
                 if (request == null || string.IsNullOrEmpty(request.ItemId))
                 {
                     return Results.Json(new { success = false, message = "ItemId 不能为空" }, statusCode: 400);
                 }
 
-                var itemSection = config.GetSection($"SimpleRes:Items:{request.ItemId}");
-                if (!itemSection.Exists())
+                // 更新接口要求项必须已存在
+                var existing = config.GetSection($"SimpleRes:Items:{request.ItemId}");
+                if (!existing.Exists())
                 {
                     return Results.Json(new { success = false, message = $"简单响应 {request.ItemId} 不存在" }, statusCode: 400);
                 }
@@ -4194,7 +4228,6 @@ public static class ControlApi
                     }
                     else
                     {
-                        // 快照当前配置到补丁
                         itemPatch = new Dictionary<string, object>();
                         var section = config.GetSection($"SimpleRes:Items:{request.ItemId}");
                         var body = section["Body"]; if (body != null) itemPatch["Body"] = body;
@@ -4212,7 +4245,6 @@ public static class ControlApi
                         if (hDict.Count > 0) itemPatch["Headers"] = hDict;
                     }
 
-                    // 应用更新
                     if (request.Body != null) itemPatch["Body"] = request.Body;
                     if (request.ContentType != null) itemPatch["ContentType"] = request.ContentType;
                     if (request.StatusCode.HasValue) itemPatch["StatusCode"] = request.StatusCode.Value;
@@ -4399,7 +4431,252 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // =============== 插件管理 API ===============
+
+        app.MapGet("/api/plugins", (IPluginManager pluginManager) =>
+        {
+            try
+            {
+                var plugins = pluginManager.GetAllPlugins().Select(p =>
+                {
+                    var meta = p.Metadata;
+                    var pluginId = meta.Id;
+                    return new
+                    {
+                        id = pluginId,
+                        name = meta.Name,
+                        version = meta.Version,
+                        description = meta.Description,
+                        author = meta.Author,
+                        priority = meta.Priority.ToString(),
+                        state = pluginManager.GetPluginState(pluginId).ToString(),
+                        isEnabled = pluginManager.GetPluginState(pluginId) == PluginState.Running
+                                 || pluginManager.GetPluginState(pluginId) == PluginState.Initialized,
+                        isSystem = pluginManager.IsSystemPlugin(pluginId),
+                        enabledByDefault = meta.EnabledByDefault,
+                    };
+                }).OrderBy(p => p.isSystem ? 0 : 1).ThenBy(p => p.name).ToList();
+
+                return Results.Json(new { success = true, plugins });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"获取插件列表失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapPost("/api/plugins/toggle", async (HttpContext ctx, IPluginManager pluginManager) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<PluginToggleRequest>();
+                if (request == null || string.IsNullOrEmpty(request.PluginId))
+                {
+                    return Results.Json(new { success = false, message = "PluginId 不能为空" }, statusCode: 400);
+                }
+
+                var plugin = pluginManager.GetPlugin(request.PluginId);
+                if (plugin == null)
+                {
+                    return Results.Json(new { success = false, message = $"插件 {request.PluginId} 不存在" }, statusCode: 404);
+                }
+
+                var currentState = pluginManager.GetPluginState(request.PluginId);
+                var isRunning = currentState == PluginState.Running || currentState == PluginState.Initialized;
+
+                if (isRunning)
+                {
+                    await pluginManager.DisablePluginAsync(request.PluginId);
+                }
+                else
+                {
+                    await pluginManager.EnablePluginAsync(request.PluginId);
+                }
+
+                var newState = pluginManager.GetPluginState(request.PluginId);
+                return Results.Json(new
+                {
+                    success = true,
+                    message = isRunning ? "插件已禁用" : "插件已启用",
+                    state = newState.ToString(),
+                    isEnabled = newState == PluginState.Running || newState == PluginState.Initialized,
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"切换插件状态失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 插件配置读取 ===============
+
+        app.MapGet("/api/plugins/{pluginId}/config", (string pluginId, IConfiguration config, IPluginManager pluginManager) =>
+        {
+            try
+            {
+                var plugin = pluginManager.GetPlugin(pluginId);
+                if (plugin == null)
+                {
+                    return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
+                }
+
+                // 从 IConfiguration 读取 Plugins:{pluginId} 下的所有配置
+                var section = config.GetSection($"Plugins:{pluginId}");
+                var configDict = new Dictionary<string, string>();
+
+                foreach (var child in section.GetChildren())
+                {
+                    FlattenConfigSection(child, child.Key, configDict);
+                }
+
+                return Results.Json(new { success = true, pluginId, config = configDict });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"获取插件配置失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 插件配置更新 ===============
+
+        app.MapPost("/api/plugins/{pluginId}/config", async (string pluginId, HttpContext ctx, IConfiguration config, IPluginManager pluginManager) =>
+        {
+            try
+            {
+                var plugin = pluginManager.GetPlugin(pluginId);
+                if (plugin == null)
+                {
+                    return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
+                }
+
+                var body = await ctx.Request.ReadFromJsonAsync<Dictionary<string, string>>();
+                if (body == null)
+                {
+                    return Results.Json(new { success = false, message = "请求体不能为空" }, statusCode: 400);
+                }
+
+                return await ModifyPluginConfigPatch(config, pluginId, pluginConfigs =>
+                {
+                    // 将 flat key-value 转为嵌套结构后写入
+                    var nested = FlatKeysToNestedDict(body);
+                    pluginConfigs[pluginId] = nested;
+                    return null;
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"保存插件配置失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         return app;
+    }
+
+    /// <summary>
+    /// 递归展平 IConfigurationSection 为 flat key-value
+    /// </summary>
+    private static void FlattenConfigSection(IConfigurationSection section, string prefix, Dictionary<string, string> result)
+    {
+        if (section.Value != null)
+        {
+            result[prefix] = section.Value;
+        }
+
+        foreach (var child in section.GetChildren())
+        {
+            FlattenConfigSection(child, $"{prefix}:{child.Key}", result);
+        }
+    }
+
+    /// <summary>
+    /// 将 flat key-value (如 "MaxWidth" → "2048", "SupportedFormats:0" → "jpg") 转为嵌套字典
+    /// </summary>
+    private static Dictionary<string, object> FlatKeysToNestedDict(Dictionary<string, string> flat)
+    {
+        var result = new Dictionary<string, object>();
+        foreach (var (key, value) in flat)
+        {
+            var parts = key.Split(':');
+            SetNestedValue(result, parts, 0, value);
+        }
+
+        // 将纯数字 key 的字典转为数组
+        return ConvertIndexedDictsToArrays(result);
+    }
+
+    private static void SetNestedValue(Dictionary<string, object> dict, string[] parts, int index, string value)
+    {
+        if (index == parts.Length - 1)
+        {
+            dict[parts[index]] = value;
+            return;
+        }
+
+        var key = parts[index];
+        if (!dict.TryGetValue(key, out var existing) || existing is not Dictionary<string, object> nested)
+        {
+            nested = new Dictionary<string, object>();
+            dict[key] = nested;
+        }
+        SetNestedValue(nested, parts, index + 1, value);
+    }
+
+    /// <summary>
+    /// 如果一个字典的所有 key 都是连续数字 (0, 1, 2, ...)，则转成 List
+    /// </summary>
+    private static Dictionary<string, object> ConvertIndexedDictsToArrays(Dictionary<string, object> dict)
+    {
+        var result = new Dictionary<string, object>();
+        foreach (var (key, val) in dict)
+        {
+            if (val is Dictionary<string, object> nested)
+            {
+                var converted = ConvertIndexedDictsToArrays(nested);
+                // 检查是否所有 key 是数字索引
+                if (converted.Count > 0 && converted.Keys.All(k => int.TryParse(k, out _)))
+                {
+                    var list = converted.OrderBy(kv => int.Parse(kv.Key)).Select(kv => kv.Value).ToList();
+                    result[key] = list;
+                }
+                else
+                {
+                    result[key] = converted;
+                }
+            }
+            else
+            {
+                result[key] = val;
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// 修改补丁文件中的 PluginConfigs 节点
+    /// </summary>
+    private static async Task<IResult> ModifyPluginConfigPatch(IConfiguration config, string pluginId,
+        Func<Dictionary<string, object>, string?> modifier)
+    {
+        await _lbPatchLock.WaitAsync();
+        try
+        {
+            var patch = await ReadPatchFile();
+            var pluginConfigs = EnsurePatchSection(patch, "PluginConfigs");
+
+            var error = modifier(pluginConfigs);
+            if (error != null)
+            {
+                return Results.Json(new { success = false, message = error }, statusCode: 400);
+            }
+
+            UpdatePatchSourceTracking(patch);
+            await SavePatchAndReload(patch, config);
+            return Results.Json(new { success = true, message = "插件配置已更新" });
+        }
+        finally
+        {
+            _lbPatchLock.Release();
+        }
     }
 
     // =============== 配置来源检测辅助方法 ===============
@@ -5363,4 +5640,15 @@ public class UpdateSimpleResRequest
 public class RemoveSimpleResRequest
 {
     public string ItemId { get; set; } = "";
+}
+
+public class PluginToggleRequest
+{
+    public string PluginId { get; set; } = "";
+}
+
+public class PluginConfigUpdateRequest
+{
+    public string PluginId { get; set; } = "";
+    public Dictionary<string, string> Config { get; set; } = new();
 }

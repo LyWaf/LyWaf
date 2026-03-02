@@ -114,17 +114,29 @@ const submitListen = async () => {
   }
 }
 
-const deleteListen = async (listen: ListenInfo) => {
+const confirmDeleteListen = ref<ListenInfo | null>(null)
+const deletingListen = ref(false)
+
+const deleteListen = (listen: ListenInfo) => {
   if (listen.source !== 'patch') { showError('原始配置中的监听不能在此删除'); return }
+  confirmDeleteListen.value = listen
+}
+
+const executeDeleteListen = async () => {
+  const listen = confirmDeleteListen.value
+  if (!listen) return
+  deletingListen.value = true
   try {
     const res = await listenApi.remove({ host: listen.host, port: listen.port })
     if (!res.success) { showError(res.message || '删除失败'); return }
     showSuccess('监听端口已删除')
+    confirmDeleteListen.value = null
     await loadData()
-    // 弹出重启确认
     showRestartConfirm.value = true
   } catch (error: any) {
     showError(error?.response?.data?.message || error?.message || '删除失败')
+  } finally {
+    deletingListen.value = false
   }
 }
 
@@ -1270,6 +1282,30 @@ onMounted(() => {
               <button @click="confirmDeleteRoute = null" class="btn btn-sm btn-secondary">取消</button>
               <button @click="executeDelete" :disabled="!!deleting" class="btn btn-sm bg-red-600 hover:bg-red-500 text-white flex items-center gap-1.5">
                 <span v-if="deleting" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+                <span>确认删除</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ============== 删除端口确认对话框 ============== -->
+    <Teleport to="body">
+      <div v-if="confirmDeleteListen" class="fixed inset-0 z-[100] flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/60" @click="confirmDeleteListen = null"></div>
+        <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-sm mx-4">
+          <div class="p-5">
+            <h3 class="text-base font-semibold text-gray-100 mb-3">确认删除监听端口</h3>
+            <p class="text-sm text-gray-400 mb-1">确定要删除以下监听端口吗？删除后需要重启才能生效。</p>
+            <p class="font-mono text-sm text-gray-300 mb-4 bg-dark-sidebar rounded px-3 py-2 border border-dark-border">
+              {{ confirmDeleteListen.host }}:{{ confirmDeleteListen.port }}
+              <span v-if="confirmDeleteListen.isHttps" class="text-green-400 ml-1">(HTTPS)</span>
+            </p>
+            <div class="flex justify-end gap-2">
+              <button @click="confirmDeleteListen = null" class="btn btn-sm btn-secondary">取消</button>
+              <button @click="executeDeleteListen" :disabled="deletingListen" class="btn btn-sm bg-red-600 hover:bg-red-500 text-white flex items-center gap-1.5">
+                <span v-if="deletingListen" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
                 <span>确认删除</span>
               </button>
             </div>

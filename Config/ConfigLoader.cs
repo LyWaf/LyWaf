@@ -556,6 +556,17 @@ public class LbPatchProvider : ConfigurationProvider
                 }
             }
 
+            // 加载 PluginConfigs 补丁（插件配置）
+            if (root.TryGetProperty("PluginConfigs", out var pluginConfigsEl))
+            {
+                foreach (var plugin in pluginConfigsEl.EnumerateObject())
+                {
+                    // 映射到 Plugins:{pluginId}:{key} 路径，与 GetPluginConfig<T> 读取路径一致
+                    var pluginPrefix = $"Plugins:{plugin.Name}";
+                    FlattenJsonElement(pluginPrefix, plugin.Value);
+                }
+            }
+
             if (Data.Count > 0)
             {
                 _logger.Info("补丁已加载: {Path} ({Count} 个配置项)", patchPath, Data.Count);
