@@ -530,6 +530,38 @@ export const patchApi = {
     api.post<ApiResponse>('/patch/clear', {}),
 }
 
+// ==================== 错误模板 API ====================
+
+export interface ErrorTemplateItem {
+  statusCode: number
+  hasOriginal: boolean
+  hasEdit: boolean
+}
+
+export interface ErrorTemplateDetail {
+  success: boolean
+  statusCode: number
+  editContent: string | null
+  originalContent: string | null
+  hasEdit: boolean
+  hasOriginal: boolean
+  activeContent: string
+}
+
+export const errorTemplateApi = {
+  list: () =>
+    api.get<{ success: boolean; templates: ErrorTemplateItem[] }>('/error-templates'),
+
+  get: (statusCode: number) =>
+    api.get<ErrorTemplateDetail>(`/error-templates/${statusCode}`),
+
+  save: (statusCode: number, content: string) =>
+    api.post<ApiResponse>(`/error-templates/${statusCode}`, { content }),
+
+  revert: (statusCode: number) =>
+    api.post<ApiResponse>(`/error-templates/${statusCode}/revert`),
+}
+
 // ==================== 配置概览 API ====================
 
 export const overviewApi = {

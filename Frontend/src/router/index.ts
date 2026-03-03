@@ -80,6 +80,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/PluginManagement.vue'),
     meta: { title: '插件管理', icon: '🧩' }
   },
+  {
+    path: '/error-templates',
+    name: 'ErrorTemplates',
+    component: () => import('@/views/ErrorTemplates.vue'),
+    meta: { title: '错误模板', icon: '🚫' }
+  },
 ]
 
 const router = createRouter({

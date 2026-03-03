@@ -89,6 +89,18 @@ public class ErrorTemplateService : IErrorTemplateService
 
     private async Task<string> GetRawTemplateAsync(int statusCode, ErrorTemplateConfig config)
     {
+        // 优先检查 .lywaf.{statusCode}.html 编辑版本（无条件覆盖任何配置）
+        var editPath = GetEditFilePath(statusCode);
+        var editCacheKey = $"edit:{statusCode}";
+        if (File.Exists(editPath))
+        {
+            if (_templateCache.TryGetValue(editCacheKey, out var editCached))
+                return editCached;
+            var editContent = await File.ReadAllTextAsync(editPath);
+            _templateCache[editCacheKey] = editContent;
+            return editContent;
+        }
+
         switch (config.Type)
         {
             case TemplateType.File when !string.IsNullOrEmpty(config.FilePath):
@@ -115,6 +127,22 @@ public class ErrorTemplateService : IErrorTemplateService
             default:
                 return GetDefaultTemplate(statusCode);
         }
+    }
+
+    /// <summary>
+    /// 获取编辑版模板文件路径：templates/.lywaf.{statusCode}.html
+    /// </summary>
+    public string GetEditFilePath(int statusCode)
+    {
+        return Path.Combine(_projectRoot, "templates", $".lywaf.{statusCode}.html");
+    }
+
+    /// <summary>
+    /// 获取原始模板文件路径：templates/{statusCode}.html
+    /// </summary>
+    public string GetOriginalFilePath(int statusCode)
+    {
+        return Path.Combine(_projectRoot, "templates", $"{statusCode}.html");
     }
 
     private string ReplaceVariables(string template, HttpContext context, int statusCode, Dictionary<string, string?>? inputValues)

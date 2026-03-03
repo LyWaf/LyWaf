@@ -151,7 +151,7 @@ public abstract class LyWafPluginBase : ILyWafPlugin
                 .GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)
                 .First(m => m.Name == "Configure" && m.IsGenericMethodDefinition
                     && m.GetParameters().Length == 2
-                    && m.GetParameters()[1].ParameterType == typeof(IConfigurationSection))
+                    && m.GetParameters()[1].ParameterType == typeof(IConfiguration))
                 .MakeGenericMethod(options.GetType())
                 .Invoke(null, [services, section]);
         }
