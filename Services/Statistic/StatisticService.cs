@@ -2,7 +2,6 @@
 using System.IO.Compression;
 using System.Net.Http;
 using System.Threading.RateLimiting;
-using LyWaf.Services.WafInfo;
 using LyWaf.Utils;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
@@ -76,7 +75,6 @@ public interface IStatisticService
 public class StatisticService : IStatisticService
 {
     private StatisticOptions _options;
-    private WafInfoOptions _wafInfoOptions;
     private readonly IMemoryCache _cache;
     private readonly ILogger<StatisticService> _logger;
 
@@ -106,25 +104,16 @@ public class StatisticService : IStatisticService
     private const int HAS_ALL = HAS_ANY | HAS_MATCH | HAS_FULL;
 
     public StatisticService(
-        IOptionsMonitor<StatisticOptions> options, IOptionsMonitor<WafInfoOptions> wafInfoOptions,
+        IOptionsMonitor<StatisticOptions> options,
         IServiceProvider _serviceProvider, IConfiguration configuration, IMemoryCache cache,
         ILogger<StatisticService> logger)
     {
         _options = options.CurrentValue;
-        _wafInfoOptions = wafInfoOptions.CurrentValue;
         // 可以订阅变更，但需注意生命周期和内存泄漏
         options.OnChange(newConfig =>
         {
             _options = newConfig;
             BuildStatistic();
-            lock (_advancedCcRuleLock)
-            {
-                RebuildAdvancedCcRulesCache();
-            }
-        });
-        wafInfoOptions.OnChange(newConfig =>
-        {
-            _wafInfoOptions = newConfig;
             lock (_advancedCcRuleLock)
             {
                 RebuildAdvancedCcRulesCache();
@@ -389,7 +378,7 @@ public class StatisticService : IStatisticService
         var allRules = new List<AdvancedCcRule>();
         // 合并配置规则，过滤已排除的
         allRules.AddRange(_options.AdvancedCcRules.Where(r => !_excludedCcRuleIds.Contains(r.Id)));
-        allRules.AddRange(_wafInfoOptions.CcRules.Where(r => !_excludedCcRuleIds.Contains(r.Id)));
+        allRules.AddRange(_options.CcRules.Where(r => !_excludedCcRuleIds.Contains(r.Id)));
         allRules.AddRange(_dynamicAdvancedCcRules);
         var sorted = allRules.OrderBy(r => r.Priority).ThenBy(r => r.CreatedAt).ToList();
         _cachedAdvancedCcRules = sorted;
@@ -422,7 +411,7 @@ public class StatisticService : IStatisticService
         lock (_advancedCcRuleLock)
         {
             return _options.AdvancedCcRules.FirstOrDefault(r => r.Id == ruleId)
-                ?? _wafInfoOptions.CcRules.FirstOrDefault(r => r.Id == ruleId)
+                ?? _options.CcRules.FirstOrDefault(r => r.Id == ruleId)
                 ?? _dynamicAdvancedCcRules.FirstOrDefault(r => r.Id == ruleId);
         }
     }
@@ -440,7 +429,7 @@ public class StatisticService : IStatisticService
             // 检查是否已存在相同 ID 的规则
             if (_dynamicAdvancedCcRules.Any(r => r.Id == rule.Id) ||
                 _options.AdvancedCcRules.Any(r => r.Id == rule.Id) ||
-                _wafInfoOptions.CcRules.Any(r => r.Id == rule.Id))
+                _options.CcRules.Any(r => r.Id == rule.Id))
                 return false;
             
             // 确保有唯一 ID
@@ -478,7 +467,7 @@ public class StatisticService : IStatisticService
 
             // 如果在配置规则中存在，则添加到动态规则（覆盖）
             if (_options.AdvancedCcRules.Any(r => r.Id == rule.Id) ||
-                _wafInfoOptions.CcRules.Any(r => r.Id == rule.Id))
+                _options.CcRules.Any(r => r.Id == rule.Id))
             {
                 _dynamicAdvancedCcRules.Add(rule);
                 RebuildAdvancedCcRulesCache();
@@ -508,7 +497,7 @@ public class StatisticService : IStatisticService
 
             // 如果是配置中的规则，添加到排除列表
             if (_options.AdvancedCcRules.Any(r => r.Id == ruleId) ||
-                _wafInfoOptions.CcRules.Any(r => r.Id == ruleId))
+                _options.CcRules.Any(r => r.Id == ruleId))
             {
                 if (_excludedCcRuleIds.Add(ruleId))
                 {
@@ -543,9 +532,9 @@ public class StatisticService : IStatisticService
                 return true;
             }
 
-            // 在配置规则中查找（Statistic 和 WafInfos），需要复制到动态规则中修改
+            // 在配置规则中查找，需要复制到动态规则中修改
             var configRule = _options.AdvancedCcRules.FirstOrDefault(r => r.Id == ruleId)
-                ?? _wafInfoOptions.CcRules.FirstOrDefault(r => r.Id == ruleId);
+                ?? _options.CcRules.FirstOrDefault(r => r.Id == ruleId);
             if (configRule != null)
             {
                 // 创建一个副本并修改

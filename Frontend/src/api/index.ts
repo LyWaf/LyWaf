@@ -51,6 +51,8 @@ http.interceptors.response.use(
 type UnwrappedAxios = {
   get: <T>(url: string, config?: object) => Promise<T>
   post: <T>(url: string, data?: object, config?: object) => Promise<T>
+  put: <T>(url: string, data?: object, config?: object) => Promise<T>
+  delete: <T>(url: string, config?: object) => Promise<T>
 }
 
 const api = http as unknown as UnwrappedAxios
@@ -560,6 +562,18 @@ export const errorTemplateApi = {
 
   revert: (statusCode: number) =>
     api.post<ApiResponse>(`/error-templates/${statusCode}/revert`),
+}
+
+// ==================== WAF 自定义规则 API ====================
+
+export const wafRuleApi = {
+  list: () => api.get('/waf-rules'),
+  get: (id: string) => api.get(`/waf-rules/${id}`),
+  create: (rule: Record<string, unknown>) => api.post('/waf-rules', rule),
+  update: (id: string, rule: Record<string, unknown>) => api.put(`/waf-rules/${id}`, rule),
+  delete: (id: string) => api.delete(`/waf-rules/${id}`),
+  toggle: (id: string) => api.post(`/waf-rules/${id}/toggle`),
+  enums: () => api.get('/waf-rules/enums'),
 }
 
 // ==================== 配置概览 API ====================

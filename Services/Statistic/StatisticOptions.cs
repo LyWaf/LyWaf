@@ -10,9 +10,14 @@ public class StatisticOptions
     public List<LimitCcOption> LimitCc { get; set; } = [];
     
     /// <summary>
-    /// 高级 CC 规则列表
+    /// 高级 CC 规则列表（后台动态配置）
     /// </summary>
     public List<AdvancedCcRule> AdvancedCcRules { get; set; } = [];
+
+    /// <summary>
+    /// CC 防护规则列表（config.ly 中 Statistic.CcRules 块配置）
+    /// </summary>
+    public List<AdvancedCcRule> CcRules { get; set; } = [];
     public const string MATCH = "{**match}";
     public const string ANY = "{**any}";
     public const string CONNECT = "/C/";

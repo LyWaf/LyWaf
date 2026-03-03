@@ -35,17 +35,30 @@ LyLog {
     }
 }
 
-CcRules {
-    rule1 {
-        Type = FrequentAccess
-        Period = 100
-        Threshold = 4
-        Action = Captcha
-        ActionSeconds = 60
-        Priority = 1
-        Conditions {
-            UrlPath StartsWith ["/api/", "/v2/"]
-            Method Equal ["POST", "GET"]
+protect {
+    CcRules {
+        rule1 {
+            Type = FrequentAccess
+            Period = 100
+            Threshold = 4
+            Action = Captcha
+            ActionSeconds = 60
+            Priority = 1
+            Conditions {
+                UrlPath StartsWith ["/api/", "/v2/"]
+                Method Equal ["POST", "GET"]
+            }
+        }
+    }
+
+    WafRules {
+        block-admin-post {
+            Name = "拦截 admin POST 请求"
+            Action = Reject
+            Conditions = [
+                { Field = UriPath;  Operator = StartsWith; Value = "/admin" },
+                { Field = Method;   Operator = Equal;      Value = "POST"   },
+            ]
         }
     }
 }

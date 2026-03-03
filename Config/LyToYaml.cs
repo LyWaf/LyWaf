@@ -2111,12 +2111,17 @@ public static class LyToAppSettingsConverter
                 ProcessErrorTemplateConfig(value, result);
                 break;
 
-            case "ccrules":
-            case "cc_rules":
-            case "ccprotection":
-            case "cc_protection":
-                // CC 防护规则配置 → WafInfos.CcRules
-                ProcessCcRulesConfig(value, wafInfos);
+            case "protect":
+            case "protection":
+                // 防护配置（包含 WafRules 等子块）
+                ProcessProtectConfig(value, result, wafInfos);
+                break;
+
+            case "statistic":
+            case "statistics":
+            case "stat":
+                // 统计配置（含 CcRules 等子块）
+                ProcessStatisticConfig(value, result);
                 break;
 
             default:
@@ -3400,8 +3405,90 @@ public static class LyToAppSettingsConverter
     }
 
     /// <summary>
+    /// 处理 Protect 块（防护配置），提取 WafRules 子块
+    /// <para>
+    /// config.ly 格式：
+    /// <code>
+    /// Protect {
+    ///     OpenArgsCheck = true
+    ///     WafRules { ... }
+    /// }
+    /// </code>
+    /// </para>
+    /// </summary>
+    private static void ProcessProtectConfig(
+        object value,
+        Dictionary<string, object> result,
+        Dictionary<string, object> wafInfos)
+    {
+        if (value is not Dictionary<string, object> protectConfig)
+            return;
+
+        var protectDict = new Dictionary<string, object>();
+
+        foreach (var kv in protectConfig)
+        {
+            switch (kv.Key.ToLower())
+            {
+                case "wafrules" or "waf_rules":
+                    // WafRules 直接透传，IConfiguration 路径: Protect:WafRules:*
+                    protectDict["WafRules"] = kv.Value;
+                    break;
+
+                default:
+                    // 其他 Protect 属性（OpenArgsCheck、MaxRequestBodySize 等）
+                    var normalizedKey = char.ToUpper(kv.Key[0]) + kv.Key[1..];
+                    protectDict[normalizedKey] = kv.Value;
+                    break;
+            }
+        }
+
+        result["Protect"] = protectDict;
+    }
+
+    /// <summary>
+    /// 处理 Statistic 块（统计 + CC 防护配置，顶级独立块）
+    /// <para>
+    /// config.ly 格式：
+    /// <code>
+    /// Statistic {
+    ///     WhitePaths = ["/health", "/favicon.ico"]
+    ///     CcRules {
+    ///         频繁访问限制 { Type = FrequentAccess; Period = 10; Threshold = 100 }
+    ///     }
+    /// }
+    /// </code>
+    /// </para>
+    /// </summary>
+    private static void ProcessStatisticConfig(object value, Dictionary<string, object> result)
+    {
+        if (value is not Dictionary<string, object> statConfig)
+            return;
+
+        var statDict = new Dictionary<string, object>();
+
+        foreach (var kv in statConfig)
+        {
+            switch (kv.Key.ToLower())
+            {
+                case "ccrules" or "cc_rules" or "ccprotection" or "cc_protection":
+                    // CcRules 需要特殊转换（命名块→列表）
+                    ProcessCcRulesConfig(kv.Value, statDict);
+                    break;
+
+                default:
+                    var normalizedKey = char.ToUpper(kv.Key[0]) + kv.Key[1..];
+                    statDict[normalizedKey] = kv.Value;
+                    break;
+            }
+        }
+
+        result["Statistic"] = statDict;
+    }
+
+    /// <summary>
     /// 处理 CC 防护规则配置
-    /// 以规则名称为 key，规则详情为子块，转换为 WafInfos.CcRules 列表
+    /// 以规则名称为 key，规则详情为子块，转换为 CcRules 列表
     ///
     /// 支持格式：
     /// CcRules {

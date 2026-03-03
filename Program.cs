@@ -37,6 +37,7 @@ using LyWaf.Services.ProxyServer;
 using LyWaf.Services.StreamServer;
 using LyWaf.Services.ABTest;
 using LyWaf.Services.Captcha;
+using LyWaf.Services.WafRule;
 using LyWaf.Config;
 using LyWaf.Shared;
 
@@ -1088,6 +1089,7 @@ public class Program
         builder.Services.AddSingleton<ICaptchaService, CaptchaService>();
         builder.Services.AddSingleton<ICcRuleChecker, CcRuleChecker>();
         builder.Services.AddSingleton<IAccessControlService, AccessControlService>();
+        builder.Services.AddSingleton<IWafRuleService, WafRuleService>();
         builder.Services.AddSingleton<IWafInfoService, WafInfoService>();
         builder.Services.AddSingleton<IAcmeService, AcmeService>();
         builder.Services.AddHostedService(sp => (AcmeService)sp.GetRequiredService<IAcmeService>());
@@ -1220,6 +1222,10 @@ public class Program
         // 初始化认证服务（加载或创建 .lywaf.auth.json）
         var authService = app.Services.GetRequiredService<LyWaf.Services.Auth.IAuthService>();
         authService.Initialize();
+
+        // 初始化 WAF 自定义规则服务（加载 .lywaf.rules.json）
+        var wafRuleService = app.Services.GetRequiredService<IWafRuleService>();
+        wafRuleService.Initialize();
 
         // 注册控制台 API
         app.MapControlApi(wafInfos);

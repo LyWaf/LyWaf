@@ -338,6 +338,48 @@ export interface OverviewData {
   timestamp: string
 }
 
+// =============== WAF 自定义规则类型 ===============
+
+export type WafMatchField = 'UriPath' | 'FullUrl' | 'QueryString' | 'Method'
+  | 'ClientIp' | 'XForwardedFor' | 'UserAgent' | 'Referer'
+  | 'ContentType' | 'ContentLength' | 'Cookie' | 'Header'
+  | 'QueryParam' | 'Body' | 'ServerPort'
+
+export type WafMatchOperator = 'Equal' | 'NotEqual' | 'Contains' | 'NotContains'
+  | 'StartsWith' | 'EndsWith' | 'Regex' | 'Exists' | 'NotExists'
+  | 'LengthGreaterThan' | 'LengthLessThan'
+
+export type WafRuleAction = 'Observe' | 'Block' | 'Reject' | 'Captcha'
+
+export type WafRuleSource = 'User' | 'Config' | 'System'
+
+export interface WafCondition {
+  field: WafMatchField
+  fieldName?: string
+  operator: WafMatchOperator
+  value: string
+  ignoreCase: boolean
+}
+
+export interface WafConditionGroup {
+  conditions: WafCondition[]
+}
+
+export interface WafCustomRule {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  priority: number
+  source?: WafRuleSource
+  conditionGroups: WafConditionGroup[]
+  action: WafRuleAction
+  actionSeconds: number
+  responseCode: number
+  createdAt: string
+  updatedAt?: string
+}
+
 // 仪表板数据
 export interface DashboardData {
   system: SystemStatus

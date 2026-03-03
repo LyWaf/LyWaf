@@ -2,6 +2,7 @@
 using LyWaf.Services.LyLog;
 using LyWaf.Services.Protect;
 using LyWaf.Services.Statistic;
+using LyWaf.Services.WafRule;
 using LyWaf.Utils;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http.Features;
@@ -9,7 +10,7 @@ using NLog;
 
 namespace LyWaf.Middleware;
 
-public class WafControlMiddleware(RequestDelegate next, IStatisticService statisticService, IProtectService protectService, ILyLogService logService, ICcRuleChecker ccRuleChecker)
+public class WafControlMiddleware(RequestDelegate next, IStatisticService statisticService, IProtectService protectService, ILyLogService logService, ICcRuleChecker ccRuleChecker, IWafRuleService wafRuleService)
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly RequestDelegate _next = next;
@@ -17,6 +18,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
     private readonly IProtectService protectService = protectService;
     private readonly ILyLogService _logService = logService;
     private readonly ICcRuleChecker _ccRuleChecker = ccRuleChecker;
+    private readonly IWafRuleService _wafRuleService = wafRuleService;
     public async Task<bool> WhitePathCheck(HttpContext context)
     {
         var path = await statisticService.GetMatchPath(context.Request.Path);
@@ -84,10 +86,24 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             {
                 // WAF Post 攻击检测，标记为攻击
                 _ccRuleChecker.RecordAttackEvent(clientIp); // 记录攻击事件用于 CC 高频攻击检测
-                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason }, 
+                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason },
                     isAttack: true, eventType: Shared.SecurityEventType.WafIntercept);
                 return;
             }
+
+            // ── 自定义 WAF 规则检查（用户规则 + 配置规则 + 系统规则）──
+            var ruleResult = _wafRuleService.CheckRequest(context, clientIp);
+            if (ruleResult.IsTriggered)
+            {
+                if (ruleResult.Action != WafRuleAction.Observe)
+                {
+                    await _wafRuleService.ExecuteAction(context, ruleResult, clientIp);
+                    return;
+                }
+                // Observe：仅记录，继续管道
+                await _wafRuleService.ExecuteAction(context, ruleResult, clientIp);
+            }
+
             await _next(context);
         }
         catch (BadHttpRequestException e)

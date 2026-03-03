@@ -10,6 +10,7 @@ using LyWaf.Services.WafInfo;
 using LyWaf.Config;
 using LyWaf.Plugins.Core;
 using LyWaf.Services.Auth;
+using LyWaf.Services.WafRule;
 using LyWaf.Shared;
 using LyWaf.Utils;
 using Microsoft.Extensions.FileProviders;
@@ -443,6 +444,169 @@ public static class ControlApi
             {
                 return Results.Json(new { success = false, message = $"恢复模板失败: {ex.Message}" }, statusCode: 500);
             }
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== WAF 自定义规则管理 API ===============
+
+        // 获取所有枚举选项（前端下拉框用）
+        app.MapGet("/api/waf-rules/enums", (HttpContext ctx) =>
+        {
+            return Results.Json(new
+            {
+                success = true,
+                fields = Enum.GetValues<WafMatchField>().Select(e => new { name = e.ToString(), label = GetFieldLabel(e) }),
+                operators = Enum.GetValues<WafMatchOperator>().Select(e => new { name = e.ToString(), label = GetOperatorLabel(e) }),
+                actions = Enum.GetValues<WafRuleAction>().Select(e => new { name = e.ToString(), label = GetActionLabel(e) }),
+                sources = Enum.GetValues<WafRuleSource>().Select(e => new { name = e.ToString(), label = GetSourceLabel(e) }),
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 获取所有规则（合并三个来源：用户 > 配置 > 系统）
+        app.MapGet("/api/waf-rules", (HttpContext ctx, IWafRuleService wafRuleService) =>
+        {
+            var rules = wafRuleService.GetRules();
+            return Results.Json(new
+            {
+                success = true,
+                count = rules.Count,
+                rules = rules.Select(r => new
+                {
+                    id = r.Id,
+                    name = r.Name,
+                    description = r.Description,
+                    enabled = r.Enabled,
+                    priority = r.Priority,
+                    source = r.Source.ToString(),
+                    conditionGroups = r.ConditionGroups.Select(g => new
+                    {
+                        conditions = g.Conditions.Select(c => new
+                        {
+                            field = c.Field.ToString(),
+                            fieldName = c.FieldName,
+                            @operator = c.Operator.ToString(),
+                            value = c.Value,
+                            ignoreCase = c.IgnoreCase,
+                        }),
+                    }),
+                    action = r.Action.ToString(),
+                    actionSeconds = r.ActionSeconds,
+                    responseCode = r.ResponseCode,
+                    createdAt = r.CreatedAt,
+                    updatedAt = r.UpdatedAt,
+                }),
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 获取单条规则
+        app.MapGet("/api/waf-rules/{id}", (string id, IWafRuleService wafRuleService) =>
+        {
+            var rule = wafRuleService.GetRule(id);
+            if (rule == null)
+                return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
+            return Results.Json(new
+            {
+                success = true,
+                rule = new
+                {
+                    id = rule.Id,
+                    name = rule.Name,
+                    description = rule.Description,
+                    enabled = rule.Enabled,
+                    priority = rule.Priority,
+                    source = rule.Source.ToString(),
+                    conditionGroups = rule.ConditionGroups.Select(g => new
+                    {
+                        conditions = g.Conditions.Select(c => new
+                        {
+                            field = c.Field.ToString(),
+                            fieldName = c.FieldName,
+                            @operator = c.Operator.ToString(),
+                            value = c.Value,
+                            ignoreCase = c.IgnoreCase,
+                        }),
+                    }),
+                    action = rule.Action.ToString(),
+                    actionSeconds = rule.ActionSeconds,
+                    responseCode = rule.ResponseCode,
+                    createdAt = rule.CreatedAt,
+                    updatedAt = rule.UpdatedAt,
+                },
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 创建规则
+        app.MapPost("/api/waf-rules", async (HttpContext ctx, IWafRuleService wafRuleService) =>
+        {
+            try
+            {
+                var rule = await ctx.Request.ReadFromJsonAsync<WafCustomRule>();
+                if (rule == null || string.IsNullOrWhiteSpace(rule.Name))
+                    return Results.Json(new { success = false, message = "规则名称不能为空" }, statusCode: 400);
+
+                // 兼容旧版：如果传了 conditions 但没传 conditionGroups，自动迁移
+                rule.MigrateFromLegacy();
+                // 解析枚举（前端传的是字符串）
+                ParseRuleEnums(ctx, rule);
+
+                if (wafRuleService.AddRule(rule))
+                    return Results.Json(new { success = true, message = "规则已创建", id = rule.Id });
+                return Results.Json(new { success = false, message = "创建失败" }, statusCode: 400);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"创建失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 更新规则（仅用户规则可编辑）
+        app.MapPut("/api/waf-rules/{id}", async (string id, HttpContext ctx, IWafRuleService wafRuleService) =>
+        {
+            try
+            {
+                // 检查来源：非用户规则不可编辑
+                var existing = wafRuleService.GetRule(id);
+                if (existing != null && existing.Source != WafRuleSource.User)
+                    return Results.Json(new { success = false, message = "非用户规则不可编辑" }, statusCode: 403);
+
+                var rule = await ctx.Request.ReadFromJsonAsync<WafCustomRule>();
+                if (rule == null)
+                    return Results.Json(new { success = false, message = "无效的规则数据" }, statusCode: 400);
+                rule.Id = id;
+                rule.MigrateFromLegacy();
+                ParseRuleEnums(ctx, rule);
+
+                if (wafRuleService.UpdateRule(rule))
+                    return Results.Json(new { success = true, message = "规则已更新" });
+                return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"更新失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除规则（仅用户规则可删除）
+        app.MapDelete("/api/waf-rules/{id}", (string id, IWafRuleService wafRuleService) =>
+        {
+            // 检查来源：非用户规则不可删除
+            var existing = wafRuleService.GetRule(id);
+            if (existing != null && existing.Source != WafRuleSource.User)
+                return Results.Json(new { success = false, message = "非用户规则不可删除" }, statusCode: 403);
+
+            if (wafRuleService.DeleteRule(id))
+                return Results.Json(new { success = true, message = "规则已删除" });
+            return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
+        }).RequireHost($"*:{controlPort}");
+
+        // 切换启用状态
+        app.MapPost("/api/waf-rules/{id}/toggle", (string id, IWafRuleService wafRuleService) =>
+        {
+            if (wafRuleService.ToggleRule(id))
+            {
+                var rule = wafRuleService.GetRule(id);
+                return Results.Json(new { success = true, enabled = rule?.Enabled, message = rule?.Enabled == true ? "规则已启用" : "规则已禁用" });
+            }
+            return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
         }).RequireHost($"*:{controlPort}");
 
         // API 耗时统计数据列表
@@ -5789,6 +5953,72 @@ public static class ControlApi
             dict[child.Key] = GetSectionValue(child);
         }
         return dict;
+    }
+
+    // =============== WAF 自定义规则辅助方法 ===============
+
+    private static string GetFieldLabel(WafMatchField field) => field switch
+    {
+        WafMatchField.UriPath => "URL 路径",
+        WafMatchField.FullUrl => "完整 URL",
+        WafMatchField.QueryString => "查询字符串",
+        WafMatchField.Method => "HTTP 方法",
+        WafMatchField.ClientIp => "客户端 IP",
+        WafMatchField.XForwardedFor => "X-Forwarded-For",
+        WafMatchField.UserAgent => "User-Agent",
+        WafMatchField.Referer => "Referer",
+        WafMatchField.ContentType => "Content-Type",
+        WafMatchField.ContentLength => "Content-Length",
+        WafMatchField.Cookie => "Cookie",
+        WafMatchField.Header => "请求头",
+        WafMatchField.QueryParam => "查询参数",
+        WafMatchField.Body => "请求体",
+        WafMatchField.ServerPort => "服务端口",
+        _ => field.ToString()
+    };
+
+    private static string GetOperatorLabel(WafMatchOperator op) => op switch
+    {
+        WafMatchOperator.Equal => "等于",
+        WafMatchOperator.NotEqual => "不等于",
+        WafMatchOperator.Contains => "包含",
+        WafMatchOperator.NotContains => "不包含",
+        WafMatchOperator.StartsWith => "前缀匹配",
+        WafMatchOperator.EndsWith => "后缀匹配",
+        WafMatchOperator.Regex => "正则匹配",
+        WafMatchOperator.Exists => "存在",
+        WafMatchOperator.NotExists => "不存在",
+        WafMatchOperator.LengthGreaterThan => "长度大于",
+        WafMatchOperator.LengthLessThan => "长度小于",
+        _ => op.ToString()
+    };
+
+    private static string GetActionLabel(WafRuleAction action) => action switch
+    {
+        WafRuleAction.Observe => "观察",
+        WafRuleAction.Block => "封禁 IP",
+        WafRuleAction.Reject => "拦截",
+        WafRuleAction.Captcha => "人机验证",
+        _ => action.ToString()
+    };
+
+    private static string GetSourceLabel(WafRuleSource source) => source switch
+    {
+        WafRuleSource.User => "用户规则",
+        WafRuleSource.Config => "配置规则",
+        WafRuleSource.System => "系统规则",
+        _ => source.ToString()
+    };
+
+    /// <summary>
+    /// 解析 WAF 规则中的枚举字段（前端传字符串，需要转为枚举）
+    /// ReadFromJsonAsync 会自动处理大部分情况，此方法仅做安全兜底
+    /// </summary>
+    private static void ParseRuleEnums(HttpContext ctx, WafCustomRule rule)
+    {
+        // System.Text.Json 的 JsonStringEnumConverter 未全局注册时做兜底
+        // 此处不做处理，因为 WafCustomRule 使用枚举类型，
+        // ReadFromJsonAsync 的默认 JsonSerializerOptions 支持数字和字符串两种枚举解析
     }
 }
 
