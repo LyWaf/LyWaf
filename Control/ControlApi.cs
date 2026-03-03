@@ -210,25 +210,67 @@ public static class ControlApi
                 return;
             }
 
-            // 验证 JWT Token
+            // 验证身份：支持 Bearer Token 和 Basic Auth（curl 快速鉴权）
             var authHeader = context.Request.Headers.Authorization.FirstOrDefault();
-            if (authHeader == null || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrEmpty(authHeader))
             {
                 context.Response.StatusCode = 401;
+                context.Response.Headers["WWW-Authenticate"] = "Basic realm=\"LyWaf\", Bearer";
                 await context.Response.WriteAsJsonAsync(new { success = false, message = "未授权访问" });
                 return;
             }
 
-            var token = authHeader["Bearer ".Length..];
             var authService = context.RequestServices.GetRequiredService<IAuthService>();
-            if (!authService.ValidateToken(token))
+
+            // Bearer Token 鉴权
+            if (authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             {
-                context.Response.StatusCode = 401;
-                await context.Response.WriteAsJsonAsync(new { success = false, message = "令牌无效或已过期" });
+                var token = authHeader["Bearer ".Length..];
+                if (!authService.ValidateToken(token))
+                {
+                    context.Response.StatusCode = 401;
+                    await context.Response.WriteAsJsonAsync(new { success = false, message = "令牌无效或已过期" });
+                    return;
+                }
+                await next();
                 return;
             }
 
-            await next();
+            // Basic Auth 鉴权（curl -u user:pass）
+            if (authHeader.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var encoded = authHeader["Basic ".Length..];
+                    var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+                    var colonIndex = decoded.IndexOf(':');
+                    if (colonIndex > 0)
+                    {
+                        var basicUser = decoded[..colonIndex];
+                        var basicPass = decoded[(colonIndex + 1)..];
+                        var result = authService.ValidateCredentials(basicUser, basicPass);
+                        if (result.Success)
+                        {
+                            await next();
+                            return;
+                        }
+                        // 验证失败，返回具体错误
+                        context.Response.StatusCode = 401;
+                        await context.Response.WriteAsJsonAsync(new
+                        {
+                            success = false,
+                            message = result.Message ?? "用户名或密码错误",
+                            retryAfterSeconds = result.RetryAfterSeconds
+                        });
+                        return;
+                    }
+                }
+                catch { /* Base64 解码失败，走到下面的 401 */ }
+            }
+
+            context.Response.StatusCode = 401;
+            context.Response.Headers["WWW-Authenticate"] = "Basic realm=\"LyWaf\", Bearer";
+            await context.Response.WriteAsJsonAsync(new { success = false, message = "无效的认证方式" });
         });
 
         // =============== 认证端点（需认证） ===============
@@ -4449,6 +4491,28 @@ public static class ControlApi
             catch (Exception ex)
             {
                 return Results.Json(new { success = false, message = $"删除简单响应补丁失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 清空所有补丁 ===============
+
+        app.MapPost("/api/patch/clear", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var patchPath = LbPatchConfig.GetPatchFilePath();
+                await File.WriteAllTextAsync(patchPath, "{}", Encoding.UTF8);
+
+                if (config is IConfigurationRoot configRoot)
+                {
+                    configRoot.Reload();
+                }
+
+                return Results.Json(new { success = true, message = "所有补丁已清除" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"清除补丁失败: {ex.Message}" }, statusCode: 500);
             }
         }).RequireHost($"*:{controlPort}");
 

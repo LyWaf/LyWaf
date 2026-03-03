@@ -26,8 +26,6 @@ public class AuthResult
 public class AuthConfig
 {
     public string Username { get; set; } = "LyWaf";
-    /// <summary>明文密码（方便管理员查看/重置）</summary>
-    public string Password { get; set; } = "";
     /// <summary>SHA256(password) hex，用于登录验证</summary>
     public string PasswordHash { get; set; } = "";
     public string JwtSecret { get; set; } = "";
@@ -74,6 +72,17 @@ public interface IAuthService
 
     /// <summary>获取服务器当前 Unix 时间戳（秒）</summary>
     long GetServerTimestamp();
+
+    /// <summary>
+    /// 直接验证用户名密码（用于 HTTP Basic Auth / curl 快速鉴权）。
+    /// 同样受暴力破解防护限制。
+    /// </summary>
+    AuthResult ValidateCredentials(string username, string password);
+
+    /// <summary>
+    /// 重置密码（CLI 命令行用）。生成新随机密码，打印到控制台。
+    /// </summary>
+    string ResetPassword();
 }
 
 /// <summary>
@@ -142,7 +151,6 @@ public class AuthService : IAuthService
         _config = new AuthConfig
         {
             Username = "LyWaf",
-            Password = password,
             PasswordHash = ComputeSha256(password),
             JwtSecret = Convert.ToBase64String(_jwtSecretBytes),
             TokenExpiryHours = 24,
@@ -320,6 +328,42 @@ public class AuthService : IAuthService
         };
     }
 
+    // =============== Basic Auth 直接鉴权（curl） ===============
+
+    /// <summary>
+    /// 直接验证用户名密码（HTTP Basic Auth），受暴力破解防护。
+    /// 验证成功返回 Success=true（不生成 token，仅放行请求）。
+    /// </summary>
+    public AuthResult ValidateCredentials(string username, string password)
+    {
+        // 检查暴力破解锁定
+        var lockoutSeconds = GetLockoutRemainingSeconds(username);
+        if (lockoutSeconds > 0)
+        {
+            return new AuthResult
+            {
+                Success = false,
+                Message = $"登录失败次数过多，请 {lockoutSeconds} 秒后再试",
+                RetryAfterSeconds = lockoutSeconds
+            };
+        }
+
+        if (!string.Equals(username, _config.Username, StringComparison.OrdinalIgnoreCase))
+        {
+            RecordLoginFailure(username);
+            return new AuthResult { Success = false, Message = "用户名或密码错误" };
+        }
+
+        if (ComputeSha256(password) != _config.PasswordHash)
+        {
+            RecordLoginFailure(username);
+            return new AuthResult { Success = false, Message = "用户名或密码错误" };
+        }
+
+        ResetLoginAttempts(username);
+        return new AuthResult { Success = true, Username = _config.Username };
+    }
+
     // =============== Token 验证 ===============
 
     public bool ValidateToken(string token)
@@ -379,18 +423,31 @@ public class AuthService : IAuthService
 
     public bool ChangePassword(string currentPassword, string newPassword)
     {
-        // 已认证接口，直接比较明文
-        if (currentPassword != _config.Password)
+        if (ComputeSha256(currentPassword) != _config.PasswordHash)
         {
             _logger.Warn("修改密码失败：当前密码错误");
             return false;
         }
 
-        _config.Password = newPassword;
         _config.PasswordHash = ComputeSha256(newPassword);
         SaveConfig();
         _logger.Info("用户 {Username} 修改了密码", _config.Username);
         return true;
+    }
+
+    // =============== 重置密码（CLI） ===============
+
+    public string ResetPassword()
+    {
+        var passwordChars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        var passwordBytes = RandomNumberGenerator.GetBytes(16);
+        var newPassword = new string(passwordBytes.Select(b => passwordChars[b % passwordChars.Length]).ToArray());
+
+        _config.PasswordHash = ComputeSha256(newPassword);
+        SaveConfig();
+
+        _logger.Info("用户 {Username} 的密码已通过命令行重置", _config.Username);
+        return newPassword;
     }
 
     // =============== 从 Token 提取用户名 ===============

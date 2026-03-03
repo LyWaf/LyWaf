@@ -522,6 +522,14 @@ export const configFileApi = {
     api.post<ConvertResponse>('/config/convert', { content }),
 }
 
+// ==================== 补丁 API ====================
+
+export const patchApi = {
+  /** 清除所有补丁 */
+  clearAll: () =>
+    api.post<ApiResponse>('/patch/clear', {}),
+}
+
 // ==================== 配置概览 API ====================
 
 export const overviewApi = {

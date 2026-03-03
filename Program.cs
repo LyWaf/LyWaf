@@ -57,7 +57,7 @@ public class Program
     static int Main(string[] args)
     {
         Console.WriteLine("欢迎使用LyWaf, 程序启动中!");
-        var parserResult = Parser.Default.ParseArguments<FileCommandOptions, ProxyCommandOptions, RunCommandOptions, StopCommandOptions, EnvironCommandOptions, ReloadCommandOptions, StartCommandOptions, ValidateCommandOptions, RespondCommandOptions>(args);
+        var parserResult = Parser.Default.ParseArguments<FileCommandOptions, ProxyCommandOptions, RunCommandOptions, StopCommandOptions, EnvironCommandOptions, ReloadCommandOptions, StartCommandOptions, ValidateCommandOptions, RespondCommandOptions, ResetCommandOptions>(args);
         parserResult.WithParsed<FileCommandOptions>(val =>
         {
             DoInitCommon(val);
@@ -96,6 +96,9 @@ public class Program
         {
             DoInitCommon(val);
             DoRespond(args, val);
+        }).WithParsed<ResetCommandOptions>(val =>
+        {
+            DoReset(val);
         });
         return 0;
     }
@@ -103,6 +106,42 @@ public class Program
     public static void DoInitCommon(CommonOptions common)
     {
         LogUtil.ConfigureNLog(Directory.GetCurrentDirectory(), common.AccessLog, common.ErrorLog, common.PerfLog);
+    }
+
+    /// <summary>
+    /// 重置命令分发（lywaf reset &lt;target&gt;）
+    /// </summary>
+    public static void DoReset(ResetCommandOptions options)
+    {
+        switch (options.Target.ToLowerInvariant())
+        {
+            case "password":
+                DoResetPassword();
+                break;
+            default:
+                Console.WriteLine($"未知的重置目标: {options.Target}");
+                Console.WriteLine("可用目标: password");
+                break;
+        }
+    }
+
+    /// <summary>
+    /// 重置控制台密码（lywaf reset password）
+    /// </summary>
+    public static void DoResetPassword()
+    {
+        var authService = new LyWaf.Services.Auth.AuthService();
+        authService.Initialize();
+        var newPassword = authService.ResetPassword();
+
+        Console.WriteLine();
+        Console.WriteLine("╔══════════════════════════════════════╗");
+        Console.WriteLine("║     控制台密码已重置                 ║");
+        Console.WriteLine("╠══════════════════════════════════════╣");
+        Console.WriteLine($"║  用户名: LyWaf                       ║");
+        Console.WriteLine($"║  新密码: {newPassword,-29}║");
+        Console.WriteLine("╚══════════════════════════════════════╝");
+        Console.WriteLine();
     }
 
     public static void DoStartProxy(string[] args, ProxyCommandOptions proxy)

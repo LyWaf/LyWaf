@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { configFileApi, serviceApi } from '@/api'
+import { configFileApi, serviceApi, patchApi } from '@/api'
 import { useToast } from '@/composables/useToast'
 
 const { showSuccess, showError } = useToast()
@@ -146,6 +146,27 @@ const handleKeydown = (e: KeyboardEvent) => {
   }
 }
 
+// 清除所有补丁
+const showClearPatchConfirm = ref(false)
+const clearingPatch = ref(false)
+
+const confirmClearPatch = async () => {
+  clearingPatch.value = true
+  try {
+    const res = await patchApi.clearAll() as unknown as { success: boolean; message?: string }
+    if (res?.success) {
+      showSuccess('所有补丁已清除')
+      showClearPatchConfirm.value = false
+    } else {
+      showError(res?.message || '清除补丁失败')
+    }
+  } catch {
+    showError('清除补丁失败，请检查网络连接')
+  } finally {
+    clearingPatch.value = false
+  }
+}
+
 onMounted(() => {
   loadFile()
 })
@@ -172,6 +193,10 @@ onMounted(() => {
           </span>
         </div>
         <div class="flex items-center gap-2">
+          <button @click="showClearPatchConfirm = true"
+            class="btn btn-sm text-xs text-red-400 border border-red-500/30 hover:bg-red-500/10 transition-colors">
+            清除所有补丁
+          </button>
           <button v-if="isDifferentFromOriginal" @click="restoreOriginal"
             class="btn btn-sm btn-secondary text-xs">
             恢复原始
@@ -290,6 +315,31 @@ onMounted(() => {
               class="btn btn-sm bg-amber-600 hover:bg-amber-500 text-white flex items-center gap-1.5">
               <span v-if="restarting" class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
               <span>{{ restarting ? '重启中...' : '立即重启' }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+    <!-- 清除补丁确认对话框 -->
+    <Teleport to="body">
+      <div v-if="showClearPatchConfirm" class="fixed inset-0 z-50 flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/60" @click="showClearPatchConfirm = false"></div>
+        <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
+          <h3 class="text-lg font-semibold text-gray-100 mb-2">清除所有补丁</h3>
+          <p class="text-sm text-gray-400 mb-4">
+            将清除通过控制台界面修改的所有运行时补丁（路由、集群、文件服务器、简单响应、监听端口等），恢复为配置文件中的原始状态。
+          </p>
+          <p class="text-sm text-red-400 mb-5">
+            此操作不可撤销，确定要继续吗？
+          </p>
+          <div class="flex justify-end gap-3">
+            <button @click="showClearPatchConfirm = false" class="btn btn-sm btn-secondary">
+              取消
+            </button>
+            <button @click="confirmClearPatch" :disabled="clearingPatch"
+              class="btn btn-sm bg-red-600 hover:bg-red-500 text-white flex items-center gap-1.5">
+              <span v-if="clearingPatch" class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
+              <span>{{ clearingPatch ? '清除中...' : '确认清除' }}</span>
             </button>
           </div>
         </div>

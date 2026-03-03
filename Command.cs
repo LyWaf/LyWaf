@@ -262,3 +262,16 @@ public class RespondCommandOptions: CommonOptions
     [Option("show-req", HelpText = "是否在响应体中显示所有请求头")]
     public bool ShowReq { get; set; } = false;
 }
+
+/// <summary>
+/// 重置子命令（lywaf reset password / lywaf reset config ...）
+/// </summary>
+[Verb("reset", HelpText = "重置操作（password: 重置密码）")]
+public class ResetCommandOptions
+{
+    /// <summary>
+    /// 要重置的目标：password
+    /// </summary>
+    [Value(0, MetaName = "target", Required = true, HelpText = "重置目标（password）")]
+    public string Target { get; set; } = "";
+}
