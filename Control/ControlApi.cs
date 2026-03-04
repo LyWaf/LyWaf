@@ -5163,7 +5163,17 @@ public static class ControlApi
                     SerializeOptionsToFlat(defaultOptions, "", current);
                 }
 
-                return Results.Json(new { success = true, pluginId, config = current, defaults });
+                // 3. 提取属性的中文标签
+                var labels = defaultOptions != null
+                    ? ExtractPropertyLabels(defaultOptions.GetType())
+                    : new Dictionary<string, string>();
+
+                // 4. 提取 List<T> 元素类型的字段默认值（用于前端推断字段类型和初始值）
+                var fieldDefaults = defaultOptions != null
+                    ? ExtractListElementDefaults(defaultOptions.GetType())
+                    : new Dictionary<string, string>();
+
+                return Results.Json(new { success = true, pluginId, config = current, defaults, labels, fieldDefaults });
             }
             catch (Exception ex)
             {
@@ -5536,6 +5546,105 @@ public static class ControlApi
                 result[fullKey] = value.ToString() ?? "";
             }
         }
+    }
+
+    /// <summary>
+    /// 从 Options 类型提取 [Description] 属性标签，用于前端显示中文名称
+    /// </summary>
+    private static Dictionary<string, string> ExtractPropertyLabels(Type type, string prefix = "")
+    {
+        var labels = new Dictionary<string, string>();
+        foreach (var prop in type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            if (!prop.CanRead) continue;
+            // 跳过别名属性
+            if (prop.Name.EndsWith("Alias", StringComparison.Ordinal)) continue;
+
+            var keyAttr = prop.GetCustomAttributes(typeof(Microsoft.Extensions.Configuration.ConfigurationKeyNameAttribute), false)
+                .FirstOrDefault() as Microsoft.Extensions.Configuration.ConfigurationKeyNameAttribute;
+            var key = keyAttr?.Name ?? prop.Name;
+            var fullKey = string.IsNullOrEmpty(prefix) ? key : $"{prefix}:{key}";
+
+            var descAttr = prop.GetCustomAttributes(typeof(System.ComponentModel.DescriptionAttribute), false)
+                .FirstOrDefault() as System.ComponentModel.DescriptionAttribute;
+            if (descAttr != null && !string.IsNullOrEmpty(descAttr.Description))
+            {
+                labels[fullKey] = descAttr.Description;
+            }
+
+            // 递归处理嵌套对象（非集合、非基元、非字符串）
+            var propType = prop.PropertyType;
+            if (propType.IsClass && propType != typeof(string)
+                && !typeof(System.Collections.IEnumerable).IsAssignableFrom(propType)
+                && !propType.IsGenericType)
+            {
+                foreach (var kv in ExtractPropertyLabels(propType, fullKey))
+                    labels[kv.Key] = kv.Value;
+            }
+
+            // List<T> 中 T 是带 [Description] 的对象类型时，提取 T 的属性标签
+            if (propType.IsGenericType && typeof(System.Collections.IList).IsAssignableFrom(propType))
+            {
+                var elementType = propType.GetGenericArguments()[0];
+                if (elementType.IsClass && elementType != typeof(string))
+                {
+                    foreach (var kv in ExtractPropertyLabels(elementType, fullKey))
+                        labels[kv.Key] = kv.Value;
+                }
+            }
+        }
+        return labels;
+    }
+
+    /// <summary>
+    /// 提取 List&lt;T&gt; 元素类型的属性默认值
+    /// 例如 List&lt;MatchRule&gt; → { "MatchRules:LogHeaders": "false", "MatchRules:LogDuration": "true", ... }
+    /// 用于前端推断字段类型（bool/string/int）和初始值
+    /// </summary>
+    private static Dictionary<string, string> ExtractListElementDefaults(Type type, string prefix = "")
+    {
+        var result = new Dictionary<string, string>();
+        foreach (var prop in type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            if (!prop.CanRead) continue;
+            if (prop.Name.EndsWith("Alias", StringComparison.Ordinal)) continue;
+
+            var keyAttr = prop.GetCustomAttributes(typeof(Microsoft.Extensions.Configuration.ConfigurationKeyNameAttribute), false)
+                .FirstOrDefault() as Microsoft.Extensions.Configuration.ConfigurationKeyNameAttribute;
+            var key = keyAttr?.Name ?? prop.Name;
+            var fullKey = string.IsNullOrEmpty(prefix) ? key : $"{prefix}:{key}";
+
+            var propType = prop.PropertyType;
+
+            // List<T> where T is a complex class
+            if (propType.IsGenericType && typeof(System.Collections.IList).IsAssignableFrom(propType))
+            {
+                var elementType = propType.GetGenericArguments()[0];
+                if (elementType.IsClass && elementType != typeof(string))
+                {
+                    // 创建一个 T 实例，序列化其默认值
+                    try
+                    {
+                        var defaultInstance = Activator.CreateInstance(elementType);
+                        if (defaultInstance != null)
+                        {
+                            SerializeOptionsToFlat(defaultInstance, fullKey, result);
+                        }
+                    }
+                    catch { /* 无法创建实例则跳过 */ }
+                }
+            }
+
+            // 递归处理嵌套对象
+            if (propType.IsClass && propType != typeof(string)
+                && !typeof(System.Collections.IEnumerable).IsAssignableFrom(propType)
+                && !propType.IsGenericType)
+            {
+                foreach (var kv in ExtractListElementDefaults(propType, fullKey))
+                    result[kv.Key] = kv.Value;
+            }
+        }
+        return result;
     }
 
     /// <summary>

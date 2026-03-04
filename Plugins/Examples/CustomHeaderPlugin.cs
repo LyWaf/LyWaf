@@ -64,9 +64,11 @@ public class CustomHeaderPlugin : LyWafPluginBase
 public class CustomHeaderOptions
 {
     /// <summary>是否启用</summary>
+    [System.ComponentModel.Description("启用")]
     public bool Enabled { get; set; } = true;
-    
+
     /// <summary>要添加的响应头</summary>
+    [System.ComponentModel.Description("响应头")]
     public Dictionary<string, string> Headers { get; set; } = new()
     {
         ["X-Powered-By"] = "LyWaf",

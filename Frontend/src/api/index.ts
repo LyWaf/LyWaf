@@ -849,6 +849,8 @@ export interface PluginConfigResponse {
   pluginId: string
   config: Record<string, string>
   defaults: Record<string, string>
+  labels?: Record<string, string>
+  fieldDefaults?: Record<string, string>
 }
 
 export const pluginApi = {

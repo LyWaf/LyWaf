@@ -49,6 +49,7 @@ public class ImageProcessOptions
 {
     /// <summary>是否启用</summary>
     [ConfigurationKeyName("Enabled")]
+    [System.ComponentModel.Description("启用")]
     public bool Enabled { get; set; } = true;
 
     // 别名：支持 Enable 作为 Enabled 的别名
@@ -57,6 +58,7 @@ public class ImageProcessOptions
 
     /// <summary>支持处理的图片格式</summary>
     [ConfigurationKeyName("SupportedFormats")]
+    [System.ComponentModel.Description("支持的图片格式")]
     public List<string> SupportedFormats { get; set; } = ["jpg", "jpeg", "png", "webp", "gif", "bmp"];
 
     // 别名：支持 Formats 作为 SupportedFormats 的别名
@@ -65,6 +67,7 @@ public class ImageProcessOptions
 
     /// <summary>默认输出格式</summary>
     [ConfigurationKeyName("DefaultOutputFormat")]
+    [System.ComponentModel.Description("默认输出格式")]
     public string DefaultOutputFormat { get; set; } = "webp";
 
     // 别名：支持 Format 和 OutputFormat
@@ -76,6 +79,7 @@ public class ImageProcessOptions
 
     /// <summary>默认输出质量 (1-100)</summary>
     [ConfigurationKeyName("DefaultQuality")]
+    [System.ComponentModel.Description("默认质量 (1-100)")]
     public int DefaultQuality { get; set; } = 85;
 
     // 别名：支持 Quality
@@ -84,18 +88,22 @@ public class ImageProcessOptions
 
     /// <summary>最大输出宽度</summary>
     [ConfigurationKeyName("MaxWidth")]
+    [System.ComponentModel.Description("最大宽度")]
     public int MaxWidth { get; set; } = 4096;
 
     /// <summary>最大输出高度</summary>
     [ConfigurationKeyName("MaxHeight")]
+    [System.ComponentModel.Description("最大高度")]
     public int MaxHeight { get; set; } = 4096;
 
     /// <summary>启用 URL 参数处理</summary>
     [ConfigurationKeyName("EnableUrlParams")]
+    [System.ComponentModel.Description("启用URL参数")]
     public bool EnableUrlParams { get; set; } = true;
 
     /// <summary>缓存处理后的图片（秒）</summary>
     [ConfigurationKeyName("CacheSeconds")]
+    [System.ComponentModel.Description("缓存时长(秒)")]
     public int CacheSeconds { get; set; } = 3600;
 
     // 别名：支持 Cache

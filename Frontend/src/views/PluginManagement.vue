@@ -14,13 +14,16 @@ const toggling = ref<string | null>(null)
 interface SimpleItem { type: 'simple'; key: string; value: string; defaultValue: string }
 interface ArrayItem  { type: 'array';  key: string; items: string[]; defaultItems: string[] }
 interface DictItem   { type: 'dict';   key: string; entries: { key: string; value: string }[]; defaultEntries: { key: string; value: string }[] }
-type ConfigItem = SimpleItem | ArrayItem | DictItem
+interface ObjArrayItem { type: 'object-array'; key: string; fields: string[]; items: Record<string, string>[]; defaultItems: Record<string, string>[]; fieldDefaultValues: Record<string, string> }
+type ConfigItem = SimpleItem | ArrayItem | DictItem | ObjArrayItem
 
 const editConfigVisible = ref(false)
 const editConfigPlugin = ref<PluginItem | null>(null)
 const editConfigLoading = ref(false)
 const editConfigSaving = ref(false)
 const editConfigItems = ref<ConfigItem[]>([])
+const editConfigLabels = ref<Record<string, string>>({})
+const editConfigFieldDefaults = ref<Record<string, string>>({})
 // 保存打开时的快照用于变更检测
 const editConfigSnapshot = ref('')
 
@@ -29,7 +32,7 @@ const hasConfigChanges = computed(() => {
 })
 
 // =============== flat → 结构化 ===============
-function parseFlatToStructured(flat: Record<string, string>, defaults: Record<string, string>): ConfigItem[] {
+function parseFlatToStructured(flat: Record<string, string>, defaults: Record<string, string>, labels: Record<string, string>, fieldDefaults: Record<string, string>): ConfigItem[] {
   // 按顶层 key 分组
   const groups = new Map<string, { sub: Map<string, string>; defSub: Map<string, string> }>()
 
@@ -37,7 +40,6 @@ function parseFlatToStructured(flat: Record<string, string>, defaults: Record<st
     for (const [fullKey, val] of Object.entries(source)) {
       const colonIdx = fullKey.indexOf(':')
       if (colonIdx === -1) {
-        // 简单 key
         if (!groups.has(fullKey)) groups.set(fullKey, { sub: new Map(), defSub: new Map() })
         groups.get(fullKey)![target].set('', val)
       } else {
@@ -54,24 +56,45 @@ function parseFlatToStructured(flat: Record<string, string>, defaults: Record<st
 
   const result: ConfigItem[] = []
 
-  // 按 defaults 顺序优先，再加 flat 中新增的
+  // 按 defaults 顺序优先，再加 flat 中新增的，最后从 labels 补充（保持声明顺序）
   const orderedKeys: string[] = []
   const seen = new Set<string>()
   for (const key of [...Object.keys(defaults), ...Object.keys(flat)]) {
     const topKey = key.indexOf(':') === -1 ? key : key.substring(0, key.indexOf(':'))
     if (!seen.has(topKey)) { seen.add(topKey); orderedKeys.push(topKey) }
   }
+  for (const key of Object.keys(labels)) {
+    const topKey = key.indexOf(':') === -1 ? key : key.substring(0, key.indexOf(':'))
+    if (!seen.has(topKey)) { seen.add(topKey); orderedKeys.push(topKey) }
+  }
 
   for (const topKey of orderedKeys) {
     const g = groups.get(topKey)
-    if (!g) continue
+    if (!g) {
+      // 无数据，检查 labels 是否暗示对象数组（如空的 List<MatchRule>）
+      const childFields: string[] = []
+      for (const labelKey of Object.keys(labels)) {
+        if (labelKey.startsWith(topKey + ':')) {
+          const field = labelKey.substring(topKey.length + 1)
+          if (!field.includes(':')) childFields.push(field)
+        }
+      }
+      if (childFields.length > 0 && labels[topKey]) {
+        // 从 fieldDefaults 提取此对象数组的字段默认值
+        const fDefs: Record<string, string> = {}
+        for (const f of childFields) {
+          const fdKey = `${topKey}:${f}`
+          if (fdKey in fieldDefaults) fDefs[f] = fieldDefaults[fdKey]
+        }
+        result.push({ type: 'object-array', key: topKey, fields: childFields, items: [], defaultItems: [], fieldDefaultValues: fDefs })
+      }
+      continue
+    }
 
-    // 合并 sub 和 defSub
     const allSub = new Map(g.defSub)
     for (const [k, v] of g.sub) allSub.set(k, v)
 
     if (allSub.size === 1 && allSub.has('')) {
-      // 简单值
       result.push({
         type: 'simple',
         key: topKey,
@@ -79,11 +102,16 @@ function parseFlatToStructured(flat: Record<string, string>, defaults: Record<st
         defaultValue: g.defSub.get('') ?? '',
       })
     } else {
-      // 判断是数组还是字典：所有子 key 都是数字→数组
       const subKeys = [...allSub.keys()].filter(k => k !== '')
-      const isArray = subKeys.length > 0 && subKeys.every(k => /^\d+$/.test(k))
 
-      if (isArray) {
+      // 对象数组：子 key 格式为 "N:field"
+      const isObjectArray = subKeys.length > 0 && subKeys.every(k => /^\d+:.+/.test(k))
+      // 简单数组：子 key 全是数字
+      const isArray = !isObjectArray && subKeys.length > 0 && subKeys.every(k => /^\d+$/.test(k))
+
+      if (isObjectArray) {
+        result.push(parseObjectArray(topKey, allSub, g.defSub, labels, fieldDefaults))
+      } else if (isArray) {
         const maxIdx = Math.max(...subKeys.map(Number))
         const items: string[] = []
         const defaultItems: string[] = []
@@ -111,6 +139,64 @@ function parseFlatToStructured(flat: Record<string, string>, defaults: Record<st
   return result
 }
 
+// =============== 解析对象数组 ===============
+function parseObjectArray(topKey: string, allSub: Map<string, string>, defSub: Map<string, string>, labels: Record<string, string>, fieldDefaults: Record<string, string>): ObjArrayItem {
+  const itemMap = new Map<number, Record<string, string>>()
+  const defaultItemMap = new Map<number, Record<string, string>>()
+  const fieldSet = new Set<string>()
+
+  for (const [subKey, val] of allSub) {
+    if (subKey === '') continue
+    const match = subKey.match(/^(\d+):(.+)$/)
+    if (!match) continue
+    const idx = parseInt(match[1])
+    const field = match[2]
+    fieldSet.add(field)
+    if (!itemMap.has(idx)) itemMap.set(idx, {})
+    itemMap.get(idx)![field] = val
+  }
+
+  for (const [subKey, val] of defSub) {
+    if (subKey === '') continue
+    const match = subKey.match(/^(\d+):(.+)$/)
+    if (!match) continue
+    const idx = parseInt(match[1])
+    const field = match[2]
+    fieldSet.add(field)
+    if (!defaultItemMap.has(idx)) defaultItemMap.set(idx, {})
+    defaultItemMap.get(idx)![field] = val
+  }
+
+  // 也从 labels 中推断字段（标签中有 "TopKey:Field" 格式）
+  for (const labelKey of Object.keys(labels)) {
+    if (labelKey.startsWith(topKey + ':')) {
+      const field = labelKey.substring(topKey.length + 1)
+      if (!field.includes(':')) fieldSet.add(field)
+    }
+  }
+
+  const fields = [...fieldSet]
+  const items = [...itemMap.entries()].sort((a, b) => a[0] - b[0]).map(([_, obj]) => {
+    const full: Record<string, string> = {}
+    for (const f of fields) full[f] = obj[f] ?? ''
+    return full
+  })
+  const defaultItems = [...defaultItemMap.entries()].sort((a, b) => a[0] - b[0]).map(([_, obj]) => {
+    const full: Record<string, string> = {}
+    for (const f of fields) full[f] = obj[f] ?? ''
+    return full
+  })
+
+  // 提取字段默认值
+  const fDefs: Record<string, string> = {}
+  for (const f of fields) {
+    const fdKey = `${topKey}:${f}`
+    if (fdKey in fieldDefaults) fDefs[f] = fieldDefaults[fdKey]
+  }
+
+  return { type: 'object-array', key: topKey, fields, items, defaultItems, fieldDefaultValues: fDefs }
+}
+
 // =============== 结构化 → flat ===============
 function flattenItems(items: ConfigItem[]): Record<string, string> {
   const result: Record<string, string> = {}
@@ -124,6 +210,19 @@ function flattenItems(items: ConfigItem[]): Record<string, string> {
     } else if (item.type === 'dict') {
       for (const entry of item.entries) {
         if (entry.key) result[`${item.key}:${entry.key}`] = entry.value
+      }
+    } else if (item.type === 'object-array') {
+      let idx = 0
+      for (const obj of item.items) {
+        // 跳过全空规则：只看非 bool 字段是否为空
+        const hasNonEmptyCondition = Object.entries(obj).some(
+          ([f, v]) => v.trim() && !isBoolValue(item.fieldDefaultValues[f] ?? '')
+        )
+        if (!hasNonEmptyCondition) continue
+        for (const [field, value] of Object.entries(obj)) {
+          result[`${item.key}:${idx}:${field}`] = value
+        }
+        idx++
       }
     }
   }
@@ -171,7 +270,11 @@ const openEditConfig = async (plugin: PluginItem) => {
   try {
     const res = await pluginApi.getConfig(plugin.id)
     if (res.success) {
-      const items = parseFlatToStructured(res.config || {}, res.defaults || {})
+      const lbls = res.labels || {}
+      const fDefs = res.fieldDefaults || {}
+      editConfigLabels.value = lbls
+      editConfigFieldDefaults.value = fDefs
+      const items = parseFlatToStructured(res.config || {}, res.defaults || {}, lbls, fDefs)
       editConfigItems.value = items
       editConfigSnapshot.value = JSON.stringify(flattenItems(items))
     } else {
@@ -212,14 +315,31 @@ const removeArrayItem = (item: ArrayItem, idx: number) => { item.items.splice(id
 const addDictEntry = (item: DictItem) => { item.entries.push({ key: '', value: '' }) }
 const removeDictEntry = (item: DictItem, idx: number) => { item.entries.splice(idx, 1) }
 
+// =============== 对象数组操作 ===============
+const addObjArrayItem = (item: ObjArrayItem) => {
+  const obj: Record<string, string> = {}
+  for (const f of item.fields) obj[f] = item.fieldDefaultValues[f] ?? ''
+  item.items.push(obj)
+}
+const removeObjArrayItem = (item: ObjArrayItem, idx: number) => { item.items.splice(idx, 1) }
+const moveObjArrayItem = (item: ObjArrayItem, idx: number, dir: -1 | 1) => {
+  const target = idx + dir
+  if (target < 0 || target >= item.items.length) return
+  const tmp = item.items[idx]
+  item.items[idx] = item.items[target]
+  item.items[target] = tmp
+}
+
 // =============== 重置 ===============
 const resetSimple = (item: SimpleItem) => { item.value = item.defaultValue }
 const resetArray = (item: ArrayItem) => { item.items = [...item.defaultItems] }
 const resetDict = (item: DictItem) => { item.entries = item.defaultEntries.map(e => ({ ...e })) }
+const resetObjArray = (item: ObjArrayItem) => { item.items = item.defaultItems.map(obj => ({ ...obj })) }
 
 const isSimpleModified = (item: SimpleItem) => item.defaultValue !== '' && item.value !== item.defaultValue
 const isArrayModified = (item: ArrayItem) => JSON.stringify(item.items) !== JSON.stringify(item.defaultItems)
 const isDictModified = (item: DictItem) => JSON.stringify(item.entries) !== JSON.stringify(item.defaultEntries)
+const isObjArrayModified = (item: ObjArrayItem) => JSON.stringify(item.items) !== JSON.stringify(item.defaultItems)
 
 // =============== 布尔检测 ===============
 const isBoolValue = (val: string) => val === 'true' || val === 'false'
@@ -375,21 +495,21 @@ onMounted(loadPlugins)
           <template v-else v-for="item in editConfigItems" :key="item.key">
             <!-- ====== 简单值 ====== -->
             <div v-if="item.type === 'simple'" class="flex items-center gap-3">
-              <label class="w-2/5 text-sm text-gray-300 font-mono truncate flex-shrink-0" :title="item.key">
-                {{ item.key }}
+              <label class="w-2/5 text-sm text-gray-300 truncate flex-shrink-0" :class="{ 'font-mono': !editConfigLabels[item.key] }" :title="item.key">
+                {{ editConfigLabels[item.key] || item.key }}
               </label>
               <div class="flex-1 flex items-center gap-2">
-                <!-- 布尔值：下拉选择 -->
-                <select v-if="isBoolValue((item as SimpleItem).defaultValue || (item as SimpleItem).value)"
-                  v-model="(item as SimpleItem).value"
+                <button v-if="isBoolValue((item as SimpleItem).defaultValue || (item as SimpleItem).value)"
+                  @click="(item as SimpleItem).value = (item as SimpleItem).value === 'true' ? 'false' : 'true'"
                   :class="[
-                    'w-full bg-dark-sidebar border rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500',
-                    isSimpleModified(item as SimpleItem) ? 'border-yellow-500/40' : 'border-dark-border'
+                    'relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none flex-shrink-0',
+                    (item as SimpleItem).value === 'true' ? 'bg-primary-500' : 'bg-gray-600'
                   ]">
-                  <option value="true">true</option>
-                  <option value="false">false</option>
-                </select>
-                <!-- 普通值：文本输入 -->
+                  <span :class="[
+                    'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200',
+                    (item as SimpleItem).value === 'true' ? 'translate-x-6' : 'translate-x-1'
+                  ]" />
+                </button>
                 <input v-else v-model="(item as SimpleItem).value" type="text"
                   :class="[
                     'w-full bg-dark-sidebar border rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500',
@@ -411,7 +531,7 @@ onMounted(loadPlugins)
             <div v-else-if="item.type === 'array'"
               class="border border-dark-border/60 rounded-lg p-3 space-y-2">
               <div class="flex items-center justify-between">
-                <span class="text-sm text-gray-300 font-mono">{{ item.key }}
+                <span class="text-sm text-gray-300" :class="{ 'font-mono': !editConfigLabels[item.key] }">{{ editConfigLabels[item.key] || item.key }}
                   <span class="text-xs text-gray-600 ml-1">Array[{{ (item as ArrayItem).items.length }}]</span>
                 </span>
                 <div class="flex items-center gap-2">
@@ -445,7 +565,7 @@ onMounted(loadPlugins)
             <div v-else-if="item.type === 'dict'"
               class="border border-dark-border/60 rounded-lg p-3 space-y-2">
               <div class="flex items-center justify-between">
-                <span class="text-sm text-gray-300 font-mono">{{ item.key }}
+                <span class="text-sm text-gray-300" :class="{ 'font-mono': !editConfigLabels[item.key] }">{{ editConfigLabels[item.key] || item.key }}
                   <span class="text-xs text-gray-600 ml-1">Dict[{{ (item as DictItem).entries.length }}]</span>
                 </span>
                 <div class="flex items-center gap-2">
@@ -474,6 +594,80 @@ onMounted(loadPlugins)
                 </button>
               </div>
               <div v-if="(item as DictItem).entries.length === 0" class="text-xs text-gray-600 text-center py-1">空字典</div>
+            </div>
+
+            <!-- ====== 对象数组 ====== -->
+            <div v-else-if="item.type === 'object-array'"
+              class="border border-dark-border/60 rounded-lg p-3 space-y-3">
+              <div class="flex items-center justify-between">
+                <span class="text-sm text-gray-300" :class="{ 'font-mono': !editConfigLabels[item.key] }">{{ editConfigLabels[item.key] || item.key }}
+                  <span class="text-xs text-gray-600 ml-1">[{{ (item as ObjArrayItem).items.length }}]</span>
+                </span>
+                <div class="flex items-center gap-2">
+                  <button v-if="isObjArrayModified(item as ObjArrayItem)" @click="resetObjArray(item as ObjArrayItem)"
+                    class="text-gray-500 hover:text-yellow-400 transition-colors p-0.5" title="重置为默认值">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </button>
+                  <button @click="addObjArrayItem(item as ObjArrayItem)"
+                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加规则</button>
+                </div>
+              </div>
+              <!-- 每条规则卡片 -->
+              <div v-for="(obj, idx) in (item as ObjArrayItem).items" :key="idx"
+                class="bg-dark-sidebar/50 border border-dark-border/40 rounded-lg p-3 space-y-2">
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-xs text-gray-500">规则 #{{ idx + 1 }}</span>
+                  <div class="flex items-center gap-1">
+                    <button @click="moveObjArrayItem(item as ObjArrayItem, idx, -1)"
+                      :disabled="idx === 0"
+                      :class="['transition-colors p-0.5', idx === 0 ? 'text-gray-700 cursor-not-allowed' : 'text-gray-500 hover:text-primary-400']"
+                      title="上移">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                      </svg>
+                    </button>
+                    <button @click="moveObjArrayItem(item as ObjArrayItem, idx, 1)"
+                      :disabled="idx === (item as ObjArrayItem).items.length - 1"
+                      :class="['transition-colors p-0.5', idx === (item as ObjArrayItem).items.length - 1 ? 'text-gray-700 cursor-not-allowed' : 'text-gray-500 hover:text-primary-400']"
+                      title="下移">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    <button @click="removeObjArrayItem(item as ObjArrayItem, idx)"
+                      class="text-gray-600 hover:text-red-400 transition-colors p-0.5" title="删除">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <div v-for="field in (item as ObjArrayItem).fields" :key="field"
+                  class="flex items-center gap-2">
+                  <label class="w-1/4 text-xs text-gray-400 truncate flex-shrink-0" :title="field">
+                    {{ editConfigLabels[`${item.key}:${field}`] || field }}
+                  </label>
+                  <button v-if="isBoolValue((item as ObjArrayItem).fieldDefaultValues[field] ?? '')"
+                    @click="obj[field] = obj[field] === 'true' ? 'false' : 'true'"
+                    :class="[
+                      'relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none flex-shrink-0',
+                      obj[field] === 'true' ? 'bg-primary-500' : 'bg-gray-600'
+                    ]">
+                    <span :class="[
+                      'inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform duration-200',
+                      obj[field] === 'true' ? 'translate-x-4' : 'translate-x-0.5'
+                    ]" />
+                  </button>
+                  <input v-else v-model="obj[field]" type="text"
+                    :placeholder="editConfigLabels[`${item.key}:${field}`] || field"
+                    class="flex-1 bg-dark-sidebar border border-dark-border rounded-lg px-2.5 py-1 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500" />
+                </div>
+              </div>
+              <div v-if="(item as ObjArrayItem).items.length === 0"
+                class="text-xs text-gray-600 text-center py-2">暂无规则，点击右上角添加</div>
             </div>
           </template>
         </div>
