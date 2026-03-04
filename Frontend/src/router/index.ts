@@ -87,6 +87,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'WAF 规则', icon: '🛡️' }
   },
   {
+    path: '/stats-config',
+    name: 'StatsConfig',
+    component: () => import('@/views/StatsConfig.vue'),
+    meta: { title: '统计配置', icon: '📈' }
+  },
+  {
     path: '/error-templates',
     name: 'ErrorTemplates',
     component: () => import('@/views/ErrorTemplates.vue'),

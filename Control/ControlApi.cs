@@ -2550,8 +2550,93 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // =============== 统计配置管理 API ===============
+
+        // 获取统计配置（白名单路径 + 路径统计规则）
+        app.MapGet("/api/statistic/config", (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            return Results.Json(new
+            {
+                success = true,
+                whitePaths = statisticService.GetWhitePaths(),
+                pathStas = statisticService.GetPathStas(),
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 添加白名单路径
+        app.MapPost("/api/statistic/white-paths/add", async (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            var request = await ctx.Request.ReadFromJsonAsync<PathRequest>();
+            if (request == null || string.IsNullOrWhiteSpace(request.Path))
+                return Results.Json(new { success = false, message = "路径不能为空" });
+
+            if (statisticService.AddWhitePath(request.Path))
+            {
+                var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                var username = ctx.Items["Username"]?.ToString() ?? "unknown";
+                var clientIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
+                audit.Log(username, $"添加白名单路径: {request.Path}", clientIp);
+                return Results.Json(new { success = true, message = "添加成功" });
+            }
+            return Results.Json(new { success = false, message = "路径已存在" });
+        }).RequireHost($"*:{controlPort}");
+
+        // 移除白名单路径
+        app.MapPost("/api/statistic/white-paths/remove", async (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            var request = await ctx.Request.ReadFromJsonAsync<PathRequest>();
+            if (request == null || string.IsNullOrWhiteSpace(request.Path))
+                return Results.Json(new { success = false, message = "路径不能为空" });
+
+            if (statisticService.RemoveWhitePath(request.Path))
+            {
+                var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                var username = ctx.Items["Username"]?.ToString() ?? "unknown";
+                var clientIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
+                audit.Log(username, $"移除白名单路径: {request.Path}", clientIp);
+                return Results.Json(new { success = true, message = "移除成功" });
+            }
+            return Results.Json(new { success = false, message = "路径不存在" });
+        }).RequireHost($"*:{controlPort}");
+
+        // 添加路径统计规则
+        app.MapPost("/api/statistic/path-stas/add", async (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            var request = await ctx.Request.ReadFromJsonAsync<PathRequest>();
+            if (request == null || string.IsNullOrWhiteSpace(request.Path))
+                return Results.Json(new { success = false, message = "路径不能为空" });
+
+            if (statisticService.AddPathSta(request.Path))
+            {
+                var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                var username = ctx.Items["Username"]?.ToString() ?? "unknown";
+                var clientIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
+                audit.Log(username, $"添加路径统计规则: {request.Path}", clientIp);
+                return Results.Json(new { success = true, message = "添加成功" });
+            }
+            return Results.Json(new { success = false, message = "路径已存在" });
+        }).RequireHost($"*:{controlPort}");
+
+        // 移除路径统计规则
+        app.MapPost("/api/statistic/path-stas/remove", async (HttpContext ctx, IStatisticService statisticService) =>
+        {
+            var request = await ctx.Request.ReadFromJsonAsync<PathRequest>();
+            if (request == null || string.IsNullOrWhiteSpace(request.Path))
+                return Results.Json(new { success = false, message = "路径不能为空" });
+
+            if (statisticService.RemovePathSta(request.Path))
+            {
+                var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                var username = ctx.Items["Username"]?.ToString() ?? "unknown";
+                var clientIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
+                audit.Log(username, $"移除路径统计规则: {request.Path}", clientIp);
+                return Results.Json(new { success = true, message = "移除成功" });
+            }
+            return Results.Json(new { success = false, message = "路径不存在" });
+        }).RequireHost($"*:{controlPort}");
+
         // =============== CC 防护规则管理 API ===============
-        
+
         // 获取 CC 规则列表
         app.MapGet("/api/cc/rules", (HttpContext ctx, IStatisticService statisticService) =>
         {
@@ -6609,4 +6694,9 @@ public class CertUploadRequest
 public class CertDeleteRequest
 {
     public string PemFile { get; set; } = "";
+}
+
+public class PathRequest
+{
+    public string Path { get; set; } = "";
 }

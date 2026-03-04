@@ -1,6 +1,7 @@
 
 using System.IO.Compression;
 using System.Net.Http;
+using System.Text.Json;
 using System.Threading.RateLimiting;
 using LyWaf.Utils;
 using Microsoft.AspNetCore.Http;
@@ -69,6 +70,22 @@ public interface IStatisticService
     /// 启用/禁用高级 CC 规则
     /// </summary>
     bool ToggleAdvancedCcRule(string ruleId, bool enabled);
+
+    // =============== 白名单路径 / 路径统计规则管理 ===============
+
+    /// <summary>获取合并后的白名单路径列表</summary>
+    List<string> GetWhitePaths();
+    /// <summary>添加白名单路径</summary>
+    bool AddWhitePath(string path);
+    /// <summary>移除白名单路径</summary>
+    bool RemoveWhitePath(string path);
+
+    /// <summary>获取合并后的路径统计规则列表</summary>
+    List<string> GetPathStas();
+    /// <summary>添加路径统计规则</summary>
+    bool AddPathSta(string path);
+    /// <summary>移除路径统计规则</summary>
+    bool RemovePathSta(string path);
 }
 
 
@@ -97,6 +114,16 @@ public class StatisticService : IStatisticService
     // 已排除的配置规则 ID（用于"删除"配置中的规则）
     private readonly HashSet<string> _excludedCcRuleIds = new();
 
+    // 动态白名单路径 / 路径统计规则
+    private readonly HashSet<string> _dynamicWhitePaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _removedWhitePaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _dynamicPathStas = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _removedPathStas = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _pathLock = new();
+
+    private static readonly string StatisticStateFilePath =
+        Path.Combine(Directory.GetCurrentDirectory(), ".lywaf.statistic.json");
+
     private const int HAS_ANY = 0x00000001;
     private const int HAS_MATCH = 0x00000002;
     private const int HAS_FULL = 0x00000004;
@@ -109,6 +136,12 @@ public class StatisticService : IStatisticService
         ILogger<StatisticService> logger)
     {
         _options = options.CurrentValue;
+        _cache = cache;
+        _logger = logger;
+
+        // 加载持久化状态
+        LoadStatisticState();
+
         // 可以订阅变更，但需注意生命周期和内存泄漏
         options.OnChange(newConfig =>
         {
@@ -121,8 +154,6 @@ public class StatisticService : IStatisticService
         });
         BuildStatistic();
         RebuildAdvancedCcRulesCache();
-        _cache = cache;
-        _logger = logger;
     }
 
     private static int ConvertStrToSta(string str)
@@ -141,6 +172,30 @@ public class StatisticService : IStatisticService
         }
     }
 
+    /// <summary>构建合并后的有效白名单路径集合</summary>
+    private HashSet<string> BuildEffectiveWhitePaths()
+    {
+        var result = new HashSet<string>(_options.WhitePaths, StringComparer.OrdinalIgnoreCase);
+        lock (_pathLock)
+        {
+            result.UnionWith(_dynamicWhitePaths);
+            result.ExceptWith(_removedWhitePaths);
+        }
+        return result;
+    }
+
+    /// <summary>构建合并后的有效路径统计规则集合</summary>
+    private HashSet<string> BuildEffectivePathStas()
+    {
+        var result = new HashSet<string>(_options.PathStas, StringComparer.OrdinalIgnoreCase);
+        lock (_pathLock)
+        {
+            result.UnionWith(_dynamicPathStas);
+            result.ExceptWith(_removedPathStas);
+        }
+        return result;
+    }
+
     private void BuildStatistic()
     {
         var newPathStatistic = new Dictionary<string, string>();
@@ -155,24 +210,27 @@ public class StatisticService : IStatisticService
             allLimitCc.AddRange(_dynamicLimitCc);
         }
 
+        // 使用合并后的有效集合
+        var effectivePathStas = BuildEffectivePathStas();
+        var effectiveWhitePaths = BuildEffectiveWhitePaths();
+
         foreach (var limit in allLimitCc)
         {
             if (limit.Path.Length > 0)
             {
-                _options.PathStas.Add(limit.Path);
+                effectivePathStas.Add(limit.Path);
             }
         }
 
-        
-        foreach (var path in _options.WhitePaths)
+        foreach (var path in effectiveWhitePaths)
         {
             if (path.Length > 0)
             {
-                _options.PathStas.Add(path);
+                effectivePathStas.Add(path);
             }
         }
 
-        foreach (var path in _options.PathStas)
+        foreach (var path in effectivePathStas)
         {
             var l = path.Trim('/').Split('/');
             var buildList = new List<string>();
@@ -306,7 +364,17 @@ public class StatisticService : IStatisticService
 
     public bool IsWhitePath(string path)
     {
-        return _options.WhitePaths.Contains(path);
+        if (_options.WhitePaths.Contains(path))
+        {
+            lock (_pathLock)
+            {
+                return !_removedWhitePaths.Contains(path);
+            }
+        }
+        lock (_pathLock)
+        {
+            return _dynamicWhitePaths.Contains(path);
+        }
     }
 
     public StatisticOptions GetOption()
@@ -559,5 +627,172 @@ public class StatisticService : IStatisticService
             }
         }
         return false;
+    }
+
+    // =============== 白名单路径管理 ===============
+
+    public List<string> GetWhitePaths()
+    {
+        return BuildEffectiveWhitePaths().OrderBy(p => p).ToList();
+    }
+
+    public bool AddWhitePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        path = path.Trim();
+
+        lock (_pathLock)
+        {
+            // 已在配置中且未被移除 → 已存在
+            if (_options.WhitePaths.Contains(path) && !_removedWhitePaths.Contains(path))
+                return false;
+            // 已在动态列表中 → 已存在
+            if (_dynamicWhitePaths.Contains(path))
+                return false;
+
+            // 如果之前从配置中移除过，恢复它
+            _removedWhitePaths.Remove(path);
+            // 如果不在配置中，添加到动态列表
+            if (!_options.WhitePaths.Contains(path))
+                _dynamicWhitePaths.Add(path);
+        }
+
+        BuildStatistic();
+        SaveStatisticState();
+        _logger.LogInformation("已添加白名单路径: {Path}", path);
+        return true;
+    }
+
+    public bool RemoveWhitePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        path = path.Trim();
+
+        lock (_pathLock)
+        {
+            var removed = _dynamicWhitePaths.Remove(path);
+            if (_options.WhitePaths.Contains(path))
+            {
+                removed = _removedWhitePaths.Add(path) || removed;
+            }
+            if (!removed) return false;
+        }
+
+        BuildStatistic();
+        SaveStatisticState();
+        _logger.LogInformation("已移除白名单路径: {Path}", path);
+        return true;
+    }
+
+    // =============== 路径统计规则管理 ===============
+
+    public List<string> GetPathStas()
+    {
+        return BuildEffectivePathStas().OrderBy(p => p).ToList();
+    }
+
+    public bool AddPathSta(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        path = path.Trim();
+
+        lock (_pathLock)
+        {
+            if (_options.PathStas.Contains(path) && !_removedPathStas.Contains(path))
+                return false;
+            if (_dynamicPathStas.Contains(path))
+                return false;
+
+            _removedPathStas.Remove(path);
+            if (!_options.PathStas.Contains(path))
+                _dynamicPathStas.Add(path);
+        }
+
+        BuildStatistic();
+        SaveStatisticState();
+        _logger.LogInformation("已添加路径统计规则: {Path}", path);
+        return true;
+    }
+
+    public bool RemovePathSta(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        path = path.Trim();
+
+        lock (_pathLock)
+        {
+            var removed = _dynamicPathStas.Remove(path);
+            if (_options.PathStas.Contains(path))
+            {
+                removed = _removedPathStas.Add(path) || removed;
+            }
+            if (!removed) return false;
+        }
+
+        BuildStatistic();
+        SaveStatisticState();
+        _logger.LogInformation("已移除路径统计规则: {Path}", path);
+        return true;
+    }
+
+    // =============== 持久化 ===============
+
+    private void LoadStatisticState()
+    {
+        try
+        {
+            if (!File.Exists(StatisticStateFilePath)) return;
+
+            var json = File.ReadAllText(StatisticStateFilePath);
+            var state = JsonSerializer.Deserialize<StatisticState>(json);
+            if (state == null) return;
+
+            lock (_pathLock)
+            {
+                foreach (var p in state.AddedWhitePaths ?? []) _dynamicWhitePaths.Add(p);
+                foreach (var p in state.RemovedWhitePaths ?? []) _removedWhitePaths.Add(p);
+                foreach (var p in state.AddedPathStas ?? []) _dynamicPathStas.Add(p);
+                foreach (var p in state.RemovedPathStas ?? []) _removedPathStas.Add(p);
+            }
+
+            _logger.LogInformation("已加载统计配置状态: {Path}", StatisticStateFilePath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "加载统计配置状态失败: {Message}", ex.Message);
+        }
+    }
+
+    private void SaveStatisticState()
+    {
+        try
+        {
+            StatisticState state;
+            lock (_pathLock)
+            {
+                state = new StatisticState
+                {
+                    AddedWhitePaths = [.. _dynamicWhitePaths],
+                    RemovedWhitePaths = [.. _removedWhitePaths],
+                    AddedPathStas = [.. _dynamicPathStas],
+                    RemovedPathStas = [.. _removedPathStas],
+                };
+            }
+
+            var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(StatisticStateFilePath, json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "保存统计配置状态失败: {Message}", ex.Message);
+        }
+    }
+
+    private class StatisticState
+    {
+        public List<string> AddedWhitePaths { get; set; } = [];
+        public List<string> RemovedWhitePaths { get; set; } = [];
+        public List<string> AddedPathStas { get; set; } = [];
+        public List<string> RemovedPathStas { get; set; } = [];
     }
 }

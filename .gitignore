@@ -17,3 +17,5 @@ publish
 wwwroot/*
 bintemp_check
 temp/*
+config.nginx.ly
+logs/*

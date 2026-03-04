@@ -865,6 +865,27 @@ export const pluginApi = {
     api.post<ApiResponse>(`/plugins/${encodeURIComponent(pluginId)}/config`, config),
 }
 
+// ==================== 统计配置 API ====================
+
+import type { StatisticConfig } from '@/types'
+
+export const statisticApi = {
+  getConfig: () =>
+    api.get<StatisticConfig & { success: boolean }>('/statistic/config'),
+
+  addWhitePath: (path: string) =>
+    api.post<ApiResponse>('/statistic/white-paths/add', { path }),
+
+  removeWhitePath: (path: string) =>
+    api.post<ApiResponse>('/statistic/white-paths/remove', { path }),
+
+  addPathSta: (path: string) =>
+    api.post<ApiResponse>('/statistic/path-stas/add', { path }),
+
+  removePathSta: (path: string) =>
+    api.post<ApiResponse>('/statistic/path-stas/remove', { path }),
+}
+
 // ==================== 通用设置 API ====================
 
 import type { CertDetail, AuditLogEntry, ConsoleInfo } from '@/types'

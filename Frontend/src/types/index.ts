@@ -407,6 +407,13 @@ export interface ConsoleInfo {
   controlListen: { host: string; port: number }
 }
 
+// =============== 统计配置类型 ===============
+
+export interface StatisticConfig {
+  whitePaths: string[]
+  pathStas: string[]
+}
+
 // 仪表板数据
 export interface DashboardData {
   system: SystemStatus
