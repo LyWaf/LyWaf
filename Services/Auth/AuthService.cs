@@ -100,6 +100,8 @@ public class AuthService : IAuthService
 
     private AuthConfig _config = new();
     private byte[] _jwtSecretBytes = [];
+    private DateTime _configLoadedAt = DateTime.MinValue;
+    private const int ConfigRefreshSeconds = 5;
 
     /// <summary>暴力破解防护：按用户名追踪连续失败次数</summary>
     private readonly ConcurrentDictionary<string, LoginAttemptInfo> _loginAttempts = new(StringComparer.OrdinalIgnoreCase);
@@ -124,6 +126,7 @@ public class AuthService : IAuthService
                 var json = File.ReadAllText(AuthFilePath, Encoding.UTF8);
                 _config = JsonSerializer.Deserialize<AuthConfig>(json, JsonOptions) ?? new AuthConfig();
                 _jwtSecretBytes = Convert.FromBase64String(_config.JwtSecret);
+                _configLoadedAt = DateTime.UtcNow;
                 _logger.Info("已加载认证配置 ({File})", AuthFilePath);
             }
             catch (Exception ex)
@@ -182,11 +185,41 @@ public class AuthService : IAuthService
         {
             var json = JsonSerializer.Serialize(_config, JsonOptions);
             File.WriteAllText(AuthFilePath, json, Encoding.UTF8);
+            _configLoadedAt = DateTime.UtcNow;
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "保存认证配置失败");
         }
+    }
+
+    /// <summary>
+    /// 检查配置是否过期（超过 5 秒），过期则从文件重新加载
+    /// </summary>
+    private void ReloadConfigIfStale()
+    {
+        if ((DateTime.UtcNow - _configLoadedAt).TotalSeconds < ConfigRefreshSeconds)
+            return;
+
+        if (!File.Exists(AuthFilePath))
+            return;
+
+        try
+        {
+            var json = File.ReadAllText(AuthFilePath, Encoding.UTF8);
+            var newConfig = JsonSerializer.Deserialize<AuthConfig>(json, JsonOptions);
+            if (newConfig != null)
+            {
+                _config = newConfig;
+                _jwtSecretBytes = Convert.FromBase64String(_config.JwtSecret);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn(ex, "定时重新加载认证配置失败，继续使用旧配置");
+        }
+
+        _configLoadedAt = DateTime.UtcNow;
     }
 
     // =============== SHA256 工具 ===============
@@ -252,6 +285,8 @@ public class AuthService : IAuthService
     /// </summary>
     public AuthResult Login(string username, string passwordHash, long timestamp)
     {
+        ReloadConfigIfStale();
+
         // 1. 检查暴力破解锁定
         var lockoutSeconds = GetLockoutRemainingSeconds(username);
         if (lockoutSeconds > 0)
@@ -336,6 +371,8 @@ public class AuthService : IAuthService
     /// </summary>
     public AuthResult ValidateCredentials(string username, string password)
     {
+        ReloadConfigIfStale();
+
         // 检查暴力破解锁定
         var lockoutSeconds = GetLockoutRemainingSeconds(username);
         if (lockoutSeconds > 0)
@@ -368,6 +405,8 @@ public class AuthService : IAuthService
 
     public bool ValidateToken(string token)
     {
+        ReloadConfigIfStale();
+
         try
         {
             var parts = token.Split('.');
@@ -402,6 +441,8 @@ public class AuthService : IAuthService
 
     public AuthResult RefreshToken(string token)
     {
+        ReloadConfigIfStale();
+
         if (!ValidateToken(token)) return new AuthResult { Success = false, Message = "令牌无效" };
 
         var username = GetUsername(token);
@@ -423,6 +464,8 @@ public class AuthService : IAuthService
 
     public bool ChangePassword(string currentPassword, string newPassword)
     {
+        ReloadConfigIfStale();
+
         if (ComputeSha256(currentPassword) != _config.PasswordHash)
         {
             _logger.Warn("修改密码失败：当前密码错误");
@@ -439,6 +482,8 @@ public class AuthService : IAuthService
 
     public string ResetPassword()
     {
+        ReloadConfigIfStale();
+
         var passwordChars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
         var passwordBytes = RandomNumberGenerator.GetBytes(16);
         var newPassword = new string(passwordBytes.Select(b => passwordChars[b % passwordChars.Length]).ToArray());

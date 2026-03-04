@@ -3078,10 +3078,32 @@ public static class LyToAppSettingsConverter
                         customDns["CacheTtlSeconds"] = ttl;
                     }
                     break;
-                case "fallbackdns":
-                case "fallback_dns":
-                case "fallback":
-                    customDns["FallbackDns"] = kv.Value?.ToString() ?? "";
+                case "dnsservers":
+                case "dns_servers":
+                case "servers":
+                    // DnsServers = ["8.8.8.8", "1.1.1.1:53"] 或 DnsServers = "8.8.8.8 1.1.1.1"
+                    if (kv.Value is string dnsServersStr)
+                    {
+                        customDns["DnsServers"] = dnsServersStr
+                            .Split([' ', ','], StringSplitOptions.RemoveEmptyEntries)
+                            .ToList();
+                    }
+                    else if (kv.Value is List<object> dnsServersList)
+                    {
+                        customDns["DnsServers"] = dnsServersList
+                            .Select(x => x?.ToString() ?? "")
+                            .Where(x => x.Length > 0)
+                            .ToList();
+                    }
+                    break;
+                case "dnstimeoutms":
+                case "dns_timeout_ms":
+                case "dns_timeout":
+                case "timeout":
+                    if (int.TryParse(kv.Value?.ToString(), out var dnsTimeout))
+                    {
+                        customDns["DnsTimeoutMs"] = dnsTimeout;
+                    }
                     break;
                 default:
                     // 域名配置
@@ -3146,11 +3168,12 @@ public static class LyToAppSettingsConverter
         if (entries.Count > 0)
         {
             customDns["Entries"] = entries;
-            // 如果有条目但没有显式设置 Enabled，默认启用
-            if (!customDns.ContainsKey("Enabled"))
-            {
-                customDns["Enabled"] = true;
-            }
+        }
+
+        // 如果有条目或 DNS 服务器但没有显式设置 Enabled，默认启用
+        if ((entries.Count > 0 || customDns.ContainsKey("DnsServers")) && !customDns.ContainsKey("Enabled"))
+        {
+            customDns["Enabled"] = true;
         }
     }
 

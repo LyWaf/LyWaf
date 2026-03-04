@@ -115,6 +115,8 @@ public class CustomDnsService : ICustomDnsService
     // 预处理的映射表：精确匹配和通配符匹配
     private Dictionary<string, DnsEntry> _exactEntries = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, DnsEntry> _wildcardEntries = new(StringComparer.OrdinalIgnoreCase);
+    // 解析后的 DNS 服务器端点列表
+    private List<IPEndPoint> _dnsServers = [];
     private CustomDnsOptions _currentOptions;
 
     public CustomDnsService(IOptionsMonitor<CustomDnsOptions> optionsMonitor)
@@ -137,7 +139,7 @@ public class CustomDnsService : ICustomDnsService
     }
 
     /// <summary>
-    /// 重建映射表，分离精确匹配和通配符匹配
+    /// 重建映射表，分离精确匹配和通配符匹配，并解析 DNS 服务器列表
     /// </summary>
     private void RebuildMappings(CustomDnsOptions options)
     {
@@ -154,8 +156,8 @@ public class CustomDnsService : ICustomDnsService
                     // 通配符条目：*.example.com -> 存储为 example.com（去掉 *.）
                     var wildcardKey = key[2..]; // 去掉 "*."
                     wildcard[wildcardKey] = entry.Value;
-                    _logger.Debug("  通配符映射: {Pattern} -> [{Addresses}] ({Policy})", 
-                        key, 
+                    _logger.Debug("  通配符映射: {Pattern} -> [{Addresses}] ({Policy})",
+                        key,
                         string.Join(", ", entry.Value.Addresses),
                         entry.Value.Policy);
                 }
@@ -163,20 +165,42 @@ public class CustomDnsService : ICustomDnsService
                 {
                     // 精确匹配条目
                     exact[key] = entry.Value;
-                    _logger.Debug("  精确映射: {Domain} -> [{Addresses}] ({Policy})", 
-                        key, 
+                    _logger.Debug("  精确映射: {Domain} -> [{Addresses}] ({Policy})",
+                        key,
                         string.Join(", ", entry.Value.Addresses),
                         entry.Value.Policy);
                 }
             }
+        }
 
-            _logger.Info("自定义 DNS 服务已启用，共 {ExactCount} 条精确规则，{WildcardCount} 条通配符规则", 
-                exact.Count, wildcard.Count);
+        // 解析 DNS 服务器地址列表
+        var servers = new List<IPEndPoint>();
+        if (options.Enabled && options.DnsServers.Count > 0)
+        {
+            foreach (var s in options.DnsServers)
+            {
+                if (DnsResolver.TryParseDnsServer(s, out var ep))
+                {
+                    servers.Add(ep);
+                    _logger.Debug("  DNS 服务器: {Server}", ep);
+                }
+                else
+                {
+                    _logger.Warn("无效的 DNS 服务器地址: {Server}", s);
+                }
+            }
+        }
+
+        if (options.Enabled && (exact.Count > 0 || wildcard.Count > 0 || servers.Count > 0))
+        {
+            _logger.Info("自定义 DNS 服务已启用，共 {ExactCount} 条精确规则，{WildcardCount} 条通配符规则，{DnsServerCount} 个 DNS 服务器",
+                exact.Count, wildcard.Count, servers.Count);
         }
 
         // 原子更新
         _exactEntries = exact;
         _wildcardEntries = wildcard;
+        _dnsServers = servers;
     }
 
     public bool HasCustomMapping(string host)
@@ -184,7 +208,8 @@ public class CustomDnsService : ICustomDnsService
         if (!_currentOptions.Enabled)
             return false;
 
-        return FindMatchingEntry(host) != null;
+        // 有精确/通配符映射，或有 DNS 服务器可用
+        return FindMatchingEntry(host) != null || _dnsServers.Count > 0;
     }
 
     public async Task<IPAddress?> ResolveAsync(string host, CancellationToken cancellationToken = default)
@@ -192,7 +217,7 @@ public class CustomDnsService : ICustomDnsService
         if (!_currentOptions.Enabled)
             return null;
 
-        // 查找匹配的自定义映射
+        // 1. 查找匹配的自定义映射（静态条目优先）
         var entry = FindMatchingEntry(host);
         if (entry != null)
         {
@@ -204,7 +229,69 @@ public class CustomDnsService : ICustomDnsService
             }
         }
 
-        // 没有自定义映射，返回 null 让调用方使用默认解析
+        // 2. 尝试使用自定义 DNS 服务器解析
+        var dnsResult = await ResolveWithDnsServersAsync(host, cancellationToken);
+        if (dnsResult != null)
+        {
+            _logger.Debug("DNS 服务器解析: {Host} -> {IP}", host, dnsResult);
+            return dnsResult;
+        }
+
+        // 3. 没有自定义映射也没有 DNS 服务器，返回 null 让调用方使用系统默认解析
+        return null;
+    }
+
+    /// <summary>
+    /// 使用配置的 DNS 服务器列表解析域名
+    /// 依次尝试每个服务器，任一成功即返回；全部失败返回 null
+    /// </summary>
+    private async Task<IPAddress?> ResolveWithDnsServersAsync(string host, CancellationToken ct)
+    {
+        var servers = _dnsServers;
+        if (servers.Count == 0)
+            return null;
+
+        // 检查 DNS 服务器解析缓存
+        var cacheKey = $"dns:{host}";
+        var ttl = _currentOptions.CacheTtlSeconds;
+        if (ttl > 0 && _cache.TryGetValue(cacheKey, out var cached) && cached.expiry > DateTime.UtcNow)
+        {
+            _logger.Debug("DNS 服务器缓存命中: {Host} ({Count} 条记录)", host, cached.addresses.Length);
+            return cached.addresses.Length > 0 ? SelectFromAddresses(host, "Random", cached.addresses) : null;
+        }
+
+        var timeoutMs = _currentOptions.DnsTimeoutMs;
+        foreach (var server in servers)
+        {
+            try
+            {
+                var addresses = await DnsResolver.QueryAsync(host, server, timeoutMs, ct);
+                if (addresses.Length > 0)
+                {
+                    // 缓存结果
+                    if (ttl > 0)
+                    {
+                        _cache[cacheKey] = (addresses, DateTime.UtcNow.AddSeconds(ttl));
+                    }
+                    return SelectFromAddresses(host, "Random", addresses);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // 外部取消，直接传播
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn(ex, "DNS 服务器 {Server} 查询 {Host} 失败，尝试下一个", server, host);
+            }
+        }
+
+        // 所有 DNS 服务器都查询失败，缓存空结果防止频繁重试
+        if (ttl > 0)
+        {
+            _cache[cacheKey] = ([], DateTime.UtcNow.AddSeconds(Math.Min(ttl, 30)));
+        }
+
         return null;
     }
 

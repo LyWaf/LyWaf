@@ -20,3 +20,4 @@ java\.lang
 \<\s*(iframe|script|body|layer|div|meta|style|base|object|input)
 (onmouseover|onerror|onload)\=
 concat\((.*)\,(.*)
+(?i)(\|\s*\w|;\s*(ls|cat|whoami|id|pwd|uname|wget|curl|bash|sh|cmd|powershell)|`[^`]+`|\$\(.*\)|\b(eval|exec|system|passthru|popen)\s*\()

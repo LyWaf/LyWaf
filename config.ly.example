@@ -1,7 +1,6 @@
 # ============================================================
 # LyWaf 配置文件示例 (config.ly)
 # 类似 Caddy 的简洁配置格式
-# 格式参考: https://caddyserver.com/docs/caddyfile/concepts
 # ============================================================
 
 # 变量定义
@@ -15,12 +14,12 @@ var env = "production"
 {
     # ACME 邮箱（用于 Let's Encrypt）
     email admin@example.com
-    
+
     # 使用 staging 环境测试
     if $env != "production" {
         acme_staging true
     }
-    
+
     # 调试模式
     # debug
 }
@@ -35,58 +34,54 @@ var env = "production"
     }
 }
 
-(rate_limit) {
-    SpeedLimit {
-        Limits {
-            Fixed {
-                PermitLimit = 100
-                Window = "00:01:00"
-            }
-        }
-    }
-}
-
 # ============================================================
-# 站点配置（以域名或地址开头）
+# 证书配置
 # ============================================================
-
-# 证书配置（根目录下）
 Certs {
     # 默认证书
     PemFile = "/path/to/default-cert.pem"
     KeyFile = "/path/to/default-key.pem"
-    
+
     # 域名特定证书
     $domain {
         PemFile = "/path/to/${domain}-cert.pem"
         KeyFile = "/path/to/${domain}-key.pem"
     }
-    
+
     api.${domain} {
         PemFile = "/path/to/api-cert.pem"
         KeyFile = "/path/to/api-key.pem"
     }
 }
 
+# ============================================================
+# 控制面板（管理后台监听地址）
+# ============================================================
+control_listen = "127.0.0.1:7030"
+
+# ============================================================
+# 站点配置（以域名或地址开头）
+# ============================================================
+
 # 主站点 - 支持多路由配置
 $domain www.${domain} {
-    # 站点级别日志配置（自动归并到 LyLog 模块）
+    # 站点级别日志
     log {
         output = "logs/${domain}"
         level = "Info"
         exclude_paths = ["/health", "/favicon.ico"]
     }
-    
+
     # 不同路径转发到不同后端
     /api/* {
         reverse_proxy http://127.0.0.1:3000
         lb_policy RoundRobin
     }
-    
+
     /file/* {
         reverse_proxy http://127.0.0.1:4000
     }
-    
+
     # 静态文件服务
     /static/* {
         file_server {
@@ -95,14 +90,13 @@ $domain www.${domain} {
             index = "index.html index.htm"
         }
     }
-    
+
     # 默认路由（其他所有请求）
     reverse_proxy http://${backend}
 }
 
 # 纯文件服务站点
 files.${domain} {
-    # 简单的文件服务（使用当前目录）
     file_server
 }
 
@@ -119,9 +113,8 @@ static.${domain} {
 
 # API 站点 - 使用 handle 块
 api.${domain} {
-    # 简化日志配置：只指定输出目录
     log = "logs/api"
-    
+
     handle {
         /v1/* {
             reverse_proxy http://127.0.0.1:3001
@@ -130,8 +123,7 @@ api.${domain} {
             reverse_proxy http://127.0.0.1:3002
         }
     }
-    
-    # 默认后端
+
     reverse_proxy http://127.0.0.1:3000
     lb_policy WeightedRoundRobin
 }
@@ -146,43 +138,15 @@ https://admin.${domain} {
     reverse_proxy http://127.0.0.1:8081
 }
 
-# HTTPS 端口监听
-https://:443 {
-    # 这将监听所有域名的 443 端口
-    reverse_proxy http://127.0.0.1:8080
-}
-
-# 本地开发
-localhost:3000 {
-    reverse_proxy http://127.0.0.1:3000
-}
-
-# proxy 是 reverse_proxy 的简写
-localhost:4000 {
-    # 以下两种写法等价
-    proxy http://127.0.0.1:4000
-}
-
 # proxy 支持多种格式
 localhost:4001 {
-    # 方式1: 空格分隔的字符串（多个后端）
-    proxy "http://127.0.0.1:4001 https://127.0.0.1:4002"
-}
-
-localhost:4002 {
-    # 方式2: 数组格式（推荐，清晰易读）
+    # 数组格式（多个后端）
     proxy = ["http://127.0.0.1:4001", "https://127.0.0.1:4002"]
 }
 
-localhost:4003 {
-    # 方式3: 单个后端的数组格式
-    proxy = ["https://api.example.com"]
-}
-
-# proxy 也支持完整配置格式
+# proxy 完整配置格式
 localhost:5000 {
     proxy {
-        # to 支持字符串或数组格式
         to = ["http://127.0.0.1:5001", "http://127.0.0.1:5002"]
         lb_policy = "RoundRobin"
         timeout = "00:00:30"
@@ -190,130 +154,373 @@ localhost:5000 {
     }
 }
 
-# 内部服务使用自定义 DNS 解析
-internal.${domain} {
-    # backend.internal 会被自定义 DNS 解析为配置的 IP
-    proxy http://backend.internal:8080
-}
-
 # ============================================================
-# 其他全局配置
+# 防护配置（WAF 自定义规则）
 # ============================================================
+#
+# WafRules 中每条规则支持三种条件格式：
+#   1. 单条件简写：直接 Field / Operator / Value
+#   2. 多条件 AND：Conditions 数组，组内全部满足才触发
+#   3. 多条件组 OR：ConditionGroups 数组，任一组匹配即触发
+#
+# Field 可选值:
+#   UriPath, FullUrl, QueryString, Method, ClientIp,
+#   XForwardedFor, UserAgent, Referer, ContentType,
+#   ContentLength, Cookie, Header, QueryParam, Body, ServerPort
+#
+# Operator 可选值:
+#   Equal, NotEqual, Contains, NotContains, StartsWith,
+#   EndsWith, Regex, Exists, NotExists,
+#   LengthGreaterThan, LengthLessThan
+#
+# Action 可选值:
+#   Observe  — 仅记录日志，不拦截
+#   Reject   — 直接返回指定状态码（默认 403）
+#   Block    — 封禁 IP 一段时间
+#   Captcha  — 触发人机验证
+#
+# 系统内置规则（默认启用，可在后台开关）:
+#   sys-sqli, sys-xss, sys-path-traversal,
+#   sys-scanner-ua, sys-sensitive-files,
+#   sys-cmd-injection, sys-protocol-anomaly(默认禁用)
+#
+Protect {
+    # ── 基础防护开关 ──
+    OpenArgsCheck = true                  # 检测 URL 参数攻击（默认开启）
+    OpenPostCheck = false                 # 检测 POST Body 攻击（默认关闭）
+    # CheckArgsFile = "Rules/args.check"  # 自定义规则文件
+    # CheckPostFile = "Rules/post.check"
+    # MaxRequestBodySize = 10485760       # 请求体大小限制（字节），null 表示不限制
 
-# AllowedHosts 配置（限制允许的 Host 头）
-AllowedHosts = "*"
+    # ── 自定义 WAF 规则 ──
+    WafRules {
+        # ■ 单条件简写（最常用）
+        block-git {
+            Name = "拦截 .git 访问"
+            Field = UriPath
+            Value = "/.git/"
+            # 默认: Operator = Contains, Action = Reject, IgnoreCase = true
+        }
 
-# 自定义 DNS 配置（将域名解析为指定 IP）
-CustomDns {
-    Enabled = true
-    CacheTtlSeconds = 300
-    
-    # 简单格式：域名 = "IP列表（空格分隔）"
-    "backend.internal" = "192.168.1.100 192.168.1.101 192.168.1.102"
-    
-    # 通配符匹配：*.internal.example.com 匹配所有子域名
-    "*.internal.example.com" = "10.0.0.1 10.0.0.2"
-    
-    # 完整配置格式
-    "api.internal" {
-        Addresses = ["192.168.1.200", "192.168.1.201"]
-        Policy = "RoundRobin"    # 或 Random
-        TtlSeconds = 60
+        block-env {
+            Name = "拦截 .env 访问"
+            Field = UriPath
+            Operator = Regex
+            Value = "(?i)\\.(env|bak|sql|log)$"
+            Action = Reject
+            ResponseCode = 404
+        }
+
+        block-scanners {
+            Name = "封禁扫描器"
+            Field = UserAgent
+            Operator = Regex
+            Value = "(?i)(sqlmap|nikto|nmap|nuclei|dirsearch)"
+            Action = Block
+            ActionSeconds = 3600
+        }
+
+        # ■ 多条件 AND（数组格式）
+        block-admin-post {
+            Name = "拦截 admin POST 请求"
+            Action = Reject
+            Priority = 50
+            Conditions = [
+                { Field = UriPath;  Operator = StartsWith; Value = "/admin" },
+                { Field = Method;   Operator = Equal;      Value = "POST"   },
+            ]
+        }
+
+        # ■ 多条件组 OR（任一组匹配即触发）
+        block-suspicious {
+            Name = "可疑请求拦截"
+            Action = Block
+            ActionSeconds = 1800
+            ConditionGroups = [
+                { Conditions = [
+                    { Field = UriPath; Operator = Contains; Value = "/wp-admin" },
+                ]},
+                { Conditions = [
+                    { Field = UserAgent; Operator = Contains; Value = "curl" },
+                    { Field = Method;    Operator = Equal;    Value = "DELETE" },
+                ]},
+            ]
+        }
+
+        # ■ Header / Cookie / QueryParam 匹配（需要 FieldName）
+        block-bad-token {
+            Name = "拦截非法 Token"
+            Field = Header
+            FieldName = "Authorization"
+            Operator = Regex
+            Value = "^Bearer\\s+(admin|root|test)$"
+            IgnoreCase = false
+            Action = Reject
+        }
+
+        # ■ 观察模式（仅记录日志，不拦截）
+        observe-large-body {
+            Name = "监控大请求体"
+            Field = ContentLength
+            Operator = LengthGreaterThan
+            Value = "1048576"
+            Action = Observe
+        }
     }
 }
 
-# 正向代理服务配置（HTTP 代理、HTTPS 代理、SOCKS5 代理）
-ProxyServer {
-    Enabled = true
-    
-    # 代理认证（可选）
-    # Username = "proxyuser"
-    # Password = "proxypass"
-    
-    # 超时配置
-    ConnectTimeout = 30     # 连接超时（秒）
-    DataTimeout = 300       # 数据传输超时（秒）
-    
-    # 访问控制
-    # AllowedHosts = ["*.example.com", "api.service.com"]  # 白名单
-    # BlockedHosts = ["*.blocked.com"]                      # 黑名单
-    
-    # 端口配置
-    Ports {
-        # HTTP/HTTPS 代理端口
-        8080 {
-            EnableHttp = true       # 支持 HTTP 代理
-            EnableHttps = true      # 支持 HTTPS 隧道 (CONNECT)
-            EnableSocks5 = false    # 不支持 SOCKS5
-            RequireAuth = false     # 不需要认证
+# ============================================================
+# 统计 + CC 防护配置
+# ============================================================
+#
+# CcRules 中的规则类型:
+#   FrequentAccess  — 高频访问（统计周期内请求数超阈值）
+#   FrequentAttack  — 高频攻击（统计周期内触发 WAF 拦截次数超阈值）
+#   FrequentError   — 高频错误（统计周期内 4xx/5xx 响应超阈值）
+#
+# CcRules Action:
+#   Block     — 封禁 IP
+#   Captcha   — 要求人机验证
+#   Reject    — 返回 429
+#   RateLimit — 限速
+#   LogOnly   — 仅记录
+#
+# Conditions 中 Target 可选值:
+#   UrlPath, FullUrl, Method, ContentType, UserAgent,
+#   Referer, Header, QueryParam, Cookie, ClientIp, StatusCode
+#
+# Conditions 中 Operator 可选值:
+#   Equal, NotEqual, Contains, NotContains,
+#   StartsWith, EndsWith, Regex, Exists, NotExists
+#
+Statistic {
+    # 白名单路径（跳过 WAF / CC 检测）
+    WhitePaths = ["/health", "/favicon.ico", "/robots.txt"]
+
+    # 路径统计规则（用于流量分析）
+    # PathStas = ["/api/{**match}", "/page/{**match}"]
+
+    # ── CC 防护规则 ──
+    CcRules {
+        # 频繁访问限制 — 10 秒内超过 100 次请求触发验证码
+        频繁访问限制 {
+            Enabled = true
+            Type = FrequentAccess
+            Period = 10
+            Threshold = 100
+            Action = Captcha
+            ActionSeconds = 600
+            Priority = 1
         }
-        
-        # SOCKS5 代理端口
-        1080 {
-            EnableHttp = false
-            EnableHttps = false
-            EnableSocks5 = true     # 支持 SOCKS5
-            RequireAuth = true      # 需要认证
+
+        # API 接口限流 — 仅匹配 /api/ 路径
+        API接口限流 {
+            Type = FrequentAccess
+            Period = 60
+            Threshold = 300
+            Action = Reject
+            ActionSeconds = 120
+            Conditions {
+                UrlPath StartsWith ["/api/"]
+            }
         }
-        
-        # 混合代理端口（同时支持所有协议）
-        # 3128 = "http,https,socks5"  # 简化格式
+
+        # 高频攻击封禁 — 10 秒内触发 5 次 WAF 拦截则封禁 30 分钟
+        高频攻击封禁 {
+            Type = FrequentAttack
+            Period = 10
+            Threshold = 5
+            Action = Block
+            ActionSeconds = 1800
+        }
+
+        # 高频错误封禁 — 60 秒内 50 次错误响应
+        高频错误封禁 {
+            Type = FrequentError
+            Period = 60
+            Threshold = 50
+            Action = Block
+            ActionSeconds = 600
+        }
+
+        # 登录接口限流 — 仅匹配 POST /auth/login
+        登录限流 {
+            Type = FrequentAccess
+            Period = 60
+            Threshold = 10
+            Action = Captcha
+            ActionSeconds = 300
+            Conditions {
+                UrlPath Equal ["/auth/login"]
+                Method Equal ["POST"]
+            }
+        }
     }
 }
 
-# 访问控制
+# ============================================================
+# 速率限制
+# ============================================================
+SpeedLimit {
+    RejectCode = 429
+    # Default = "fixed-global"          # 默认使用的策略名称
+
+    Limits {
+        # 固定窗口策略
+        fixed-global {
+            Name = "fixed"
+            PermitLimit = 100             # 窗口内允许的请求数
+            Window = "00:01:00"           # 1 分钟窗口
+            QueueLimit = 20               # 排队等待的请求数
+        }
+
+        # 滑动窗口策略
+        # sliding-api {
+        #     Name = "sliding"
+        #     PermitLimit = 50
+        #     Window = "00:01:00"
+        #     SegmentsPerWindow = 6       # 滑动窗口分段数
+        # }
+    }
+
+    Throttled {
+        Global = 0                        # 全局带宽限制（0=不限制，单位: bytes/s）
+        # Everys { "/api" = 1000000 }     # 每路径带宽限制
+        # IpEverys { "10.0.0.0/8" = 5000000 }  # 每 IP 带宽限制
+    }
+}
+
+# ============================================================
+# 访问控制（IP 黑白名单 + 地理位置）
+# ============================================================
 AccessControl {
     RejectStatusCode = 403
-    RejectMessage = "Access Denied: {ClientIp}"
-    
-    Whitelist = ["127.0.0.1", "10.0.0.0/8"]
-    
+    # RejectMessage = "Access Denied: {ClientIp}"
+
+    # 全局 IP 白名单（不受任何访问控制限制）
+    Whitelist = ["127.0.0.1", "::1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+
+    # IP 黑名单控制
     IpControl {
-        Enabled = true
-        Blacklist = ["1.2.3.4"]
+        Enabled = false
+        Blacklist = ["1.2.3.4", "5.6.7.0/24"]
+
+        # 基于路径的规则
+        # PathRules {
+        #     "/admin/*" {
+        #         Whitelist = ["10.0.0.0/8"]
+        #         Blacklist = []
+        #     }
+        # }
+    }
+
+    # 地理位置访问控制（基于 IP2Region）
+    GeoControl {
+        Enabled = false
+        DatabasePath = "ip2region.xdb"
+        Mode = "Deny"                     # Allow（仅允许列表中的）| Deny（拒绝列表中的）
+        # AllowCountries = ["中国"]
+        DenyCountries = []
+        DenyRegions = []
+        # RejectMessage = "Access denied from {Country} {Region}"
+    }
+
+    # 连接数限制
+    ConnectionLimit {
+        Enabled = false
+        MaxConnectionsPerIp = 100         # 每 IP 最大并发连接数
+        MaxConnectionsPerDestination = 1000
+        MaxTotalConnections = 10000
+        RejectStatusCode = 503
+        # PathLimits { "/upload/*" = 10 }
     }
 }
 
+# ============================================================
 # 响应压缩
+# ============================================================
 Compress {
     Enabled = true
     EnableBrotli = true
     EnableGzip = true
-    Level = "Fastest"
-    MinSize = 10240
+    Level = "Fastest"                     # Fastest | Optimal | SmallestSize | NoCompression
+    MinSize = 10240                       # 最小压缩体积（字节）
 }
 
-# ACME 配置（Let's Encrypt）
-Acme {
+# ============================================================
+# 自定义 DNS
+# ============================================================
+CustomDns {
     Enabled = true
-    AcceptTermsOfService = true
-    Domains = [$domain, "www.${domain}", "api.${domain}"]
-    
-    if $env == "production" {
-        UseStaging = false
-    } else {
-        UseStaging = true
+    CacheTtlSeconds = 300               # DNS 缓存时间（秒），0 = 不缓存
+
+    # 自定义 DNS 服务器列表（可选）
+    # 当域名没有匹配的静态映射时，向这些 DNS 服务器发起查询
+    # 如果未配置则使用系统默认 DNS
+    DnsServers = ["8.8.8.8", "1.1.1.1:53"]
+    DnsTimeoutMs = 3000                  # DNS 查询超时（毫秒，默认 3000）
+
+    # 静态域名映射（优先于 DNS 服务器查询）
+
+    # 简单格式：域名 = "IP列表（空格分隔）"
+    "backend.internal" = "192.168.1.100 192.168.1.101"
+    "*.internal.example.com" = "10.0.0.1 10.0.0.2"
+
+    # 完整配置格式
+    "api.internal" {
+        Addresses = ["192.168.1.200", "192.168.1.201"]
+        Policy = "RoundRobin"             # RoundRobin | Random
+        TtlSeconds = 60
     }
 }
 
-StreamServer {
-    Enabled = true
+# ============================================================
+# 正向代理服务（HTTP/HTTPS/SOCKS5 代理）
+# ============================================================
+ProxyServer {
+    Enabled = false
+    # Username = "proxyuser"
+    # Password = "proxypass"
     ConnectTimeout = 30
     DataTimeout = 300
-    
-    # 简单格式 - 单个上游
+    # AllowedHosts = ["*.example.com"]
+    # BlockedHosts = ["*.blocked.com"]
+
+    Ports {
+        8080 {
+            EnableHttp = true
+            EnableHttps = true
+            EnableSocks5 = false
+            RequireAuth = false
+        }
+        1080 {
+            EnableHttp = false
+            EnableHttps = false
+            EnableSocks5 = true
+            RequireAuth = true
+        }
+    }
+}
+
+# ============================================================
+# TCP 流代理
+# ============================================================
+StreamServer {
+    Enabled = false
+    ConnectTimeout = 30
+    DataTimeout = 300
+
+    # 简单格式 — 端口 = "上游地址"
     3306 = "192.168.1.100:3306"
-    
-    # 列表格式 - 多个上游
     6379 = ["redis1:6379", "redis2:6379"]
-    
+
     # 详细格式
     5432 {
         Upstreams = ["pg1:5432", "pg2:5432"]
-        Policy = "RoundRobin"  # 或 Random, First
+        Policy = "RoundRobin"
         ConnectTimeout = 10
     }
-    
+
     # 绑定特定 IP
     127.0.0.1:8080 {
         Upstreams = ["backend:80"]
@@ -321,173 +528,67 @@ StreamServer {
 }
 
 # ============================================================
-# A/B 测试配置 - 有两种方式
+# ACME 配置（Let's Encrypt 自动证书）
 # ============================================================
-
-# 方式一：使用 ABTest 全局配置 + ABCookieTest 负载均衡策略
-# 适合需要统一管理多个 A/B 测试的场景
-ABTest {
-    # 首页 A/B 测试
-    homepage-test {
-        Name = "首页改版测试"
-        Enabled = true
-        # 模式: Random(纯随机), CookieSticky(Cookie会话保持), IpHash(IP哈希), UserIdHash(用户ID哈希)
-        Mode = "CookieSticky"
-        CookieName = "ab_homepage"
-        CookieExpireDays = 30
-        
-        # 流量分配权重（百分比）
-        Variants {
-            A = 70    # 70% 流量到变体 A
-            B = 30    # 30% 流量到变体 B
-        }
-        
-        # 变体对应的后端 Destination ID
-        VariantTargets {
-            A = "dest1"     # 对应 Cluster 中的 dest1
-            B = "dest2"     # 对应 Cluster 中的 dest2
-        }
-        
-        # 匹配路径（空表示匹配所有）
-        MatchPaths = ["/", "/home/*"]
-        # 排除路径
-        ExcludePaths = ["/api/*", "/static/*"]
-    }
-    
-    # 多变体测试示例
-    checkout-flow {
-        Name = "结账流程测试"
-        Mode = "IpHash"
-        Variants {
-            control = 50      # 对照组
-            variant1 = 25     # 变体1
-            variant2 = 25     # 变体2
-        }
-        VariantTargets {
-            control = "dest1"
-            variant1 = "dest2"
-            variant2 = "dest3"
-        }
-        MatchPaths = ["/checkout/*"]
-    }
-}
-
-# 使用 ABCookieTest 策略的站点配置示例
-# 需要配合上面的 ABTest 配置使用
-abtest.${domain} {
-    proxy {
-        to = "http://127.0.0.1:8001 http://127.0.0.1:8002"
-        lb_policy = "ABCookieTest"    # 使用 A/B 测试负载均衡策略
-        abtest_id = "homepage-test"   # 关联上面定义的 A/B 测试 ID
-    }
-}
-
-# 方式二：使用 ABTestWeighted 策略（简单场景）
-# 直接在 upstream 配置权重，无需配置 ABTest 块
-# 适合简单的流量分配场景
-simple-ab.${domain} {
-    proxy {
-        # upstream 地址后面加 @权重，或使用 weight=权重
-        to = "http://127.0.0.1:8001@70 http://127.0.0.1:8002@30"
-        lb_policy = "ABTestWeighted"  # 使用权重负载均衡
-        ab_cookie = "ab_simple"       # Cookie 名称（会话保持）
-        ab_cookie_expire = 30         # Cookie 有效期（天）
-    }
-}
-
-# 三变体测试示例
-multivariant.${domain} {
-    proxy {
-        to = "http://v1.backend:8080@50 http://v2a.backend:8080@25 http://v2b.backend:8080@25"
-        lb_policy = "ABTestWeighted"
-        ab_cookie = "ab_checkout"
-    }
+Acme {
+    Enabled = false
+    AcceptTermsOfService = true
+    Domains = [$domain, "www.${domain}", "api.${domain}"]
+    # UseStaging = true                  # 测试环境使用 staging
 }
 
 # ============================================================
-# 域名日志配置 - 按域名分别记录日志
+# 域名日志
 # ============================================================
-# 
-# 使用方式：在请求开始时会注入一个域名专用的 Logger 到 HttpContext
-# 后续中间件可以通过以下方式使用：
-#   var logger = context.GetLyLogger();  // 获取域名 Logger
-#   logger?.Info("message");                  // 记录日志
-# 
-# 或使用扩展方法：
-#   context.LogDomainInfo("message");
-#   context.LogDomainError(ex, "error message");
-#
 LyLog {
     Enabled = true
-    
-    # 全局日志配置（没有配置专属域名日志时使用）
+
     Global {
         Enabled = true
-        AccessLog = "access_${shortdate}.log"   # 支持 NLog 变量
+        AccessLog = "access_${shortdate}.log"
         ErrorLog = "error_${shortdate}.log"
-        Directory = "logs"                       # 日志目录
-        Level = "Info"                          # Trace, Debug, Info, Warn, Error, Fatal
-        Format = "Text"                         # Text 或 Json
-        PerfLog = false                         # 高性能日志（保持文件打开）
+        Directory = "logs"
+        Level = "Info"                    # Trace | Debug | Info | Warn | Error | Fatal
+        Format = "Text"                   # Text | Json
+        PerfLog = false                   # 高性能模式（保持文件打开）
     }
-    
-    # 域名日志配置（直接使用域名作为 key，无需 Domains 层级）
-    
-    # 主站日志 - 单独记录到 logs/example.com/
+
     $domain {
         Enabled = true
-        Output = "logs/${domain}"           # 日志输出目录
+        Output = "logs/${domain}"
         Level = "Info"
-        Format = "Text"                     # Text 格式
-        AlsoLogToGlobal = true              # 同时记录到全局日志
-        ExcludePaths = ["/health", "/favicon.ico"]  # 排除的路径
+        Format = "Text"
+        AlsoLogToGlobal = true
+        ExcludePaths = ["/health", "/favicon.ico"]
     }
-    
-    # API 日志 - 单独记录到 logs/api/（JSON 格式便于分析）
+
     "api.${domain}" {
         Output = "logs/api"
         Level = "Debug"
-        Format = "Json"                     # Json 格式: {"msg": "...", "time": "..."}
+        Format = "Json"
         ExcludePaths = ["/health", "/metrics"]
-    }
-    
-    # 通配符匹配 - *.internal.example.com
-    "*.internal.${domain}" {
-        Output = "logs/internal"
-        Level = "Debug"
-        AlsoLogToGlobal = false             # 不记录到全局日志
     }
 }
 
 # ============================================================
-# 错误页面模板配置
+# 错误页面模板
 # ============================================================
-# 支持的模板变量:
-#   {client_ip} / {ClientIp} / {ip}     - 客户端IP
-#   {path} / {Path}                     - 请求路径
-#   {method} / {Method}                 - 请求方法
-#   {host} / {Host}                     - 请求Host
-#   {time} / {Time}                     - 当前时间
-#   {status_code} / {StatusCode}        - 状态码
-#   {status_text} / {StatusText}        - 状态文本
-#   {user_agent} / {UserAgent}          - User-Agent
-#   {referer} / {Referer}               - Referer
-#   {query} / {Query}                   - 查询字符串
-#   {reason} / {Reason}                 - 错误原因（需要 ShowReason = true）
-#   {show_reason_info}                  - 格式化的原因HTML
+# 模板变量:
+#   {client_ip}/{ClientIp}  {path}/{Path}  {method}/{Method}
+#   {host}/{Host}  {time}/{Time}  {status_code}/{StatusCode}
+#   {status_text}/{StatusText}  {user_agent}/{UserAgent}
+#   {reason}/{Reason}  {show_reason_info}
 #
 ErrorTemplate {
     Enabled = true
-    ShowReason = false                      # 生产环境建议关闭，避免泄露敏感信息
-    
-    # 403 Forbidden - 使用文件模板
+    ShowReason = false                    # 生产环境建议关闭
+
     Forbidden {
         Type = "File"
         FilePath = "templates/403.html"
         ContentType = "text/html; charset=utf-8"
     }
-    
-    # 404 Not Found - 使用内联模板
+
     NotFound {
         Type = "Inline"
         Content = """
@@ -497,39 +598,57 @@ ErrorTemplate {
             <body style="text-align:center;padding:50px;">
                 <h1>404</h1>
                 <p>页面不存在: {path}</p>
-                <p><small>LyWaf</small></p>
             </body>
             </html>
         """
     }
-    
-    # 429 Too Many Requests - CC防护触发
+
     TooManyRequests {
         Type = "File"
         FilePath = "templates/429.html"
     }
-    
-    # 502 Bad Gateway
+
     BadGateway {
-        Type = "Default"                    # 使用默认模板
+        Type = "Default"
     }
-    
-    # 503 Service Unavailable
+
     ServiceUnavailable {
         Type = "File"
         FilePath = "templates/503.html"
-        Headers {
-            Retry-After = "60"
-        }
+        Headers { Retry-After = "60" }
     }
-    
-    # 自定义状态码模板
+
     Custom {
         "418" {
             Type = "Inline"
-            Content = "<h1>I'm a teapot ☕</h1>"
+            Content = "<h1>I'm a teapot</h1>"
             ContentType = "text/html; charset=utf-8"
         }
+    }
+}
+
+# ============================================================
+# A/B 测试
+# ============================================================
+ABTest {
+    homepage-test {
+        Name = "首页改版测试"
+        Enabled = true
+        Mode = "CookieSticky"             # Random | CookieSticky | IpHash | UserIdHash
+        CookieName = "ab_homepage"
+        CookieExpireDays = 30
+
+        Variants {
+            A = 70
+            B = 30
+        }
+        VariantTargets {
+            A = "dest1"
+            B = "dest2"
+        }
+
+        MatchPaths = ["/", "/home/*"]
+        ExcludePaths = ["/api/*", "/static/*"]
     }
 }
 
@@ -537,20 +656,16 @@ ErrorTemplate {
 # 条件配置
 # ============================================================
 if $env == "development" {
-    # 开发环境使用 Debug 级别
     LyLog {
-        Global {
-            Level = "Debug"
-        }
+        Global { Level = "Debug" }
     }
 }
 
 if $env == "production" {
-    # 生产环境使用 Info 级别
     LyLog {
         Global {
             Level = "Info"
-            PerfLog = true                      # 生产环境启用高性能日志
+            PerfLog = true
         }
     }
 }

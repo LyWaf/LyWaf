@@ -1174,7 +1174,7 @@ public class Program
         // 获取自定义 DNS 配置
         var customDnsOptions = new CustomDnsOptions();
         builder.Configuration.GetSection("CustomDns").Bind(customDnsOptions);
-        var customDnsEnabled = customDnsOptions.Enabled && customDnsOptions.Entries.Count > 0;
+        var customDnsEnabled = customDnsOptions.Enabled && (customDnsOptions.Entries.Count > 0 || customDnsOptions.DnsServers.Count > 0);
         
         var reverse = builder.Services.AddReverseProxy()
             .ConfigureHttpClient((context, handler) =>

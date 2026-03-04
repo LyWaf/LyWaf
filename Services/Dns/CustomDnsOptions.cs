@@ -19,11 +19,17 @@ public class CustomDnsOptions
     public Dictionary<string, DnsEntry> Entries { get; set; } = [];
 
     /// <summary>
-    /// 默认 DNS 服务器（可选，当自定义映射未命中时使用）
-    /// 格式: IP:Port，如 8.8.8.8:53
+    /// 自定义 DNS 服务器列表（可选）
+    /// 当自定义映射未命中时，依次向这些 DNS 服务器发起查询
+    /// 格式: "IP" 或 "IP:Port"，如 "8.8.8.8"、"1.1.1.1:53"
     /// 留空则使用系统默认 DNS
     /// </summary>
-    public string? FallbackDns { get; set; } = null;
+    public List<string> DnsServers { get; set; } = [];
+
+    /// <summary>
+    /// DNS 查询超时（毫秒），默认 3000ms
+    /// </summary>
+    public int DnsTimeoutMs { get; set; } = 3000;
 
     /// <summary>
     /// DNS 解析缓存时间（秒），0 表示不缓存

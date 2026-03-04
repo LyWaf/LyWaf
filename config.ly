@@ -35,7 +35,7 @@ LyLog {
     }
 }
 
-protect {
+statistic {
     CcRules {
         rule1 {
             Type = FrequentAccess
@@ -50,7 +50,9 @@ protect {
             }
         }
     }
+}
 
+protect {
     WafRules {
         block-admin-post {
             Name = "拦截 admin POST 请求"
