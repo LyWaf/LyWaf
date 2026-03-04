@@ -52,6 +52,11 @@ const destinations = computed(() =>
   currentCluster.value?.destinations ?? []
 )
 
+// 当前集群是否存在补丁数据
+const hasPatch = computed(() =>
+  destinations.value.some(d => d.source === 'patch')
+)
+
 // 是否全选
 const allSelected = computed(() =>
   destinations.value.length > 0 && selectedDestIds.value.size === destinations.value.length
@@ -304,7 +309,12 @@ onMounted(loadData)
           <span class="text-sm text-gray-500 ml-2">({{ destinations.length }})</span>
         </h2>
         <div class="flex items-center gap-2">
-          <button @click="removeClusterPatch" class="btn btn-sm btn-warning flex items-center gap-1">
+          <button
+            @click="removeClusterPatch"
+            :disabled="!hasPatch"
+            class="btn btn-sm btn-warning flex items-center gap-1"
+            :class="{ 'opacity-50 cursor-not-allowed': !hasPatch }"
+          >
             删除补丁
           </button>
           <button @click="openAddDialog" class="btn btn-sm btn-primary flex items-center gap-1">

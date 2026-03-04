@@ -380,6 +380,33 @@ export interface WafCustomRule {
   updatedAt?: string
 }
 
+// =============== 通用设置类型 ===============
+
+// 证书详情
+export interface CertDetail {
+  domain: string
+  type: 'acme' | 'uploaded'
+  issuer: string
+  notAfter: string
+  pemFile: string
+  usedBy: string[]
+}
+
+// 审计日志条目
+export interface AuditLogEntry {
+  username: string
+  action: string
+  ip: string
+  timestamp: string
+}
+
+// 控制台信息
+export interface ConsoleInfo {
+  username: string
+  lastLoginAt: string | null
+  controlListen: { host: string; port: number }
+}
+
 // 仪表板数据
 export interface DashboardData {
   system: SystemStatus

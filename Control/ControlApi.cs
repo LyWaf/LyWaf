@@ -11,7 +11,10 @@ using LyWaf.Config;
 using LyWaf.Plugins.Core;
 using LyWaf.Services.Auth;
 using LyWaf.Services.WafRule;
+using LyWaf.Services.AuditLog;
+using LyWaf.Services.Acme;
 using LyWaf.Shared;
+using System.Security.Cryptography.X509Certificates;
 using LyWaf.Utils;
 using Microsoft.Extensions.FileProviders;
 using YamlDotNet.Serialization;
@@ -153,8 +156,11 @@ public static class ControlApi
                 return Results.Json(new { success = false, message = "用户名和密码不能为空" }, statusCode: 400);
             }
             var result = authService.Login(request.Username, request.PasswordHash, request.Timestamp);
+            var clientIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
             if (!result.Success)
             {
+                var auditFail = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                auditFail.Log(request.Username, "登录失败", clientIp);
                 return Results.Json(new
                 {
                     success = false,
@@ -162,6 +168,8 @@ public static class ControlApi
                     retryAfterSeconds = result.RetryAfterSeconds
                 }, statusCode: 401);
             }
+            var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+            audit.Log(result.Username ?? request.Username, "登录成功", clientIp);
             return Results.Json(new
             {
                 success = true,
@@ -233,6 +241,7 @@ public static class ControlApi
                     await context.Response.WriteAsJsonAsync(new { success = false, message = "令牌无效或已过期" });
                     return;
                 }
+                context.Items["Username"] = authService.GetUsername(token) ?? "unknown";
                 await next();
                 return;
             }
@@ -252,6 +261,7 @@ public static class ControlApi
                         var result = authService.ValidateCredentials(basicUser, basicPass);
                         if (result.Success)
                         {
+                            context.Items["Username"] = basicUser;
                             await next();
                             return;
                         }
@@ -315,6 +325,8 @@ public static class ControlApi
             {
                 return Results.Json(new { success = false, message = "当前密码错误" }, statusCode: 400);
             }
+            var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+            audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", "修改密码", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
             return Results.Json(new { success = true, message = "密码修改成功" });
         }).RequireHost($"*:{controlPort}");
 
@@ -549,7 +561,11 @@ public static class ControlApi
                 ParseRuleEnums(ctx, rule);
 
                 if (wafRuleService.AddRule(rule))
+                {
+                    var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                    audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"创建WAF规则: {rule.Name}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
                     return Results.Json(new { success = true, message = "规则已创建", id = rule.Id });
+                }
                 return Results.Json(new { success = false, message = "创建失败" }, statusCode: 400);
             }
             catch (Exception ex)
@@ -576,7 +592,11 @@ public static class ControlApi
                 ParseRuleEnums(ctx, rule);
 
                 if (wafRuleService.UpdateRule(rule))
+                {
+                    var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                    audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"更新WAF规则: {rule.Name} ({id})", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
                     return Results.Json(new { success = true, message = "规则已更新" });
+                }
                 return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
             }
             catch (Exception ex)
@@ -586,24 +606,31 @@ public static class ControlApi
         }).RequireHost($"*:{controlPort}");
 
         // 删除规则（仅用户规则可删除）
-        app.MapDelete("/api/waf-rules/{id}", (string id, IWafRuleService wafRuleService) =>
+        app.MapDelete("/api/waf-rules/{id}", (string id, HttpContext ctx, IWafRuleService wafRuleService) =>
         {
             // 检查来源：非用户规则不可删除
             var existing = wafRuleService.GetRule(id);
             if (existing != null && existing.Source != WafRuleSource.User)
                 return Results.Json(new { success = false, message = "非用户规则不可删除" }, statusCode: 403);
 
+            var ruleName = existing?.Name ?? id;
             if (wafRuleService.DeleteRule(id))
+            {
+                var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"删除WAF规则: {ruleName} ({id})", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
                 return Results.Json(new { success = true, message = "规则已删除" });
+            }
             return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
         }).RequireHost($"*:{controlPort}");
 
         // 切换启用状态
-        app.MapPost("/api/waf-rules/{id}/toggle", (string id, IWafRuleService wafRuleService) =>
+        app.MapPost("/api/waf-rules/{id}/toggle", (string id, HttpContext ctx, IWafRuleService wafRuleService) =>
         {
             if (wafRuleService.ToggleRule(id))
             {
                 var rule = wafRuleService.GetRule(id);
+                var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"切换WAF规则: {rule?.Name ?? id} → {(rule?.Enabled == true ? "启用" : "禁用")}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
                 return Results.Json(new { success = true, enabled = rule?.Enabled, message = rule?.Enabled == true ? "规则已启用" : "规则已禁用" });
             }
             return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
@@ -1291,6 +1318,9 @@ public static class ControlApi
 
             configRoot.Reload();
 
+            var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+            audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", "重载配置", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
+
             // 检测端口是否变化（仅通知前端，由用户确认后调用 /api/restart 重启）
             var newWafInfos = new WafInfoOptions();
             config.GetSection("WafInfos").Bind(newWafInfos);
@@ -1312,6 +1342,8 @@ public static class ControlApi
         // 重启服务（用于端口变更后由前端确认触发）
         app.MapGet("/api/restart", (HttpContext ctx, IHostApplicationLifetime lifetime) =>
         {
+            var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+            audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", "重启服务", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
             SharedData.RestartRequested = true;
             _ = Task.Run(async () =>
             {
@@ -1430,6 +1462,11 @@ public static class ControlApi
                         }
                     }
                 }
+
+                var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                var username = ctx.Items["Username"]?.ToString() ?? "unknown";
+                var clientIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
+                audit.Log(username, request.Reload ? "保存并重载配置" : "保存配置草稿", clientIp);
 
                 return Results.Json(new
                 {
@@ -1899,6 +1936,8 @@ public static class ControlApi
                 var result = accessControlService.AddWhitelist(request.IpOrCidr);
                 if (result)
                 {
+                    var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                    audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"添加白名单: {request.IpOrCidr}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
                     return Results.Json(new
                     {
                         success = true,
@@ -1932,6 +1971,8 @@ public static class ControlApi
                 var result = accessControlService.RemoveWhitelist(request.IpOrCidr);
                 if (result)
                 {
+                    var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                    audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"移除白名单: {request.IpOrCidr}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
                     return Results.Json(new
                     {
                         success = true,
@@ -1978,6 +2019,8 @@ public static class ControlApi
                 var result = accessControlService.AddBlacklist(request.IpOrCidr);
                 if (result)
                 {
+                    var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                    audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"添加黑名单: {request.IpOrCidr}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
                     return Results.Json(new
                     {
                         success = true,
@@ -2011,6 +2054,8 @@ public static class ControlApi
                 var result = accessControlService.RemoveBlacklist(request.IpOrCidr);
                 if (result)
                 {
+                    var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                    audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"移除黑名单: {request.IpOrCidr}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
                     return Results.Json(new
                     {
                         success = true,
@@ -5083,6 +5128,200 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // =============== 通用设置 — 证书管理 ===============
+
+        app.MapGet("/api/settings/certs", (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                // ACME 证书目录
+                var acmeOpts = new AcmeOptions();
+                config.GetSection("Acme").Bind(acmeOpts);
+                var acmeCertDir = Path.GetFullPath(acmeOpts.CertificatePath);
+
+                var certList = new List<object>();
+                foreach (var c in wafInfos.Certs)
+                {
+                    var domain = c.Host;
+                    var pemFile = c.PemFile;
+                    var certType = "uploaded";
+                    var issuer = "";
+                    var notAfter = "";
+
+                    // 判断类型：PEM 路径在 ACME 目录下 → acme
+                    try
+                    {
+                        var fullPemPath = Path.GetFullPath(pemFile);
+                        if (fullPemPath.StartsWith(acmeCertDir, StringComparison.OrdinalIgnoreCase))
+                        {
+                            certType = "acme";
+                        }
+                    }
+                    catch { }
+
+                    // 解析证书详细信息
+                    try
+                    {
+                        if (File.Exists(pemFile))
+                        {
+                            var pemText = File.ReadAllText(pemFile);
+                            using var cert = X509Certificate2.CreateFromPem(pemText);
+                            issuer = cert.Issuer;
+                            notAfter = cert.NotAfter.ToString("yyyy-MM-dd");
+                        }
+                    }
+                    catch { }
+
+                    certList.Add(new
+                    {
+                        domain,
+                        type = certType,
+                        issuer,
+                        notAfter,
+                        pemFile = Path.GetFileName(pemFile),
+                    });
+                }
+
+                return Results.Json(new { success = true, certs = certList });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"获取证书列表失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapPost("/api/settings/certs/upload", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<CertUploadRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Domain)
+                    || string.IsNullOrWhiteSpace(request.PemContent) || string.IsNullOrWhiteSpace(request.KeyContent))
+                {
+                    return Results.Json(new { success = false, message = "域名、证书内容和密钥内容不能为空" }, statusCode: 400);
+                }
+
+                // 验证 PEM 格式
+                try
+                {
+                    using var _ = X509Certificate2.CreateFromPem(request.PemContent, request.KeyContent);
+                }
+                catch (Exception ex)
+                {
+                    return Results.Json(new { success = false, message = $"证书格式无效: {ex.Message}" }, statusCode: 400);
+                }
+
+                // 保存文件
+                var certsDir = Path.Combine(Directory.GetCurrentDirectory(), "certs");
+                if (!Directory.Exists(certsDir)) Directory.CreateDirectory(certsDir);
+
+                var safeDomain = request.Domain.Replace("*", "_wildcard_").Replace(":", "_");
+                var pemPath = Path.Combine(certsDir, $"{safeDomain}.pem");
+                var keyPath = Path.Combine(certsDir, $"{safeDomain}.key");
+
+                await File.WriteAllTextAsync(pemPath, request.PemContent);
+                await File.WriteAllTextAsync(keyPath, request.KeyContent);
+
+                // 记审计日志
+                var auditLog = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                var username = ctx.Items["Username"]?.ToString() ?? "unknown";
+                var clientIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
+                auditLog.Log(username, $"上传证书: {request.Domain}", clientIp);
+
+                return Results.Json(new { success = true, message = $"证书已保存，需要重载配置后生效", pemFile = $"{safeDomain}.pem", keyFile = $"{safeDomain}.key" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"上传证书失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapPost("/api/settings/certs/delete", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<CertDeleteRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.PemFile))
+                {
+                    return Results.Json(new { success = false, message = "证书文件名不能为空" }, statusCode: 400);
+                }
+
+                // 查找对应证书
+                var cert = wafInfos.Certs.FirstOrDefault(c => Path.GetFileName(c.PemFile) == request.PemFile);
+                if (cert == null)
+                {
+                    return Results.Json(new { success = false, message = "未找到该证书" }, statusCode: 404);
+                }
+
+                // 删除文件
+                if (File.Exists(cert.PemFile)) File.Delete(cert.PemFile);
+                if (!string.IsNullOrEmpty(cert.KeyFile) && File.Exists(cert.KeyFile)) File.Delete(cert.KeyFile);
+
+                // 记审计日志
+                var auditLog = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                var username = ctx.Items["Username"]?.ToString() ?? "unknown";
+                var clientIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
+                auditLog.Log(username, $"删除证书: {cert.Host} ({request.PemFile})", clientIp);
+
+                return Results.Json(new { success = true, message = "证书已删除，需要重载配置后生效" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除证书失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 通用设置 — 控制台信息 ===============
+
+        app.MapGet("/api/settings/console", (HttpContext ctx) =>
+        {
+            try
+            {
+                var authService = ctx.RequestServices.GetRequiredService<IAuthService>();
+                var cl = wafInfos.GetControlListen();
+
+                return Results.Json(new
+                {
+                    success = true,
+                    username = authService.GetCurrentUsername(),
+                    lastLoginAt = authService.GetLastLoginAt(),
+                    controlListen = new { host = cl.Host, port = cl.Port }
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"获取控制台信息失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 通用设置 — 审计日志 ===============
+
+        app.MapGet("/api/settings/audit-logs", (HttpContext ctx, int offset = 0, int limit = 50) =>
+        {
+            try
+            {
+                var auditLog = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                var (items, total) = auditLog.GetLogs(offset, limit);
+
+                return Results.Json(new
+                {
+                    success = true,
+                    items = items.Select(e => new
+                    {
+                        username = e.Username,
+                        action = e.Action,
+                        ip = e.Ip,
+                        timestamp = e.Timestamp.ToString("yyyy-MM-dd HH:mm:ss")
+                    }),
+                    total
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"获取审计日志失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         return app;
     }
 
@@ -6358,4 +6597,16 @@ public class ChangePasswordRequest
 {
     public string CurrentPassword { get; set; } = "";
     public string NewPassword { get; set; } = "";
+}
+
+public class CertUploadRequest
+{
+    public string Domain { get; set; } = "";
+    public string PemContent { get; set; } = "";
+    public string KeyContent { get; set; } = "";
+}
+
+public class CertDeleteRequest
+{
+    public string PemFile { get; set; } = "";
 }

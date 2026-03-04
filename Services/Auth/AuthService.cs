@@ -83,6 +83,12 @@ public interface IAuthService
     /// 重置密码（CLI 命令行用）。生成新随机密码，打印到控制台。
     /// </summary>
     string ResetPassword();
+
+    /// <summary>获取当前用户名</summary>
+    string GetCurrentUsername();
+
+    /// <summary>获取上次登录时间</summary>
+    DateTime? GetLastLoginAt();
 }
 
 /// <summary>
@@ -493,6 +499,20 @@ public class AuthService : IAuthService
 
         _logger.Info("用户 {Username} 的密码已通过命令行重置", _config.Username);
         return newPassword;
+    }
+
+    // =============== 配置信息查询 ===============
+
+    public string GetCurrentUsername()
+    {
+        ReloadConfigIfStale();
+        return _config.Username;
+    }
+
+    public DateTime? GetLastLoginAt()
+    {
+        ReloadConfigIfStale();
+        return _config.LastLoginAt;
     }
 
     // =============== 从 Token 提取用户名 ===============

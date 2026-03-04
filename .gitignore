@@ -16,3 +16,4 @@ nul
 publish
 wwwroot/*
 bintemp_check
+temp/*

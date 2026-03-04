@@ -32,6 +32,7 @@ const menuItems: MenuItem[] = [
       { path: '/error-templates', name: '错误模板' },
     ]
   },
+  { path: '/general-settings', name: '通用设置', icon: '⚙️' },
 ]
 
 // 展开状态：默认展开「配置管理」

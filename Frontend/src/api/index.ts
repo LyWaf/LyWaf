@@ -865,6 +865,38 @@ export const pluginApi = {
     api.post<ApiResponse>(`/plugins/${encodeURIComponent(pluginId)}/config`, config),
 }
 
+// ==================== 通用设置 API ====================
+
+import type { CertDetail, AuditLogEntry, ConsoleInfo } from '@/types'
+
+interface CertsResponse {
+  success: boolean
+  certs: CertDetail[]
+}
+
+interface AuditLogsResponse {
+  success: boolean
+  items: AuditLogEntry[]
+  total: number
+}
+
+export const settingsApi = {
+  getCerts: () =>
+    api.get<CertsResponse>('/settings/certs'),
+
+  uploadCert: (data: { domain: string; pemContent: string; keyContent: string }) =>
+    api.post<ApiResponse>('/settings/certs/upload', data),
+
+  deleteCert: (pemFile: string) =>
+    api.post<ApiResponse>('/settings/certs/delete', { pemFile }),
+
+  getConsole: () =>
+    api.get<ConsoleInfo & { success: boolean }>('/settings/console'),
+
+  getAuditLogs: (offset = 0, limit = 50) =>
+    api.get<AuditLogsResponse>('/settings/audit-logs', { params: { offset, limit } }),
+}
+
 // ==================== 认证 API ====================
 
 export const authApi = {

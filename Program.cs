@@ -38,6 +38,7 @@ using LyWaf.Services.StreamServer;
 using LyWaf.Services.ABTest;
 using LyWaf.Services.Captcha;
 using LyWaf.Services.WafRule;
+using LyWaf.Services.AuditLog;
 using LyWaf.Config;
 using LyWaf.Shared;
 
@@ -1094,6 +1095,7 @@ public class Program
         builder.Services.AddSingleton<IAcmeService, AcmeService>();
         builder.Services.AddHostedService(sp => (AcmeService)sp.GetRequiredService<IAcmeService>());
         builder.Services.AddSingleton<ICustomDnsService, CustomDnsService>();
+        builder.Services.AddSingleton<IAuditLogService, AuditLogService>();
         builder.Services.AddHostedService<HttpProxyService>();  // 统一代理服务（HTTP/HTTPS/SOCKS5）
         builder.Services.AddHostedService<StreamService>();     // TCP 流代理服务
         builder.Services.AddSingleton<IProbingRequestFactory, LyxProbingRequestFactory>();

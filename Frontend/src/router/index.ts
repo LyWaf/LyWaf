@@ -92,6 +92,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/ErrorTemplates.vue'),
     meta: { title: '错误模板', icon: '🚫' }
   },
+  {
+    path: '/general-settings',
+    name: 'GeneralSettings',
+    component: () => import('@/views/GeneralSettings.vue'),
+    meta: { title: '通用设置', icon: '⚙️' }
+  },
 ]
 
 const router = createRouter({
