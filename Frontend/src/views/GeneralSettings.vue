@@ -92,6 +92,7 @@ const certTypeColor = (type: string) => type === 'acme' ? 'bg-green-500/15 text-
 // ==================== 控制台管理 ====================
 const consoleLoading = ref(false)
 const consoleInfo = ref<{ username: string; lastLoginAt: string | null; controlListen: { host: string; port: number } } | null>(null)
+const showPasswordDialog = ref(false)
 const passwordForm = ref({ currentPassword: '', newPassword: '', confirmPassword: '' })
 const changingPassword = ref(false)
 
@@ -127,6 +128,7 @@ const handleChangePassword = async () => {
     const res = await authApi.changePassword(passwordForm.value.currentPassword, passwordForm.value.newPassword) as unknown as { success: boolean; message?: string }
     if (res?.success) {
       showSuccess('密码修改成功')
+      showPasswordDialog.value = false
       passwordForm.value = { currentPassword: '', newPassword: '', confirmPassword: '' }
     } else {
       showError(res?.message || '修改密码失败')
@@ -284,7 +286,12 @@ onMounted(() => {
         <div v-else-if="consoleInfo" class="space-y-6">
           <!-- 用户信息卡片 -->
           <div>
-            <h3 class="text-sm font-medium text-gray-300 mb-3">用户信息</h3>
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-sm font-medium text-gray-300">用户信息</h3>
+              <button @click="showPasswordDialog = true; passwordForm = { currentPassword: '', newPassword: '', confirmPassword: '' }" class="btn btn-sm btn-primary">
+                修改密码
+              </button>
+            </div>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div class="bg-dark-card rounded-lg p-4 border border-dark-border">
                 <div class="text-xs text-gray-500 mb-1">用户名</div>
@@ -298,47 +305,6 @@ onMounted(() => {
                 <div class="text-xs text-gray-500 mb-1">控制台监听</div>
                 <div class="text-gray-200 font-mono text-sm">{{ consoleInfo.controlListen.host }}:{{ consoleInfo.controlListen.port }}</div>
               </div>
-            </div>
-          </div>
-
-          <!-- 修改密码 -->
-          <div>
-            <h3 class="text-sm font-medium text-gray-300 mb-3">修改密码</h3>
-            <div class="max-w-md space-y-3">
-              <div>
-                <label class="block text-xs text-gray-500 mb-1">当前密码</label>
-                <input
-                  v-model="passwordForm.currentPassword"
-                  type="password"
-                  class="input w-full"
-                  placeholder="请输入当前密码"
-                />
-              </div>
-              <div>
-                <label class="block text-xs text-gray-500 mb-1">新密码</label>
-                <input
-                  v-model="passwordForm.newPassword"
-                  type="password"
-                  class="input w-full"
-                  placeholder="至少6位"
-                />
-              </div>
-              <div>
-                <label class="block text-xs text-gray-500 mb-1">确认新密码</label>
-                <input
-                  v-model="passwordForm.confirmPassword"
-                  type="password"
-                  class="input w-full"
-                  placeholder="再次输入新密码"
-                />
-              </div>
-              <button
-                @click="handleChangePassword"
-                :disabled="changingPassword"
-                class="btn btn-primary"
-              >
-                {{ changingPassword ? '提交中...' : '修改密码' }}
-              </button>
             </div>
           </div>
         </div>
@@ -445,6 +411,55 @@ onMounted(() => {
               class="btn btn-sm btn-primary"
             >
               {{ uploading ? '上传中...' : '上传' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ==================== 修改密码对话框 ==================== -->
+    <Teleport to="body">
+      <div v-if="showPasswordDialog" class="fixed inset-0 z-[100] flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/60" @click="showPasswordDialog = false"></div>
+        <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-sm mx-4 p-6">
+          <h3 class="text-lg font-semibold text-gray-100 mb-4">修改密码</h3>
+          <div class="space-y-3">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">当前密码</label>
+              <input
+                v-model="passwordForm.currentPassword"
+                type="password"
+                class="input w-full"
+                placeholder="请输入当前密码"
+              />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">新密码</label>
+              <input
+                v-model="passwordForm.newPassword"
+                type="password"
+                class="input w-full"
+                placeholder="至少6位"
+              />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">确认新密码</label>
+              <input
+                v-model="passwordForm.confirmPassword"
+                type="password"
+                class="input w-full"
+                placeholder="再次输入新密码"
+              />
+            </div>
+          </div>
+          <div class="flex items-center justify-end gap-3 mt-6">
+            <button @click="showPasswordDialog = false" class="btn btn-sm text-gray-400 hover:text-gray-200">取消</button>
+            <button
+              @click="handleChangePassword"
+              :disabled="changingPassword"
+              class="btn btn-sm btn-primary"
+            >
+              {{ changingPassword ? '提交中...' : '确认修改' }}
             </button>
           </div>
         </div>

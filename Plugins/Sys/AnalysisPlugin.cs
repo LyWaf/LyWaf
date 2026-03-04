@@ -64,22 +64,21 @@ public class AnalysisPlugin : LyWafPluginBase
         var context = e.Context;
         context.Request.EnableBuffering();
         context.Items.TryGetValue("ProxyDestUrl", out var destUrl);
-
         long useTime = (long)e.Duration.TotalMilliseconds;
-
         await StatisticUtil.DoStatisticRequest(context, (string?)destUrl ?? "", useTime);
-        context.Request.Body.Position = 0;
-        Stream rawbody = new MemoryStream();
-        var request = context.Request;
-        await request.Body.CopyToAsync(rawbody, 200);
-        var body = StreamUtil.ConvertToString(rawbody);
-        var url = RequestUtil.GetRequestUrl(request);
-        var response = context.Response;
-        var reqRaw = RequestUtil.RecordRuquest(request, body);
-        plugin.Logger.Info("以下是curl指令:\n{}\n返回{},长度{}\n当前请求耗时: {} ms\n",
-            reqRaw, response.StatusCode,
-            response.ContentLength != null ? response.ContentLength : response.Headers.TransferEncoding,
-            useTime);
+        
+        // context.Request.Body.Position = 0;
+        // Stream rawbody = new MemoryStream();
+        // var request = context.Request;
+        // await request.Body.CopyToAsync(rawbody, 200);
+        // var body = StreamUtil.ConvertToString(rawbody);
+        // var url = RequestUtil.GetRequestUrl(request);
+        // var response = context.Response;
+        // var reqRaw = RequestUtil.RecordRuquest(request, body);
+        // plugin.Logger.Info("以下是curl指令:\n{}\n返回{},长度{}\n当前请求耗时: {} ms\n",
+        //     reqRaw, response.StatusCode,
+        //     response.ContentLength != null ? response.ContentLength : response.Headers.TransferEncoding,
+        //     useTime);
 
     }
 
@@ -321,28 +320,23 @@ public class StatisticLogMiddleware(RequestDelegate next)
 
         await _next(context);
         context.Items.TryGetValue("ProxyDestUrl", out var destUrl);
-        _logger.Info("ProxyDestUrl === {} remote ip == {}", destUrl, RequestUtil.GetClientIp(context.Request));
-        var new_value = string.Format("{0} {1}", destUrl, timestamp_start);
-        SharedData.IpDict.AddOrUpdate("value", new_value);
-        SharedData.IpDict.AddOrUpdate("old", new_value);
-        SharedData.IpDict.AddOrUpdate("value1", "ke6");
         long timestamp_end = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await StatisticUtil.DoStatisticRequest(context, (string?)destUrl ?? "", timestamp_end - timestamp_start);
-        context.Request.Body.Position = 0;
-        var request = context.Request;
-        string? body = null;
-        try {
-            Stream rawbody = new MemoryStream();
-            await request.Body.CopyToAsync(rawbody, 200);
-            body = StreamUtil.ConvertToString(rawbody);
-        } catch(Exception) {
-        }
-        var response = context.Response;
-        var reqRaw = RequestUtil.RecordRuquest(request, body);
-        _logger.Info("以下是curl指令:\n{}\n返回{},长度{}\n当前请求耗时: {} ms\n",
-            reqRaw, response.StatusCode,
-            response.ContentLength != null ? response.ContentLength : response.Headers.TransferEncoding,
-            timestamp_end - timestamp_start);
+        // context.Request.Body.Position = 0;
+        // var request = context.Request;
+        // string? body = null;
+        // try {
+        //     Stream rawbody = new MemoryStream();
+        //     await request.Body.CopyToAsync(rawbody, 200);
+        //     body = StreamUtil.ConvertToString(rawbody);
+        // } catch(Exception) {
+        // }
+        // var response = context.Response;
+        // var reqRaw = RequestUtil.RecordRuquest(request, body);
+        // _logger.Info("以下是curl指令:\n{}\n返回{},长度{}\n当前请求耗时: {} ms\n",
+        //     reqRaw, response.StatusCode,
+        //     response.ContentLength != null ? response.ContentLength : response.Headers.TransferEncoding,
+        //     timestamp_end - timestamp_start);
     }
 }
