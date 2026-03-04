@@ -38,12 +38,26 @@
 
   <!-- 确保 control_html 目录复制到输出 -->
   <ItemGroup>
-    <Content Include="control_html\**" CopyToOutputDirectory="PreserveNewest" Exclude="@(Content)" />
+    <Content Include="control_html\**" CopyToOutputDirectory="Always" Exclude="@(Content)" />
   </ItemGroup>
 
   <!-- 确保 templates 目录复制到输出 -->
   <ItemGroup>
-    <Content Include="templates\**" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="templates\**" CopyToOutputDirectory="Always" />
+    <Content Include="Rules\**" CopyToOutputDirectory="Always" />
+  </ItemGroup>
+
+  <!-- 排除运行时状态文件、用户配置、构建产物等 -->
+  <ItemGroup>
+    <Content Remove=".lywaf.*" />
+    <Content Remove="config.ly.*" />
+    <None Remove=".lywaf.*" />
+    <Content Remove="publish\**" />
+    <Content Remove="temp\**" />
+    <Content Remove="logs\**" />
+    <Content Remove="bin*\**" />
+    <!-- 保留 config.ly.example -->
+    <None Include="config.ly.example" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
 </Project>

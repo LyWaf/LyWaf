@@ -110,12 +110,21 @@ publish_rid() {
     # 清理不需要的文件
     rm -f "$OUTPUT_DIR"/*.pdb
 
+    # 清理运行时状态文件
+    rm -f "$OUTPUT_DIR"/.lywaf.*
+    # 清理 config.ly.* 但保留 config.ly 和 config.ly.example
+    find "$OUTPUT_DIR" -maxdepth 1 -name "config.ly.*" ! -name "config.ly.example" ! -name "config.ly" -delete 2>/dev/null || true
+
     # 清理测试框架残留 (Microsoft.NET.Test.Sdk / xunit 引入的文件)
     local JUNK_DIRS=(CodeCoverage alpine arm64 macos ubuntu x64 x86
         cs de es fr it ja ko pl pt-BR ru tr zh-Hans zh-Hant tests Frontend wwwroot myLyWafbintest_build)
     for dir in "${JUNK_DIRS[@]}"; do
         rm -rf "$OUTPUT_DIR/$dir"
     done
+
+    # 清理构建产物、临时目录、bin* 开头的目录
+    rm -rf "$OUTPUT_DIR"/publish "$OUTPUT_DIR"/temp "$OUTPUT_DIR"/logs "$OUTPUT_DIR"/certs
+    find "$OUTPUT_DIR" -maxdepth 1 -type d -name "bin*" -exec rm -rf {} + 2>/dev/null || true
 
     rm -f "$OUTPUT_DIR"/Microsoft.CodeCoverage.* \
           "$OUTPUT_DIR"/Microsoft.DiaSymReader.* \

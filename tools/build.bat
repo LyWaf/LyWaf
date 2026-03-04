@@ -169,6 +169,20 @@ if errorlevel 1 (
 :: 清理 pdb 文件
 del /q "%OUTPUT_DIR%\*.pdb" >nul 2>&1
 
+:: 清理运行时状态文件
+del /q "%OUTPUT_DIR%\.lywaf.*" >nul 2>&1
+:: 清理 config.ly.* 但保留 config.ly 和 config.ly.example
+for %%f in ("%OUTPUT_DIR%\config.ly.*") do (
+    if /i not "%%~nxf"=="config.ly.example" if /i not "%%~nxf"=="config.ly" del /q "%%f" >nul 2>&1
+)
+
+:: 清理构建产物、临时目录
+for %%d in (publish temp logs certs) do (
+    if exist "%OUTPUT_DIR%\%%d" rd /s /q "%OUTPUT_DIR%\%%d"
+)
+:: 清理 bin* 开头的目录
+for /d %%d in ("%OUTPUT_DIR%\bin*") do rd /s /q "%%d" >nul 2>&1
+
 :: 清理测试框架残留
 for %%d in (CodeCoverage alpine arm64 macos ubuntu x64 x86 cs de es fr it ja ko pl pt-BR ru tr zh-Hans zh-Hant tests Frontend wwwroot myLyWafbintest_build) do (
     if exist "%OUTPUT_DIR%\%%d" rd /s /q "%OUTPUT_DIR%\%%d"

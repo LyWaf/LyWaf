@@ -22,8 +22,9 @@ public sealed class PidManager : IDisposable
     private readonly string _pidFilePath;
     private readonly string _pidName;
     private readonly Logger _logger = LogManager.GetCurrentClassLogger();
+    private readonly int _ownerThreadId;
     private Mutex? _mutex;
-    private bool _disposed = false;
+    private int _disposed = 0; // 0=未释放, 1=已释放 (用 Interlocked 保证线程安全)
     #endregion
 
     #region 公共属性
@@ -43,11 +44,11 @@ public sealed class PidManager : IDisposable
     /// </summary>
     /// <param name="pidName">应用程序名称（用于生成文件名）</param>
     /// <param name="customPidDir">自定义PID目录（可选）</param>
-    /// <param name="logger">日志记录器（可选）</param>
     public PidManager(string pidName, string? customPidDir = null)
     {
         _pidName = pidName ?? throw new ArgumentNullException(nameof(pidName));
         ProcessId = Environment.ProcessId;
+        _ownerThreadId = Environment.CurrentManagedThreadId;
 
         // 确定PID文件路径
         _pidFilePath = GetPidFilePath(pidName, customPidDir);
@@ -104,7 +105,7 @@ public sealed class PidManager : IDisposable
             // 使用 Named Mutex 实现进程互斥
             var mutexName = $"Global\\LyWaf_{Path.GetFileName(_pidFilePath).Replace(".", "_").Replace(":", "_")}";
             _mutex = new Mutex(true, mutexName, out bool createdNew);
-            
+
             if (!createdNew)
             {
                 // Mutex 已存在，检查进程是否真的在运行
@@ -115,7 +116,7 @@ public sealed class PidManager : IDisposable
                     throw new InvalidOperationException(
                         $"应用程序 '{_pidName}' 已在运行 (PID: {existingPid})");
                 }
-                
+
                 // 进程已死，等待获取 Mutex
                 if (!_mutex.WaitOne(1000))
                 {
@@ -125,7 +126,7 @@ public sealed class PidManager : IDisposable
                         $"无法获取锁，'{_pidName}' 可能已在运行。");
                 }
             }
-            
+
             // 清理旧的 PID 文件（如果存在且进程已死）
             if (File.Exists(_pidFilePath))
             {
@@ -142,8 +143,8 @@ public sealed class PidManager : IDisposable
             IsLockAcquired = true;
             _logger.Info("PID文件锁定成功: {PidFilePath} (PID: {ProcessId})", _pidFilePath, ProcessId);
 
-            // 注册全局退出事件
-            RegisterExitHandlers();
+            // 注册进程退出事件（仅用于兜底清理）
+            AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
         }
         catch (InvalidOperationException)
         {
@@ -209,39 +210,10 @@ public sealed class PidManager : IDisposable
     }
     #endregion
 
-
     #region 退出处理
-    /// <summary>
-    /// 注册各种退出事件处理器
-    /// </summary>
-    private void RegisterExitHandlers()
-    {
-        // .NET进程退出事件
-        AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
-
-        // 控制台Ctrl+C/Ctrl+Break
-        Console.CancelKeyPress += OnCancelKeyPress;
-
-        // 非托管异常
-        AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
-    }
-
     private void OnProcessExit(object? sender, EventArgs e)
     {
-        _logger.Info("进程正常退出，清理PID文件...");
-        Dispose();
-    }
-
-    private void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
-    {
-        _logger.Info("接收到终止信号，清理PID文件...");
-        e.Cancel = true; // 允许优雅退出
-        Dispose();
-    }
-
-    private void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
-    {
-        _logger.Error("未处理异常，清理PID文件: {Exception}", e.ExceptionObject);
+        _logger.Info("进程退出，清理PID文件...");
         Dispose();
     }
     #endregion
@@ -252,61 +224,69 @@ public sealed class PidManager : IDisposable
     /// </summary>
     public void Dispose()
     {
-        if (_disposed) return;
+        // 原子操作，保证只执行一次
+        if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0) return;
 
-        lock (this)
+        try
         {
-            if (_disposed) return;
+            // 取消事件注册
+            AppDomain.CurrentDomain.ProcessExit -= OnProcessExit;
 
-            try
+            // 删除 PID 文件
+            if (File.Exists(_pidFilePath))
             {
-                // 删除 PID 文件
-                if (File.Exists(_pidFilePath))
-                {
-                    File.Delete(_pidFilePath);
-                }
-                
-                // 释放 Mutex
-                DisposeMutex();
+                File.Delete(_pidFilePath);
+            }
 
-                _logger.Info("PID文件已清理: {PidFilePath}", _pidFilePath);
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "清理PID文件时出错: {Message}", ex.Message);
-            }
-            finally
-            {
-                _disposed = true;
-                GC.SuppressFinalize(this);
-            }
+            // 释放 Mutex
+            DisposeMutex();
+
+            IsLockAcquired = false;
+            _logger.Info("PID文件已清理: {PidFilePath}", _pidFilePath);
         }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "清理PID文件时出错: {Message}", ex.Message);
+        }
+
+        GC.SuppressFinalize(this);
     }
 
     private void DisposeMutex()
     {
+        if (_mutex == null) return;
+
         try
         {
-            if (_mutex != null)
+            // 仅在拥有 Mutex 的线程上调用 ReleaseMutex
+            // 其他线程（ProcessExit/终结器）只 Dispose 句柄，OS 会自动释放
+            if (Environment.CurrentManagedThreadId == _ownerThreadId)
             {
-                _mutex.ReleaseMutex();
-                _mutex.Dispose();
-                _mutex = null;
+                try { _mutex.ReleaseMutex(); } catch (ApplicationException) { }
             }
-            IsLockAcquired = false;
         }
-        catch (Exception ex)
+        finally
         {
-            _logger.Error(ex, "释放Mutex失败: {Message}", ex.Message);
+            _mutex.Dispose();
+            _mutex = null;
         }
     }
 
     ~PidManager()
     {
-        if (!_disposed)
+        if (Interlocked.CompareExchange(ref _disposed, 1, 0) == 0)
         {
-            _logger.Warn("PidManager未被正确释放!");
-            Dispose();
+            try
+            {
+                // 终结器：只删 PID 文件和释放 Mutex 句柄，不调用 ReleaseMutex
+                if (File.Exists(_pidFilePath))
+                {
+                    File.Delete(_pidFilePath);
+                }
+                _mutex?.Dispose();
+                _mutex = null;
+            }
+            catch { /* 终结器中不抛异常 */ }
         }
     }
     #endregion

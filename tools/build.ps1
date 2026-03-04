@@ -164,18 +164,26 @@ function Publish-Target {
     # 清理不需要的文件
     Get-ChildItem -Path $OutputDir -Filter "*.pdb" -ErrorAction SilentlyContinue | Remove-Item -Force
 
+    # 清理运行时状态文件
+    Get-ChildItem -Path $OutputDir -Filter ".lywaf.*" -ErrorAction SilentlyContinue | Remove-Item -Force
+    # 清理 config.ly.* 但保留 config.ly 和 config.ly.example
+    Get-ChildItem -Path $OutputDir -Filter "config.ly.*" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne "config.ly.example" -and $_.Name -ne "config.ly" } |
+        ForEach-Object { Remove-Item -Force $_.FullName }
+
     # 清理测试框架残留 (Microsoft.NET.Test.Sdk / xunit 引入的文件)
     $testJunk = @(
         "CodeCoverage", "alpine", "arm64", "macos", "ubuntu", "x64", "x86",
         "cs", "de", "es", "fr", "it", "ja", "ko", "pl", "pt-BR", "ru", "tr", "zh-Hans", "zh-Hant",
         "tests", "Frontend", "wwwroot", "myLyWafbintest_build"
     )
-    foreach ($dir in $testJunk) {
-        $junkPath = Join-Path $OutputDir $dir
-        if (Test-Path $junkPath) {
-            Remove-Item -Recurse -Force $junkPath -ErrorAction SilentlyContinue
-        }
-    }
+
+    # 清理构建产物、临时目录
+    $buildJunk = @("publish", "temp", "logs", "certs")
+    # 匹配 bin 开头的目录（bintemp_check 等）
+    Get-ChildItem -Path $OutputDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "bin*" -or $_.Name -in ($testJunk + $buildJunk) } |
+        ForEach-Object { Remove-Item -Recurse -Force $_.FullName -ErrorAction SilentlyContinue }
 
     $testFiles = @(
         "Microsoft.CodeCoverage.*", "Microsoft.DiaSymReader.*", "Microsoft.VisualStudio.*",
