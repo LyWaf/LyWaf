@@ -50,6 +50,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
     {
         try
         {
+            
             var httpMaxRequestBodySizeFeature = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
             if (httpMaxRequestBodySizeFeature is not null)
             {

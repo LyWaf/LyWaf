@@ -791,6 +791,8 @@ export interface DashboardResponse {
     uptime: string
     memory: number
     totalConnections: number
+    httpConnections: number
+    wsConnections: number
     blockedIpCount: number
     processStartTime: string
     uniqueIps: number

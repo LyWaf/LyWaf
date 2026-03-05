@@ -29,9 +29,13 @@ public class BasePluginMiddleware(IPluginEventBus eventBus, IOptions<WafInfoOpti
         var clientIp = RequestUtil.GetClientIp(context.Request);
         var sw = Stopwatch.StartNew();
         var startTime = DateTime.UtcNow;
+        // 通过请求头判断 WebSocket 升级请求（不依赖 UseWebSockets() 中间件）
+        var isWebSocket = string.Equals(
+            context.Request.Headers.Upgrade.ToString(), "websocket",
+            StringComparison.OrdinalIgnoreCase);
 
-        // 跟踪活跃连接
-        ConnectionTracker.OnRequestStart(clientIp);
+        // 跟踪活跃连接（区分 HTTP 和 WebSocket）
+        ConnectionTracker.OnRequestStart(clientIp, isWebSocket);
 
         // 发布请求开始事件
         await _eventBus.PublishAsync(new RequestStartedEvent { Context = context, VisitTime = startTime });
@@ -43,7 +47,7 @@ public class BasePluginMiddleware(IPluginEventBus eventBus, IOptions<WafInfoOpti
         finally
         {
             sw.Stop();
-            ConnectionTracker.OnRequestEnd(clientIp);
+            ConnectionTracker.OnRequestEnd(clientIp, isWebSocket);
 
             // 发布请求完成事件
             await _eventBus.PublishAsync(new RequestCompletedEvent

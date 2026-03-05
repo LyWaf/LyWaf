@@ -102,14 +102,24 @@ public sealed class PidManager : IDisposable
     {
         try
         {
+            // 先检查残留 PID 文件：如果对应进程已不存在，清理后继续
+            if (File.Exists(_pidFilePath) && TryReadExistingPid(out int stalePid))
+            {
+                if (!IsLyWafProcessAlive(stalePid))
+                {
+                    _logger.Warn("发现残留PID文件 (PID: {StalePid})，对应进程已不存在，清理后继续启动", stalePid);
+                    CleanupStalePidFile();
+                }
+            }
+
             // 使用 Named Mutex 实现进程互斥
             var mutexName = $"Global\\LyWaf_{Path.GetFileName(_pidFilePath).Replace(".", "_").Replace(":", "_")}";
             _mutex = new Mutex(true, mutexName, out bool createdNew);
 
             if (!createdNew)
             {
-                // Mutex 已存在，检查进程是否真的在运行
-                if (File.Exists(_pidFilePath) && TryReadExistingPid(out int existingPid) && IsProcessAlive(existingPid))
+                // Mutex 已存在，检查 PID 文件中的进程是否真的在运行
+                if (File.Exists(_pidFilePath) && TryReadExistingPid(out int existingPid) && IsLyWafProcessAlive(existingPid))
                 {
                     _mutex.Dispose();
                     _mutex = null;
@@ -117,23 +127,14 @@ public sealed class PidManager : IDisposable
                         $"应用程序 '{_pidName}' 已在运行 (PID: {existingPid})");
                 }
 
-                // 进程已死，等待获取 Mutex
-                if (!_mutex.WaitOne(1000))
+                // 对应进程不存在或不是 LyWaf，尝试等待接管 Mutex
+                _logger.Warn("Mutex 已存在但对应进程不存在，尝试接管...");
+                if (!_mutex.WaitOne(3000))
                 {
+                    // 等待超时，强制重建 Mutex 继续启动
+                    _logger.Warn("Mutex 等待超时，强制重建并继续启动");
                     _mutex.Dispose();
-                    _mutex = null;
-                    throw new InvalidOperationException(
-                        $"无法获取锁，'{_pidName}' 可能已在运行。");
-                }
-            }
-
-            // 清理旧的 PID 文件（如果存在且进程已死）
-            if (File.Exists(_pidFilePath))
-            {
-                if (TryReadExistingPid(out int existingPid) && !IsProcessAlive(existingPid))
-                {
-                    _logger.Warn("发现僵尸PID文件，进程 {ExistingPid} 已终止，将清理并继续", existingPid);
-                    CleanupStalePidFile();
+                    _mutex = new Mutex(true, mutexName, out _);
                 }
             }
 
@@ -174,14 +175,19 @@ public sealed class PidManager : IDisposable
     }
 
     /// <summary>
-    /// 检查进程是否存活
+    /// 检查指定 PID 的进程是否存活且为 LyWaf 进程
+    /// 避免 PID 被系统复用导致误判
     /// </summary>
-    private static bool IsProcessAlive(int pid)
+    private static bool IsLyWafProcessAlive(int pid)
     {
         try
         {
             using var process = Process.GetProcessById(pid);
-            return !process.HasExited;
+            if (process.HasExited) return false;
+
+            // 检查进程名是否匹配（避免 PID 复用导致误判）
+            var currentName = Process.GetCurrentProcess().ProcessName;
+            return string.Equals(process.ProcessName, currentName, StringComparison.OrdinalIgnoreCase);
         }
         catch (ArgumentException) // 进程不存在
         {
@@ -314,7 +320,7 @@ public sealed class PidManager : IDisposable
     {
         if (!File.Exists(_pidFilePath)) return false;
         if (!TryReadExistingPid(out int filePid)) return false;
-        return filePid == ProcessId && IsProcessAlive(filePid);
+        return filePid == ProcessId && IsLyWafProcessAlive(filePid);
     }
     #endregion
 }

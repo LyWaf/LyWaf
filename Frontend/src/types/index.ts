@@ -36,6 +36,8 @@ export interface SystemStatus {
   uptime: string
   memory: number
   totalConnections: number
+  httpConnections: number
+  wsConnections: number
   blockedIpCount: number
   processStartTime: string
 }

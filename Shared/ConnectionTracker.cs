@@ -4,44 +4,77 @@ namespace LyWaf.Shared;
 
 /// <summary>
 /// 活跃连接跟踪器
-/// 统计「当前连接数」= 3 分钟内访问过的 IP ∪ 当前仍有请求在处理中的 IP
-/// 独立于 AccessControlService 的连接限制功能
+/// 分别统计 HTTP 和 WebSocket 的活跃连接数
+/// 活跃 = 3 分钟内访问过的 IP ∪ 当前仍有请求在处理中的 IP
 /// </summary>
 public static class ConnectionTracker
 {
     /// <summary>近期访问者有效期（分钟）</summary>
     private const int RecentMinutes = 3;
 
-    /// <summary>每个 IP 当前正在处理的请求数</summary>
-    private static readonly ConcurrentDictionary<string, int> _inFlight = new();
+    // ---- HTTP 连接跟踪 ----
+    private static readonly ConcurrentDictionary<string, int> _httpInFlight = new();
+    private static readonly ConcurrentDictionary<string, DateTime> _httpLastVisit = new();
 
-    /// <summary>每个 IP 最后一次请求的时间</summary>
-    private static readonly ConcurrentDictionary<string, DateTime> _lastVisit = new();
+    // ---- WebSocket 连接跟踪 ----
+    private static readonly ConcurrentDictionary<string, int> _wsInFlight = new();
+    private static readonly ConcurrentDictionary<string, DateTime> _wsLastVisit = new();
 
     /// <summary>请求开始时调用</summary>
-    public static void OnRequestStart(string clientIp)
+    public static void OnRequestStart(string clientIp, bool isWebSocket)
     {
-        _lastVisit[clientIp] = DateTime.UtcNow;
-        _inFlight.AddOrUpdate(clientIp, 1, (_, v) => v + 1);
+        if (isWebSocket)
+        {
+            _wsLastVisit[clientIp] = DateTime.UtcNow;
+            _wsInFlight.AddOrUpdate(clientIp, 1, (_, v) => v + 1);
+        }
+        else
+        {
+            _httpLastVisit[clientIp] = DateTime.UtcNow;
+            _httpInFlight.AddOrUpdate(clientIp, 1, (_, v) => v + 1);
+        }
     }
 
     /// <summary>请求结束时调用</summary>
-    public static void OnRequestEnd(string clientIp)
+    public static void OnRequestEnd(string clientIp, bool isWebSocket)
     {
-        _inFlight.AddOrUpdate(clientIp, 0, (_, v) => Math.Max(0, v - 1));
+        if (isWebSocket)
+        {
+            _wsInFlight.AddOrUpdate(clientIp, 0, (_, v) => Math.Max(0, v - 1));
+        }
+        else
+        {
+            _httpInFlight.AddOrUpdate(clientIp, 0, (_, v) => Math.Max(0, v - 1));
+        }
     }
 
-    /// <summary>
-    /// 获取活跃连接数（唯一 IP 数）
-    /// 计算规则：最近 3 分钟有请求 或 当前有请求在处理中
-    /// </summary>
+    /// <summary>获取 HTTP 活跃连接数</summary>
+    public static int GetHttpCount()
+    {
+        return GetCount(_httpInFlight, _httpLastVisit);
+    }
+
+    /// <summary>获取 WebSocket 活跃连接数</summary>
+    public static int GetWebSocketCount()
+    {
+        return GetCount(_wsInFlight, _wsLastVisit);
+    }
+
+    /// <summary>获取总活跃连接数（HTTP + WebSocket）</summary>
     public static int GetActiveCount()
+    {
+        return GetHttpCount() + GetWebSocketCount();
+    }
+
+    private static int GetCount(
+        ConcurrentDictionary<string, int> inFlight,
+        ConcurrentDictionary<string, DateTime> lastVisit)
     {
         var cutoff = DateTime.UtcNow.AddMinutes(-RecentMinutes);
         var activeIps = new HashSet<string>();
 
         // 最近访问过的 IP
-        foreach (var kvp in _lastVisit)
+        foreach (var kvp in lastVisit)
         {
             if (kvp.Value >= cutoff)
             {
@@ -50,18 +83,18 @@ public static class ConnectionTracker
             else
             {
                 // 清理过期且无活跃连接的 IP
-                if (!_inFlight.TryGetValue(kvp.Key, out var count) || count <= 0)
-                    _lastVisit.TryRemove(kvp.Key, out _);
+                if (!inFlight.TryGetValue(kvp.Key, out var count) || count <= 0)
+                    lastVisit.TryRemove(kvp.Key, out _);
             }
         }
 
         // 当前仍有请求在处理中的 IP（长连接）
-        foreach (var kvp in _inFlight)
+        foreach (var kvp in inFlight)
         {
             if (kvp.Value > 0)
                 activeIps.Add(kvp.Key);
             else
-                _inFlight.TryRemove(kvp.Key, out _); // 清理已归零的
+                inFlight.TryRemove(kvp.Key, out _);
         }
 
         return activeIps.Count;

@@ -18,6 +18,8 @@ const system = ref<SystemStatus>({
   uptime: '-',
   memory: 0,
   totalConnections: 0,
+  httpConnections: 0,
+  wsConnections: 0,
   blockedIpCount: 0,
   processStartTime: '-',
 })
@@ -52,6 +54,8 @@ const loadData = async () => {
         uptime: data.system.uptime,
         memory: data.system.memory,
         totalConnections: data.system.totalConnections,
+        httpConnections: data.system.httpConnections ?? 0,
+        wsConnections: data.system.wsConnections ?? 0,
         blockedIpCount: data.system.blockedIpCount,
         processStartTime: data.system.processStartTime,
       }
@@ -107,12 +111,23 @@ const resetTraffic = async () => {
         color="green"
         tooltip="当前进程内存占用"
       />
-      <StatCard
-        label="当前连接"
-        :value="system.totalConnections"
-        icon="🔗"
-        tooltip="当前活跃连接数"
-      />
+      <div class="card group" title="当前活跃连接数（区分 HTTP 与 WebSocket）">
+        <div class="flex items-center gap-2 text-gray-400 text-sm mb-3">
+          <span class="text-base">🔗</span>
+          <span>当前连接</span>
+        </div>
+        <div class="flex items-baseline gap-3">
+          <div class="flex items-baseline gap-1">
+            <span class="text-xs text-gray-500">HTTP</span>
+            <span class="text-2xl font-bold text-blue-400">{{ system.httpConnections }}</span>
+          </div>
+          <span class="text-gray-600">|</span>
+          <div class="flex items-baseline gap-1">
+            <span class="text-xs text-gray-500">WS</span>
+            <span class="text-2xl font-bold text-purple-400">{{ system.wsConnections }}</span>
+          </div>
+        </div>
+      </div>
       <StatCard
         label="封禁 IP"
         :value="system.blockedIpCount"
