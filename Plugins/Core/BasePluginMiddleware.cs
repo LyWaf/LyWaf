@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using LyWaf.Shared;
 using LyWaf.Services.WafInfo;
+using LyWaf.Utils;
 using Microsoft.Extensions.Options;
 
 namespace LyWaf.Plugins.Core;
@@ -24,8 +26,13 @@ public class BasePluginMiddleware(IPluginEventBus eventBus, IOptions<WafInfoOpti
             return;
         }
 
+        var clientIp = RequestUtil.GetClientIp(context.Request);
         var sw = Stopwatch.StartNew();
         var startTime = DateTime.UtcNow;
+
+        // 跟踪活跃连接
+        ConnectionTracker.OnRequestStart(clientIp);
+
         // 发布请求开始事件
         await _eventBus.PublishAsync(new RequestStartedEvent { Context = context, VisitTime = startTime });
 
@@ -36,6 +43,7 @@ public class BasePluginMiddleware(IPluginEventBus eventBus, IOptions<WafInfoOpti
         finally
         {
             sw.Stop();
+            ConnectionTracker.OnRequestEnd(clientIp);
 
             // 发布请求完成事件
             await _eventBus.PublishAsync(new RequestCompletedEvent

@@ -161,6 +161,15 @@ function Publish-Target {
         return $false
     }
 
+    # 确保 datas 目录被拷贝（PublishSingleFile 模式下可能不会自动拷贝）
+    $datasSource = Join-Path $ProjectDir "datas"
+    $datasDest = Join-Path $OutputDir "datas"
+    if ((Test-Path $datasSource) -and -not (Test-Path $datasDest)) {
+        New-Item -ItemType Directory -Path $datasDest -Force | Out-Null
+        Copy-Item -Path "$datasSource\*" -Destination $datasDest -Recurse -Force
+        Write-Info "已拷贝 datas 目录"
+    }
+
     # 清理不需要的文件
     Get-ChildItem -Path $OutputDir -Filter "*.pdb" -ErrorAction SilentlyContinue | Remove-Item -Force
 

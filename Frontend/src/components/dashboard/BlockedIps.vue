@@ -620,6 +620,12 @@ const clearAll = async () => {
                   <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[300px] overflow-auto">{{ entry.requestBody }}</pre>
                 </div>
 
+                <!-- 响应体 -->
+                <div v-if="entry.responseBody" class="bg-dark-bg rounded-lg p-3">
+                  <div class="text-xs text-gray-500 mb-1">响应内容</div>
+                  <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[300px] overflow-auto">{{ entry.responseBody }}</pre>
+                </div>
+
                 <!-- 重放结果 -->
                 <div v-if="replayResult && replayResult.index === entry.index" class="bg-dark-bg rounded-lg p-3 border border-purple-500/30">
                   <div class="flex items-center gap-2 mb-2">

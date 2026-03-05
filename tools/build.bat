@@ -166,6 +166,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: 确保 datas 目录被拷贝（PublishSingleFile 模式下可能不会自动拷贝）
+if exist "%PROJECT_DIR%\datas" if not exist "%OUTPUT_DIR%\datas" (
+    mkdir "%OUTPUT_DIR%\datas"
+    xcopy /s /e /y /q "%PROJECT_DIR%\datas\*" "%OUTPUT_DIR%\datas\" >nul 2>&1
+    echo [INFO] 已拷贝 datas 目录
+)
+
 :: 清理 pdb 文件
 del /q "%OUTPUT_DIR%\*.pdb" >nul 2>&1
 

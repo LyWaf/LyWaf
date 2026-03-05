@@ -213,15 +213,19 @@ public static partial class LogUtil
             else if (trimmed == "--- Body ---") bodyStart = i + 1;
         }
 
-        // 提取 headers
+        // 提取 headers（排除 Status:/Client-IP: 等元数据行）
         if (headersStart >= 0)
         {
             var headerLines = new List<string>();
             for (int i = headersStart; i < lines.Length; i++)
             {
-                var line = lines[i].TrimEnd();
-                if (line.Trim().StartsWith("---")) break;
-                if (!string.IsNullOrEmpty(line)) headerLines.Add(line);
+                var trimmed = lines[i].Trim();
+                if (trimmed.StartsWith("---")) break;
+                if (string.IsNullOrEmpty(trimmed)) continue;
+                // 跳过非 HTTP 头的元数据行
+                if (trimmed.StartsWith("Status:", StringComparison.OrdinalIgnoreCase)) continue;
+                if (trimmed.StartsWith("Client-IP:", StringComparison.OrdinalIgnoreCase)) continue;
+                headerLines.Add(lines[i].TrimEnd());
             }
             entry.Headers = string.Join("\n", headerLines);
         }

@@ -354,8 +354,7 @@ public class FileProviderMiddleware
         _logger.Debug("请求本地的文件服务:'{}':'{}', 实际映射:{}", prefix, path, real);
         if (real == null)
         {
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            await context.Response.WriteAsync("File not found");
+            await WafUtil.WriteNotFound(context);
             return;
         }
 

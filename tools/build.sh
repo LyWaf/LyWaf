@@ -107,6 +107,13 @@ publish_rid() {
 
     dotnet "${PUBLISH_ARGS[@]}"
 
+    # 确保 datas 目录被拷贝（PublishSingleFile 模式下可能不会自动拷贝）
+    if [ -d "$PROJECT_DIR/datas" ] && [ ! -d "$OUTPUT_DIR/datas" ]; then
+        mkdir -p "$OUTPUT_DIR/datas"
+        cp -r "$PROJECT_DIR/datas/"* "$OUTPUT_DIR/datas/"
+        info "已拷贝 datas 目录"
+    fi
+
     # 清理不需要的文件
     rm -f "$OUTPUT_DIR"/*.pdb
 

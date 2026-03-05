@@ -248,6 +248,7 @@ public class ErrorTemplateService : IErrorTemplateService
                     .container {
                         text-align: center;
                         padding: 2rem;
+                        width: 100%;
                         max-width: 600px;
                     }
                     .status-code {
@@ -318,10 +319,6 @@ public class ErrorTemplateService : IErrorTemplateService
                         <div class="info-item">
                             <span class="info-label">时间</span>
                             <span class="info-value">{time}</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">国家</span>
-                            <span class="info-value">{Country}</span>
                         </div>
                     </div>
                     {show_reason_info}

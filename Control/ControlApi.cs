@@ -876,7 +876,7 @@ public static class ControlApi
                     {
                         uptime = uptimeStr,
                         memory = process.WorkingSet64 / (1024 * 1024),
-                        totalConnections = connectionStats.TotalConnections,
+                        totalConnections = ConnectionTracker.GetActiveCount(),
                         blockedIpCount = blockedIpList.Count,
                         processStartTime = process.StartTime.ToString("yyyy-MM-dd HH:mm:ss"),
                         uniqueIps = connectionStats.ConnectionsPerIp.Count
@@ -1792,7 +1792,7 @@ public static class ControlApi
                 {
                     totalClients = isFilterByIp ? (clientStats.Count > 0 ? 1 : 0) : SharedData.ClientStas.Count,
                     totalBlockedIps = isFilterByIp ? (blockedIps.Count > 0 ? 1 : 0) : SharedData.ClientFb.Count,
-                    totalConnections = connectionStats.TotalConnections,
+                    totalConnections = ConnectionTracker.GetActiveCount(),
                     filteredIp = isFilterByIp ? queryIp : null
                 },
                 ["connections"] = connectionStats,
