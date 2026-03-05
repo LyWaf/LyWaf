@@ -1232,6 +1232,9 @@ public class Program
         // 注册控制台 API
         app.MapControlApi(wafInfos);
         
+        // 启用 WebSocket 支持（使 context.WebSockets.IsWebSocketRequest 可用）
+        app.UseWebSockets();
+
         // 配置全局插件中间件
         app.UseLyWafPlugins();
 

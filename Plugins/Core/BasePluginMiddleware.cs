@@ -29,10 +29,10 @@ public class BasePluginMiddleware(IPluginEventBus eventBus, IOptions<WafInfoOpti
         var clientIp = RequestUtil.GetClientIp(context.Request);
         var sw = Stopwatch.StartNew();
         var startTime = DateTime.UtcNow;
-        // 通过请求头判断 WebSocket 升级请求（不依赖 UseWebSockets() 中间件）
-        var isWebSocket = string.Equals(
-            context.Request.Headers.Upgrade.ToString(), "websocket",
-            StringComparison.OrdinalIgnoreCase);
+        // 判断 WebSocket 升级请求（UseWebSockets() 提供标准检测，头部检测作为兜底）
+        var isWebSocket = context.WebSockets.IsWebSocketRequest
+            || string.Equals(context.Request.Headers.Upgrade.ToString(),
+                "websocket", StringComparison.OrdinalIgnoreCase);
 
         // 跟踪活跃连接（区分 HTTP 和 WebSocket）
         ConnectionTracker.OnRequestStart(clientIp, isWebSocket);
@@ -42,6 +42,8 @@ public class BasePluginMiddleware(IPluginEventBus eventBus, IOptions<WafInfoOpti
 
         try
         {
+            // HTTP：next() 在响应完成后返回
+            // WebSocket：YARP 代理会阻塞 next() 直到 WebSocket 连接关闭
             await next(context);
         }
         finally
