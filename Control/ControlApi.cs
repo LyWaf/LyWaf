@@ -5062,6 +5062,14 @@ public static class ControlApi
                 {
                     var meta = p.Metadata;
                     var pluginId = meta.Id;
+                    var actions = p.GetActions().Select(a => new
+                    {
+                        id = a.Id,
+                        name = a.Name,
+                        type = a.Type,
+                        description = a.Description,
+                    }).ToList();
+
                     return new
                     {
                         id = pluginId,
@@ -5076,6 +5084,7 @@ public static class ControlApi
                         isSystem = pluginManager.IsSystemPlugin(pluginId),
                         enabledByDefault = meta.EnabledByDefault,
                         hasOptions = meta.DefaultOptions != null,
+                        actions,
                     };
                 }).OrderBy(p => p.isSystem ? 0 : 1).ThenBy(p => p.name).ToList();
 
@@ -5220,6 +5229,62 @@ public static class ControlApi
             catch (Exception ex)
             {
                 return Results.Json(new { success = false, message = $"保存插件配置失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 插件操作（统一框架） ===============
+
+        // 获取插件支持的操作列表
+        app.MapGet("/api/plugins/{pluginId}/actions", (string pluginId, IPluginManager pluginManager) =>
+        {
+            try
+            {
+                var plugin = pluginManager.GetPlugin(pluginId);
+                if (plugin == null)
+                    return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
+
+                var actions = plugin.GetActions().Select(a => new
+                {
+                    id = a.Id,
+                    name = a.Name,
+                    type = a.Type,
+                    description = a.Description,
+                }).ToList();
+
+                return Results.Json(new { success = true, pluginId, actions });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"获取插件操作失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 执行插件操作
+        app.MapPost("/api/plugins/{pluginId}/actions/{actionId}", async (string pluginId, string actionId, HttpContext ctx, IPluginManager pluginManager) =>
+        {
+            try
+            {
+                var plugin = pluginManager.GetPlugin(pluginId);
+                if (plugin == null)
+                    return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
+
+                var actions = plugin.GetActions();
+                if (!actions.Any(a => a.Id == actionId))
+                    return Results.Json(new { success = false, message = $"插件 {pluginId} 不支持操作: {actionId}" }, statusCode: 404);
+
+                // 读取参数
+                Dictionary<string, string>? parameters = null;
+                if (ctx.Request.ContentLength > 0)
+                {
+                    parameters = await ctx.Request.ReadFromJsonAsync<Dictionary<string, string>>();
+                }
+
+                var result = await plugin.ExecuteActionAsync(actionId, parameters);
+                return Results.Json(new { success = result.Success, message = result.Message, data = result.Data });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"执行插件操作失败: {ex.Message}" }, statusCode: 500);
             }
         }).RequireHost($"*:{controlPort}");
 

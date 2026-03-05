@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.RegularExpressions;
 using NLog;
 using NLog.Common;
 using NLog.Config;
@@ -5,8 +7,10 @@ using NLog.Targets;
 
 namespace LyWaf.Utils;
 
-public static class LogUtil
+public static partial class LogUtil
 {
+    #region NLog 配置
+
     public static void ConfigureNLog(string projectRoot, string? accessLog, string? errorLog, bool perfLog)
     {
         var config = new LoggingConfiguration();
@@ -57,4 +61,279 @@ public static class LogUtil
         // 应用配置
         LogManager.Configuration = config;
     }
+
+    #endregion
+
+    #region 日志文件解析
+
+    /// <summary>
+    /// 条目分隔符正则（匹配 ========== [2026-03-05 12:00:00.000] ==========）
+    /// </summary>
+    [GeneratedRegex(@"^==========\s+\[(.+?)\]\s+==========", RegexOptions.Multiline)]
+    public static partial Regex EntrySeparatorRegex();
+
+    /// <summary>
+    /// 统计日志文件中的条目总数
+    /// </summary>
+    public static async Task<int> CountEntriesAsync(string filePath)
+    {
+        if (!File.Exists(filePath)) return 0;
+
+        var content = await File.ReadAllTextAsync(filePath, Encoding.UTF8);
+        return EntrySeparatorRegex().Matches(content).Count;
+    }
+
+    /// <summary>
+    /// 分页读取日志条目（倒序：最新在前，支持关键字搜索）
+    /// </summary>
+    public static async Task<(List<LogEntry> entries, int total)> ParseLogFileAsync(
+        string filePath, int offset = 0, int limit = 20, string? search = null)
+    {
+        if (!File.Exists(filePath))
+            return ([], 0);
+
+        var content = await File.ReadAllTextAsync(filePath, Encoding.UTF8);
+        var regex = EntrySeparatorRegex();
+        var matches = regex.Matches(content);
+
+        if (matches.Count == 0)
+            return ([], 0);
+
+        // 收集所有条目（倒序：最新在前）
+        var allEntries = new List<(int origIndex, string time, string block)>();
+        for (int i = matches.Count - 1; i >= 0; i--)
+        {
+            var startIdx = matches[i].Index;
+            var endIdx = (i + 1 < matches.Count) ? matches[i + 1].Index : content.Length;
+            var block = content[startIdx..endIdx].TrimEnd();
+            var time = matches[i].Groups[1].Value.Trim();
+
+            // 搜索过滤
+            if (!string.IsNullOrEmpty(search) && !block.Contains(search, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            allEntries.Add((i, time, block));
+        }
+
+        var total = allEntries.Count;
+        var paged = allEntries.Skip(offset).Take(limit);
+
+        var entries = new List<LogEntry>();
+        foreach (var (origIndex, time, block) in paged)
+        {
+            entries.Add(ParseLogEntry(block, origIndex, time));
+        }
+
+        return (entries, total);
+    }
+
+    /// <summary>
+    /// 解析单条日志条目
+    /// 支持格式: --- Headers ---, --- Body ---, --- Request Body ---, --- Response Body ---
+    /// </summary>
+    public static LogEntry ParseLogEntry(string block, int index, string? time = null)
+    {
+        var entry = new LogEntry { Index = index, Raw = block };
+        var lines = block.Split('\n');
+
+        // 第一行: ========== [时间] ==========
+        if (time != null)
+        {
+            entry.Time = time;
+        }
+        else
+        {
+            var headerMatch = EntrySeparatorRegex().Match(lines[0]);
+            if (headerMatch.Success)
+                entry.Time = headerMatch.Groups[1].Value.Trim();
+        }
+
+        // 第二行: METHOD PATH PROTOCOL
+        if (lines.Length > 1)
+        {
+            var requestLine = lines[1].Trim();
+            entry.RequestLine = requestLine;
+            var parts = requestLine.Split(' ', 3);
+            if (parts.Length >= 2)
+            {
+                entry.Method = parts[0];
+                entry.Url = parts[1];
+            }
+        }
+
+        // 第三行: Host
+        if (lines.Length > 2)
+        {
+            var hostLine = lines[2].Trim();
+            if (hostLine.StartsWith("Host:", StringComparison.OrdinalIgnoreCase))
+                entry.Host = hostLine["Host:".Length..].Trim();
+        }
+
+        // 提取 Client-IP 和 Status/Duration
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("Client-IP:", StringComparison.OrdinalIgnoreCase))
+            {
+                entry.ClientIp = trimmed["Client-IP:".Length..].Trim();
+            }
+            else if (trimmed.StartsWith("Status:", StringComparison.OrdinalIgnoreCase))
+            {
+                // 格式: "Status: 200" 或 "Status: 200 | Duration: 12.5ms"
+                var statusStr = trimmed["Status:".Length..].Trim();
+                var pipeIdx = statusStr.IndexOf('|');
+                if (pipeIdx >= 0)
+                {
+                    var codePart = statusStr[..pipeIdx].Trim();
+                    var durationPart = statusStr[(pipeIdx + 1)..].Trim();
+                    if (int.TryParse(codePart, out var code)) entry.StatusCode = code;
+                    if (durationPart.StartsWith("Duration:", StringComparison.OrdinalIgnoreCase))
+                        entry.Duration = durationPart["Duration:".Length..].Trim();
+                    else
+                        entry.Duration = durationPart;
+                }
+                else
+                {
+                    if (int.TryParse(statusStr, out var code)) entry.StatusCode = code;
+                }
+            }
+        }
+
+        // 解析区域标记
+        var headersStart = -1;
+        var reqBodyStart = -1;
+        var resBodyStart = -1;
+        var bodyStart = -1; // 兼容 "--- Body ---"
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].Trim();
+            if (trimmed == "--- Headers ---") headersStart = i + 1;
+            else if (trimmed == "--- Request Body ---") reqBodyStart = i + 1;
+            else if (trimmed == "--- Response Body ---") resBodyStart = i + 1;
+            else if (trimmed == "--- Body ---") bodyStart = i + 1;
+        }
+
+        // 提取 headers
+        if (headersStart >= 0)
+        {
+            var headerLines = new List<string>();
+            for (int i = headersStart; i < lines.Length; i++)
+            {
+                var line = lines[i].TrimEnd();
+                if (line.Trim().StartsWith("---")) break;
+                if (!string.IsNullOrEmpty(line)) headerLines.Add(line);
+            }
+            entry.Headers = string.Join("\n", headerLines);
+        }
+
+        // 提取 request body（或兼容 "--- Body ---"）
+        var rbStart = reqBodyStart >= 0 ? reqBodyStart : bodyStart;
+        if (rbStart >= 0)
+        {
+            var bodyLines = new List<string>();
+            for (int i = rbStart; i < lines.Length; i++)
+            {
+                if (lines[i].Trim().StartsWith("---")) break;
+                bodyLines.Add(lines[i]);
+            }
+            entry.RequestBody = string.Join("\n", bodyLines).TrimEnd();
+        }
+
+        // 提取 response body
+        if (resBodyStart >= 0)
+        {
+            var bodyLines = new List<string>();
+            for (int i = resBodyStart; i < lines.Length; i++)
+            {
+                if (lines[i].Trim().StartsWith("---")) break;
+                bodyLines.Add(lines[i]);
+            }
+            entry.ResponseBody = string.Join("\n", bodyLines).TrimEnd();
+        }
+
+        return entry;
+    }
+
+    /// <summary>
+    /// 列举目录中的日志文件
+    /// </summary>
+    public static List<LogFile> ListLogFiles(string directory, string pattern = "*.log")
+    {
+        if (!Directory.Exists(directory))
+            return [];
+
+        return Directory.GetFiles(directory, pattern)
+            .Select(f => new FileInfo(f))
+            .OrderByDescending(f => f.LastWriteTime)
+            .Select(f => new LogFile
+            {
+                Name = f.Name,
+                Size = f.Length,
+                LastModified = f.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"),
+            })
+            .ToList();
+    }
+
+    /// <summary>
+    /// 清空日志文件（保留文件，清除所有内容）
+    /// </summary>
+    public static async Task ClearLogFileAsync(string filePath)
+    {
+        if (File.Exists(filePath))
+            await File.WriteAllTextAsync(filePath, "", Encoding.UTF8);
+    }
+
+    /// <summary>
+    /// 删除日志文件中的指定条目（按原始索引）
+    /// </summary>
+    public static async Task<bool> DeleteLogEntryAsync(string filePath, int entryIndex)
+    {
+        if (!File.Exists(filePath)) return false;
+
+        var content = await File.ReadAllTextAsync(filePath, Encoding.UTF8);
+        var matches = EntrySeparatorRegex().Matches(content);
+
+        if (entryIndex < 0 || entryIndex >= matches.Count) return false;
+
+        var startIdx = matches[entryIndex].Index;
+        var endIdx = (entryIndex + 1 < matches.Count) ? matches[entryIndex + 1].Index : content.Length;
+
+        var newContent = string.Concat(content.AsSpan(0, startIdx), content.AsSpan(endIdx));
+        await File.WriteAllTextAsync(filePath, newContent, Encoding.UTF8);
+        return true;
+    }
+
+    #endregion
+}
+
+/// <summary>
+/// 统一的结构化日志条目
+/// </summary>
+public class LogEntry
+{
+    public int Index { get; set; }
+    public string Time { get; set; } = "";
+    public string Method { get; set; } = "";
+    public string Url { get; set; } = "";
+    public string Host { get; set; } = "";
+    public string RequestLine { get; set; } = "";
+    public string? Headers { get; set; }
+    public string? RequestBody { get; set; }
+    public string? ResponseBody { get; set; }
+    /// <summary>HTTP 状态码</summary>
+    public int? StatusCode { get; set; }
+    /// <summary>响应时间（如 "12.5ms"）</summary>
+    public string? Duration { get; set; }
+    public string? ClientIp { get; set; }
+    public string Raw { get; set; } = "";
+}
+
+/// <summary>
+/// 日志文件信息
+/// </summary>
+public class LogFile
+{
+    public string Name { get; set; } = "";
+    public long Size { get; set; }
+    public string LastModified { get; set; } = "";
 }

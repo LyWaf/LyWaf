@@ -45,6 +45,7 @@
   <ItemGroup>
     <Content Include="templates\**" CopyToOutputDirectory="Always" />
     <Content Include="Rules\**" CopyToOutputDirectory="Always" />
+    <Content Include="datas\**" CopyToOutputDirectory="Always" />
   </ItemGroup>
 
   <!-- 排除运行时状态文件、用户配置、构建产物等 -->

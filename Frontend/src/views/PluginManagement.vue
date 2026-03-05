@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { pluginApi } from '@/api'
-import type { PluginItem } from '@/api'
+import type { PluginItem, PluginLogEntry, PluginLogFile, PluginActionItem } from '@/api'
 import { useToast } from '@/composables/useToast'
 
 const { showSuccess, showError } = useToast()
@@ -377,6 +377,236 @@ const priorityLabel = (priority: string) => {
   }
 }
 
+// =============== 插件操作 — 日志查看器 ===============
+const logViewerVisible = ref(false)
+const logViewerPlugin = ref<PluginItem | null>(null)
+const logViewerAction = ref<PluginActionItem | null>(null)
+const logViewerLoading = ref(false)
+
+// 文件列表
+const logFiles = ref<PluginLogFile[]>([])
+const logSelectedFile = ref('')
+
+// 日志条目
+const logEntries = ref<PluginLogEntry[]>([])
+const logTotal = ref(0)
+const logOffset = ref(0)
+const logLimit = ref(20)
+const logFileSize = ref(0)
+const logSearch = ref('')
+const logExpandedEntry = ref<number | null>(null)
+
+const logTotalPages = computed(() => Math.ceil(logTotal.value / logLimit.value) || 1)
+const logCurrentPage = computed(() => Math.floor(logOffset.value / logLimit.value) + 1)
+
+const openLogViewer = async (plugin: PluginItem, action: PluginActionItem) => {
+  logViewerPlugin.value = plugin
+  logViewerAction.value = action
+  logViewerVisible.value = true
+  logFiles.value = []
+  logEntries.value = []
+  logSelectedFile.value = ''
+  logTotal.value = 0
+  logSearch.value = ''
+  logExpandedEntry.value = null
+  await loadLogFiles()
+}
+
+const loadLogFiles = async () => {
+  if (!logViewerPlugin.value || !logViewerAction.value) return
+  logViewerLoading.value = true
+  try {
+    const res = await pluginApi.executeAction(logViewerPlugin.value.id, logViewerAction.value.id, { action: 'list-files' })
+    if (res.success && res.data?.files) {
+      logFiles.value = res.data.files
+      // 自动选中第一个文件
+      if (logFiles.value.length > 0 && !logSelectedFile.value) {
+        logSelectedFile.value = logFiles.value[0].name
+        await loadLogEntries()
+      }
+    }
+  } catch {
+    showError('获取日志文件列表失败')
+  } finally {
+    logViewerLoading.value = false
+  }
+}
+
+const loadLogEntries = async (resetOffset = true) => {
+  if (!logViewerPlugin.value || !logViewerAction.value || !logSelectedFile.value) return
+  logViewerLoading.value = true
+  if (resetOffset) {
+    logOffset.value = 0
+    logExpandedEntry.value = null
+  }
+  try {
+    const params: Record<string, string> = {
+      action: 'read-entries',
+      file: logSelectedFile.value,
+      offset: String(logOffset.value),
+      limit: String(logLimit.value),
+    }
+    if (logSearch.value.trim()) params.search = logSearch.value.trim()
+
+    const res = await pluginApi.executeAction(logViewerPlugin.value.id, logViewerAction.value.id, params)
+    if (res.success && res.data) {
+      logEntries.value = res.data.entries || []
+      logTotal.value = res.data.total || 0
+      logFileSize.value = res.data.fileSize || 0
+    } else {
+      logEntries.value = []
+      logTotal.value = 0
+      showError(res.message || '读取日志失败')
+    }
+  } catch {
+    logEntries.value = []
+    logTotal.value = 0
+  } finally {
+    logViewerLoading.value = false
+  }
+}
+
+const logGotoPage = (page: number) => {
+  if (page < 1 || page > logTotalPages.value) return
+  logOffset.value = (page - 1) * logLimit.value
+  logExpandedEntry.value = null
+  loadLogEntries(false)
+}
+
+const logToggleExpand = (index: number) => {
+  logExpandedEntry.value = logExpandedEntry.value === index ? null : index
+}
+
+const logSelectFile = (fileName: string) => {
+  logSelectedFile.value = fileName
+  loadLogEntries()
+}
+
+const deleteLogFile = async (fileName: string) => {
+  if (!logViewerPlugin.value || !logViewerAction.value) return
+  if (!confirm(`确定要删除日志文件 ${fileName} 吗？`)) return
+  try {
+    const res = await pluginApi.executeAction(logViewerPlugin.value.id, logViewerAction.value.id, { action: 'delete-file', file: fileName })
+    if (res.success) {
+      showSuccess(res.message || '已删除')
+      logFiles.value = logFiles.value.filter(f => f.name !== fileName)
+      if (logSelectedFile.value === fileName) {
+        logSelectedFile.value = logFiles.value.length > 0 ? logFiles.value[0].name : ''
+        if (logSelectedFile.value) loadLogEntries()
+        else { logEntries.value = []; logTotal.value = 0 }
+      }
+    } else {
+      showError(res.message || '删除失败')
+    }
+  } catch {
+    showError('删除失败')
+  }
+}
+
+const clearLogFile = async (fileName: string) => {
+  if (!logViewerPlugin.value || !logViewerAction.value) return
+  if (!confirm(`确定要清空 ${fileName} 中的所有日志吗？`)) return
+  try {
+    const res = await pluginApi.executeAction(logViewerPlugin.value.id, logViewerAction.value.id, { action: 'clear-file', file: fileName })
+    if (res.success) {
+      showSuccess(res.message || '已清空')
+      if (logSelectedFile.value === fileName) {
+        logEntries.value = []
+        logTotal.value = 0
+        logFileSize.value = 0
+      }
+      // 刷新文件列表以更新大小
+      await loadLogFiles()
+    } else {
+      showError(res.message || '清空失败')
+    }
+  } catch {
+    showError('清空失败')
+  }
+}
+
+const deleteLogEntry = async (entry: PluginLogEntry) => {
+  if (!logViewerPlugin.value || !logViewerAction.value || !logSelectedFile.value) return
+  try {
+    const res = await pluginApi.executeAction(logViewerPlugin.value.id, logViewerAction.value.id, {
+      action: 'delete-entry',
+      file: logSelectedFile.value,
+      index: String(entry.index),
+    })
+    if (res.success) {
+      showSuccess(res.message || '已删除')
+      // 重新加载当前页
+      await loadLogEntries(false)
+      // 刷新文件列表以更新大小
+      const fileIdx = logFiles.value.findIndex(f => f.name === logSelectedFile.value)
+      if (fileIdx >= 0 && logFileSize.value > 0) {
+        logFiles.value[fileIdx].size = logFileSize.value
+      }
+    } else {
+      showError(res.message || '删除失败')
+    }
+  } catch {
+    showError('删除条目失败')
+  }
+}
+
+const deleteAllLogFiles = async () => {
+  if (!logViewerPlugin.value || !logViewerAction.value) return
+  if (!confirm(`确定要删除所有 ${logFiles.value.length} 个日志文件吗？此操作不可撤销！`)) return
+  try {
+    for (const file of [...logFiles.value]) {
+      await pluginApi.executeAction(logViewerPlugin.value.id, logViewerAction.value.id, { action: 'delete-file', file: file.name })
+    }
+    showSuccess('已删除所有日志文件')
+    logFiles.value = []
+    logSelectedFile.value = ''
+    logEntries.value = []
+    logTotal.value = 0
+    logFileSize.value = 0
+  } catch {
+    showError('删除失败')
+    await loadLogFiles()
+  }
+}
+
+const formatFileSize = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+const methodColor = (method: string) => {
+  switch (method?.toUpperCase()) {
+    case 'GET': return 'text-green-400'
+    case 'POST': return 'text-blue-400'
+    case 'PUT': return 'text-yellow-400'
+    case 'DELETE': return 'text-red-400'
+    case 'PATCH': return 'text-purple-400'
+    case 'OPTIONS': return 'text-gray-400'
+    case 'HEAD': return 'text-cyan-400'
+    default: return 'text-gray-300'
+  }
+}
+
+// =============== 通用插件操作（button 类型） ===============
+const executePluginAction = async (plugin: PluginItem, action: PluginActionItem) => {
+  if (action.type === 'log-viewer') {
+    openLogViewer(plugin, action)
+    return
+  }
+  // button 类型：直接执行
+  try {
+    const res = await pluginApi.executeAction(plugin.id, action.id)
+    if (res.success) {
+      showSuccess(res.message || '操作成功')
+    } else {
+      showError(res.message || '操作失败')
+    }
+  } catch {
+    showError('操作失败')
+  }
+}
+
 onMounted(loadPlugins)
 </script>
 
@@ -435,6 +665,20 @@ onMounted(loadPlugins)
             </div>
           </div>
           <div class="flex items-center gap-3 flex-shrink-0 pt-1">
+            <!-- 插件操作按钮 -->
+            <button v-for="action in (plugin.actions || [])" :key="action.id"
+              @click="executePluginAction(plugin, action)"
+              class="text-gray-400 hover:text-primary-400 transition-colors p-1"
+              :title="action.name">
+              <!-- 日志查看器图标 -->
+              <svg v-if="action.type === 'log-viewer'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <!-- 通用操作图标 -->
+              <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            </button>
             <button v-if="plugin.hasOptions" @click="openEditConfig(plugin)"
               class="text-gray-400 hover:text-primary-400 transition-colors p-1" title="编辑配置">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -681,6 +925,171 @@ onMounted(loadPlugins)
             <span v-if="editConfigSaving" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1.5"></span>
             {{ editConfigSaving ? '保存中...' : '保存配置' }}
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 日志查看器弹窗 -->
+    <div v-if="logViewerVisible" class="fixed inset-0 z-50 flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/60" @click="logViewerVisible = false"></div>
+      <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-[1100px] max-w-[95vw] max-h-[85vh] flex flex-col">
+        <!-- 头部 -->
+        <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border shrink-0">
+          <div class="flex items-center gap-4">
+            <h3 class="text-lg font-semibold text-gray-100">
+              {{ logViewerAction?.name || '查看日志' }}
+              <span class="text-sm font-normal text-gray-500 ml-2">{{ logViewerPlugin?.name }}</span>
+            </h3>
+            <span v-if="logTotal > 0" class="text-xs text-gray-500">
+              共 {{ logTotal }} 条 · {{ formatFileSize(logFileSize) }}
+            </span>
+          </div>
+          <button @click="logViewerVisible = false" class="text-gray-400 hover:text-gray-200 text-xl leading-none">&times;</button>
+        </div>
+
+        <!-- 内容区 -->
+        <div class="flex-1 flex overflow-hidden">
+          <!-- 左侧文件列表 -->
+          <div class="w-56 shrink-0 border-r border-dark-border flex flex-col">
+            <div class="px-3 py-2 border-b border-dark-border/50 flex items-center justify-between">
+              <span class="text-xs text-gray-500 font-semibold">日志文件</span>
+              <div class="flex items-center gap-2">
+                <button v-if="logFiles.length > 0" @click="deleteAllLogFiles" class="text-[10px] text-gray-600 hover:text-red-400 transition-colors" title="删除所有文件">全部删除</button>
+                <button @click="loadLogFiles" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">刷新</button>
+              </div>
+            </div>
+            <div class="flex-1 overflow-y-auto">
+              <div v-if="logFiles.length === 0 && !logViewerLoading" class="text-xs text-gray-600 text-center py-8">暂无日志文件</div>
+              <div v-for="file in logFiles" :key="file.name"
+                @click="logSelectFile(file.name)"
+                :class="[
+                  'px-3 py-2.5 cursor-pointer border-b border-dark-border/30 transition-colors group',
+                  logSelectedFile === file.name ? 'bg-primary-500/10 border-l-2 border-l-primary-500' : 'hover:bg-dark-card-hover border-l-2 border-l-transparent'
+                ]">
+                <div class="text-xs text-gray-200 font-mono truncate" :title="file.name">{{ file.name }}</div>
+                <div class="flex items-center justify-between mt-1">
+                  <span class="text-[10px] text-gray-500">{{ formatFileSize(file.size) }}</span>
+                  <span class="text-[10px] text-gray-600">{{ file.lastModified }}</span>
+                </div>
+                <div class="flex items-center gap-2 mt-1 hidden group-hover:flex">
+                  <button @click.stop="clearLogFile(file.name)"
+                    class="text-[10px] text-gray-600 hover:text-yellow-400 transition-colors">
+                    清空
+                  </button>
+                  <button @click.stop="deleteLogFile(file.name)"
+                    class="text-[10px] text-gray-600 hover:text-red-400 transition-colors">
+                    删除文件
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 右侧日志条目 -->
+          <div class="flex-1 flex flex-col overflow-hidden">
+            <!-- 搜索栏 -->
+            <div class="px-4 py-2 border-b border-dark-border/50 flex items-center gap-2">
+              <input v-model="logSearch" type="text" placeholder="搜索日志内容..."
+                class="flex-1 bg-dark-sidebar border border-dark-border rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                @keydown.enter="loadLogEntries()" />
+              <button @click="loadLogEntries()" class="btn btn-sm btn-secondary text-xs">搜索</button>
+            </div>
+
+            <!-- 加载中 -->
+            <div v-if="logViewerLoading" class="flex-1 flex items-center justify-center">
+              <div class="animate-spin w-6 h-6 border-2 border-gray-500 border-t-primary-400 rounded-full"></div>
+              <span class="ml-3 text-gray-400 text-sm">加载中...</span>
+            </div>
+
+            <!-- 无数据 -->
+            <div v-else-if="logEntries.length === 0" class="flex-1 flex items-center justify-center">
+              <span class="text-gray-500 text-sm">{{ logSelectedFile ? '暂无日志条目' : '请选择日志文件' }}</span>
+            </div>
+
+            <!-- 条目列表 -->
+            <div v-else class="flex-1 overflow-y-auto divide-y divide-dark-border">
+              <div v-for="entry in logEntries" :key="entry.index" class="hover:bg-dark-card-hover transition-colors group/entry">
+                <!-- 摘要行 -->
+                <div class="flex items-center gap-4 px-5 py-3 cursor-pointer select-none"
+                  @click="logToggleExpand(entry.index)">
+                  <span class="text-gray-500 text-xs shrink-0 w-4 text-center transition-transform"
+                    :class="{ 'rotate-90': logExpandedEntry === entry.index }">▶</span>
+                  <span class="text-gray-500 text-xs font-mono w-8 shrink-0 text-right">#{{ entry.index + 1 }}</span>
+                  <span class="text-gray-400 text-xs font-mono shrink-0 w-[170px]">{{ entry.time }}</span>
+                  <span :class="methodColor(entry.method)" class="text-xs font-bold font-mono shrink-0 w-16">{{ entry.method }}</span>
+                  <span class="text-gray-200 text-xs font-mono truncate flex-1" :title="entry.url">{{ entry.url }}</span>
+                  <!-- 状态码 -->
+                  <span v-if="entry.statusCode"
+                    :class="[
+                      'text-xs font-mono px-1.5 py-0.5 rounded shrink-0',
+                      entry.statusCode >= 200 && entry.statusCode < 300 ? 'bg-green-500/20 text-green-400' :
+                      entry.statusCode >= 300 && entry.statusCode < 400 ? 'bg-blue-500/20 text-blue-400' :
+                      entry.statusCode >= 400 && entry.statusCode < 500 ? 'bg-yellow-500/20 text-yellow-400' :
+                      entry.statusCode >= 500 ? 'bg-red-500/20 text-red-400' :
+                      'bg-gray-500/20 text-gray-400'
+                    ]">{{ entry.statusCode }}</span>
+                  <!-- 响应时间 -->
+                  <span v-if="entry.duration" class="text-xs font-mono text-gray-500 shrink-0 w-20 text-right">{{ entry.duration }}</span>
+                  <!-- 删除条目 -->
+                  <button @click.stop="deleteLogEntry(entry)"
+                    class="text-gray-600 hover:text-red-400 transition-colors shrink-0 opacity-0 group-hover/entry:opacity-100 ml-2"
+                    title="删除此条目">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+
+                <!-- 展开的详情 -->
+                <div v-if="logExpandedEntry === entry.index" class="px-5 pb-4 space-y-3">
+                  <!-- 请求行 -->
+                  <div class="bg-dark-bg rounded-lg p-3">
+                    <div class="text-xs text-gray-500 mb-1">请求行</div>
+                    <div class="text-xs text-gray-200 font-mono">{{ entry.requestLine }}</div>
+                    <div v-if="entry.host" class="text-xs text-gray-400 font-mono mt-1">Host: {{ entry.host }}</div>
+                    <div v-if="entry.clientIp" class="text-xs text-gray-400 font-mono mt-1">Client-IP: {{ entry.clientIp }}</div>
+                  </div>
+
+                  <!-- 请求头 -->
+                  <div v-if="entry.headers" class="bg-dark-bg rounded-lg p-3">
+                    <div class="text-xs text-gray-500 mb-1">请求头</div>
+                    <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[200px] overflow-auto">{{ entry.headers }}</pre>
+                  </div>
+
+                  <!-- 请求体 -->
+                  <div v-if="entry.requestBody" class="bg-dark-bg rounded-lg p-3">
+                    <div class="text-xs text-gray-500 mb-1">请求体</div>
+                    <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[300px] overflow-auto">{{ entry.requestBody }}</pre>
+                  </div>
+
+                  <!-- 响应体 -->
+                  <div v-if="entry.responseBody" class="bg-dark-bg rounded-lg p-3">
+                    <div class="text-xs text-gray-500 mb-1">响应体</div>
+                    <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[300px] overflow-auto">{{ entry.responseBody }}</pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 底部分页 -->
+            <div class="flex items-center justify-between px-6 py-3 border-t border-dark-border shrink-0">
+              <div class="flex items-center gap-2">
+                <template v-if="logTotalPages > 1">
+                  <button @click="logGotoPage(1)" :disabled="logCurrentPage === 1" class="btn btn-sm btn-secondary text-xs px-2">首页</button>
+                  <button @click="logGotoPage(logCurrentPage - 1)" :disabled="logCurrentPage === 1" class="btn btn-sm btn-secondary text-xs px-2">上一页</button>
+                  <span class="text-xs text-gray-400 px-2">第 {{ logCurrentPage }} / {{ logTotalPages }} 页</span>
+                  <button @click="logGotoPage(logCurrentPage + 1)" :disabled="logCurrentPage === logTotalPages" class="btn btn-sm btn-secondary text-xs px-2">下一页</button>
+                  <button @click="logGotoPage(logTotalPages)" :disabled="logCurrentPage === logTotalPages" class="btn btn-sm btn-secondary text-xs px-2">末页</button>
+                </template>
+                <span v-else-if="logTotal > 0" class="text-xs text-gray-500">共 {{ logTotal }} 条</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <button v-if="logSelectedFile && logTotal > 0" @click="clearLogFile(logSelectedFile)" class="btn btn-sm text-xs text-red-400 hover:bg-red-500/10 border border-red-500/20">清空当前文件</button>
+                <button @click="loadLogEntries()" class="btn btn-secondary btn-sm">刷新</button>
+                <button @click="logViewerVisible = false" class="btn btn-secondary btn-sm">关闭</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

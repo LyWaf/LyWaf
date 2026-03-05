@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text;
 using LyWaf.Plugins.Core;
+using LyWaf.Shared;
 using LyWaf.Utils;
 using Microsoft.AspNetCore.Builder;
 
@@ -94,41 +95,13 @@ public class RequestLoggerPlugin : LyWafPluginBase
             // 捕获请求体
             if (rule.LogRequestBody)
             {
-                try
-                {
-                    context.Request.EnableBuffering();
-                    var body = await ReadStreamAsync(context.Request.Body, Options.MaxBodySize);
-                    context.Request.Body.Position = 0;
-                    context.Items["RequestLogger.RequestBody"] = body;
-                }
-                catch
-                {
-                    // 忽略请求体读取失败
-                }
+                await HttpUtil.CaptureRequestBodyAsync(context, Options.MaxBodySize);
             }
 
-            // 捕获响应体
+            // 捕获响应体（内部调用 next）
             if (rule.LogResponseBody)
             {
-                var originalBody = context.Response.Body;
-                using var memStream = new MemoryStream();
-                context.Response.Body = memStream;
-
-                try
-                {
-                    await next(context);
-
-                    memStream.Position = 0;
-                    var responseBody = await ReadStreamAsync(memStream, Options.MaxBodySize);
-                    context.Items["RequestLogger.ResponseBody"] = responseBody;
-
-                    memStream.Position = 0;
-                    await memStream.CopyToAsync(originalBody);
-                }
-                finally
-                {
-                    context.Response.Body = originalBody;
-                }
+                await HttpUtil.CaptureResponseBodyAsync(context, () => next(context), Options.MaxBodySize);
             }
             else
             {
@@ -291,14 +264,14 @@ public class RequestLoggerPlugin : LyWafPluginBase
         }
 
         // 请求体
-        if (rule.LogRequestBody && context.Items.TryGetValue("RequestLogger.RequestBody", out var reqBody) && reqBody is string reqBodyStr && reqBodyStr.Length > 0)
+        if (rule.LogRequestBody && context.Items.TryGetValue(LyWafCache.RequestBody, out var reqBody) && reqBody is string reqBodyStr && reqBodyStr.Length > 0)
         {
             sb.AppendLine("--- Request Body ---");
             sb.AppendLine(reqBodyStr);
         }
 
         // 响应体
-        if (rule.LogResponseBody && context.Items.TryGetValue("RequestLogger.ResponseBody", out var resBody) && resBody is string resBodyStr && resBodyStr.Length > 0)
+        if (rule.LogResponseBody && context.Items.TryGetValue(LyWafCache.ResponseBody, out var resBody) && resBody is string resBodyStr && resBodyStr.Length > 0)
         {
             sb.AppendLine("--- Response Body ---");
             sb.AppendLine(resBodyStr);
@@ -306,32 +279,6 @@ public class RequestLoggerPlugin : LyWafPluginBase
 
         sb.AppendLine();
         return sb.ToString();
-    }
-
-    /// <summary>
-    /// 读取流内容为字符串
-    /// </summary>
-    private static async Task<string> ReadStreamAsync(Stream stream, int maxBytes)
-    {
-        var originalPosition = stream.CanSeek ? stream.Position : 0;
-        try
-        {
-            if (stream.CanSeek) stream.Position = 0;
-
-            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-            var buffer = new char[maxBytes];
-            var charsRead = await reader.ReadBlockAsync(buffer, 0, buffer.Length);
-            var content = new string(buffer, 0, charsRead);
-
-            if (stream.CanSeek && stream.Length > maxBytes)
-                content += $"\n[... 截断，原始大小: {stream.Length} 字节 ...]";
-
-            return content;
-        }
-        finally
-        {
-            if (stream.CanSeek) stream.Position = originalPosition;
-        }
     }
 
     /// <summary>
@@ -362,6 +309,145 @@ public class RequestLoggerPlugin : LyWafPluginBase
             Context?.Logger.Error(ex, "写入请求日志文件失败");
         }
     }
+
+    #region 插件操作 — 日志查看
+
+    private static readonly PluginAction ViewLogsAction = new()
+    {
+        Id = "view-logs",
+        Name = "查看日志",
+        Type = "log-viewer",
+        Description = "查看请求日志文件，支持分页和搜索",
+    };
+
+    public override IReadOnlyList<PluginAction> GetActions() => [ViewLogsAction];
+
+    public override async Task<PluginActionResult> ExecuteActionAsync(string actionId, Dictionary<string, string>? parameters)
+    {
+        if (actionId != "view-logs")
+            return new PluginActionResult { Success = false, Message = $"未知操作: {actionId}" };
+
+        var dir = GetLogDirectory();
+        parameters ??= [];
+
+        // 子操作: list-files / read-entries / delete-file
+        var subAction = parameters.GetValueOrDefault("action", "list-files");
+
+        return subAction switch
+        {
+            "list-files" => new PluginActionResult
+            {
+                Data = new { type = "file-list", files = LogUtil.ListLogFiles(dir, "req_*.log") }
+            },
+            "read-entries" => await ReadLogEntriesAsync(dir, parameters),
+            "delete-file" => DeleteLogFileAction(dir, parameters),
+            "clear-file" => await ClearLogFileAction(dir, parameters),
+            "delete-entry" => await DeleteLogEntryAction(dir, parameters),
+            _ => new PluginActionResult { Success = false, Message = $"未知子操作: {subAction}" },
+        };
+    }
+
+    private async Task<PluginActionResult> ReadLogEntriesAsync(string dir, Dictionary<string, string> parameters)
+    {
+        var fileName = parameters.GetValueOrDefault("file", "");
+        if (string.IsNullOrEmpty(fileName))
+            return new PluginActionResult { Success = false, Message = "请指定日志文件名" };
+
+        // 安全检查：防止路径穿越
+        if (fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\'))
+            return new PluginActionResult { Success = false, Message = "无效的文件名" };
+
+        var filePath = Path.Combine(dir, fileName);
+        if (!File.Exists(filePath))
+            return new PluginActionResult { Success = false, Message = $"文件不存在: {fileName}" };
+
+        _ = int.TryParse(parameters.GetValueOrDefault("offset", "0"), out var offset);
+        _ = int.TryParse(parameters.GetValueOrDefault("limit", "20"), out var limit);
+        var search = parameters.TryGetValue("search", out var s) ? s : null;
+
+        var (entries, total) = await LogUtil.ParseLogFileAsync(filePath, offset, Math.Clamp(limit, 1, 100), search);
+        var fileInfo = new FileInfo(filePath);
+
+        return new PluginActionResult
+        {
+            Data = new
+            {
+                type = "entries",
+                entries,
+                total,
+                offset,
+                limit,
+                fileName,
+                fileSize = fileInfo.Length,
+            }
+        };
+    }
+
+    private static PluginActionResult DeleteLogFileAction(string dir, Dictionary<string, string> parameters)
+    {
+        var fileName = parameters.GetValueOrDefault("file", "");
+        if (string.IsNullOrEmpty(fileName))
+            return new PluginActionResult { Success = false, Message = "请指定日志文件名" };
+
+        if (fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\'))
+            return new PluginActionResult { Success = false, Message = "无效的文件名" };
+
+        var filePath = Path.Combine(dir, fileName);
+        if (File.Exists(filePath))
+        {
+            File.Delete(filePath);
+            return new PluginActionResult { Message = $"已删除: {fileName}" };
+        }
+        return new PluginActionResult { Success = false, Message = $"文件不存在: {fileName}" };
+    }
+
+    private static async Task<PluginActionResult> ClearLogFileAction(string dir, Dictionary<string, string> parameters)
+    {
+        var fileName = parameters.GetValueOrDefault("file", "");
+        if (string.IsNullOrEmpty(fileName))
+            return new PluginActionResult { Success = false, Message = "请指定日志文件名" };
+
+        if (fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\'))
+            return new PluginActionResult { Success = false, Message = "无效的文件名" };
+
+        var filePath = Path.Combine(dir, fileName);
+        if (!File.Exists(filePath))
+            return new PluginActionResult { Success = false, Message = $"文件不存在: {fileName}" };
+
+        await LogUtil.ClearLogFileAsync(filePath);
+        return new PluginActionResult { Message = $"已清空: {fileName}" };
+    }
+
+    private static async Task<PluginActionResult> DeleteLogEntryAction(string dir, Dictionary<string, string> parameters)
+    {
+        var fileName = parameters.GetValueOrDefault("file", "");
+        if (string.IsNullOrEmpty(fileName))
+            return new PluginActionResult { Success = false, Message = "请指定日志文件名" };
+
+        if (fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\'))
+            return new PluginActionResult { Success = false, Message = "无效的文件名" };
+
+        if (!int.TryParse(parameters.GetValueOrDefault("index", ""), out var entryIndex))
+            return new PluginActionResult { Success = false, Message = "请指定条目索引" };
+
+        var filePath = Path.Combine(dir, fileName);
+        if (!File.Exists(filePath))
+            return new PluginActionResult { Success = false, Message = $"文件不存在: {fileName}" };
+
+        var deleted = await LogUtil.DeleteLogEntryAsync(filePath, entryIndex);
+        return deleted
+            ? new PluginActionResult { Message = $"已删除条目 #{entryIndex + 1}" }
+            : new PluginActionResult { Success = false, Message = $"条目索引无效: {entryIndex}" };
+    }
+
+    private string GetLogDirectory()
+    {
+        return Path.IsPathRooted(Options.LogDirectory)
+            ? Options.LogDirectory
+            : Path.Combine(AppContext.BaseDirectory, Options.LogDirectory);
+    }
+
+    #endregion
 
     public override Task StopAsync(CancellationToken cancellationToken)
     {

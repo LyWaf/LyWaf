@@ -79,6 +79,16 @@ const methodColor = (method: string) => {
   }
 }
 
+// HTTP 状态码颜色
+const statusCodeClass = (code?: number) => {
+  if (!code) return 'text-gray-500'
+  if (code >= 500) return 'text-red-400'
+  if (code >= 400) return 'text-orange-400'
+  if (code >= 300) return 'text-yellow-400'
+  if (code >= 200) return 'text-green-400'
+  return 'text-gray-400'
+}
+
 const emit = defineEmits<{
   (e: 'refresh'): void
 }>()
@@ -285,8 +295,8 @@ const replayRequest = async (entry: IpLogEntry) => {
     }
 
     // POST/PUT/PATCH 带 body
-    if (['POST', 'PUT', 'PATCH'].includes(method.toUpperCase()) && entry.body) {
-      fetchOptions.body = entry.body
+    if (['POST', 'PUT', 'PATCH'].includes(method.toUpperCase()) && entry.requestBody) {
+      fetchOptions.body = entry.requestBody
     }
 
     const response = await fetch(fullUrl, fetchOptions)
@@ -533,9 +543,9 @@ const clearAll = async () => {
         <!-- 内容区 -->
         <div class="flex-1 overflow-auto">
           <!-- 加载中 -->
-          <div v-if="logViewLoading" class="text-gray-400 text-center py-12">
-            <div class="animate-spin inline-block w-6 h-6 border-2 border-gray-500 border-t-blue-400 rounded-full mb-2"></div>
-            <div>加载中...</div>
+          <div v-if="logViewLoading" class="flex items-center justify-center py-12">
+            <div class="animate-spin w-6 h-6 border-2 border-gray-500 border-t-primary-400 rounded-full"></div>
+            <span class="ml-3 text-gray-400 text-sm">加载中...</span>
           </div>
 
           <!-- 无数据 -->
@@ -561,6 +571,16 @@ const clearAll = async () => {
                 <span :class="methodColor(entry.method)" class="text-xs font-bold font-mono shrink-0 w-16">{{ entry.method }}</span>
                 <!-- URL -->
                 <span class="text-gray-200 text-xs font-mono truncate flex-1" :title="entry.url">{{ entry.url }}</span>
+                <!-- 状态码 -->
+                <span
+                  v-if="entry.statusCode"
+                  :class="statusCodeClass(entry.statusCode)"
+                  class="text-xs font-mono font-bold shrink-0 w-8 text-center"
+                >{{ entry.statusCode }}</span>
+                <span v-else class="text-gray-600 text-xs font-mono shrink-0 w-8 text-center">—</span>
+                <!-- 耗时 -->
+                <span v-if="entry.duration" class="text-gray-500 text-xs font-mono shrink-0 w-16 text-right">{{ entry.duration }}</span>
+                <span v-else class="shrink-0 w-16"></span>
                 <!-- 重放按钮 -->
                 <button
                   @click.stop="replayRequest(entry)"
@@ -574,11 +594,18 @@ const clearAll = async () => {
 
               <!-- 展开的详细内容 -->
               <div v-if="expandedEntry === entry.index" class="px-5 pb-4 space-y-3">
-                <!-- 请求行 -->
+                <!-- 请求行 + 响应概览 -->
                 <div class="bg-dark-bg rounded-lg p-3">
-                  <div class="text-xs text-gray-500 mb-1">请求行</div>
                   <div class="text-xs text-gray-200 font-mono">{{ entry.requestLine }}</div>
                   <div v-if="entry.host" class="text-xs text-gray-400 font-mono mt-1">Host: {{ entry.host }}</div>
+                  <div v-if="entry.statusCode || entry.duration" class="flex items-center gap-3 mt-2 pt-2 border-t border-dark-border">
+                    <span v-if="entry.statusCode" class="text-xs font-mono">
+                      状态码: <span :class="statusCodeClass(entry.statusCode)" class="font-bold">{{ entry.statusCode }}</span>
+                    </span>
+                    <span v-if="entry.duration" class="text-xs font-mono text-gray-400">
+                      耗时: <span class="text-gray-300">{{ entry.duration }}</span>
+                    </span>
+                  </div>
                 </div>
 
                 <!-- 请求头 -->
@@ -588,9 +615,9 @@ const clearAll = async () => {
                 </div>
 
                 <!-- 请求体 -->
-                <div v-if="entry.body" class="bg-dark-bg rounded-lg p-3">
+                <div v-if="entry.requestBody" class="bg-dark-bg rounded-lg p-3">
                   <div class="text-xs text-gray-500 mb-1">请求体</div>
-                  <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[300px] overflow-auto">{{ entry.body }}</pre>
+                  <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[300px] overflow-auto">{{ entry.requestBody }}</pre>
                 </div>
 
                 <!-- 重放结果 -->

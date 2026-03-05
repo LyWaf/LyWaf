@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using LyWaf.Shared;
 using LyWaf.Utils;
@@ -19,14 +20,22 @@ public class IpLogMiddleware(RequestDelegate next)
 
         if (SharedData.IpLogTargets.TryGetValue(clientIp, out _))
         {
-            // 先同步捕获请求数据，避免与后续中间件产生竞争条件
-            var logEntry = await CaptureRequestAsync(context, clientIp);
+            // 先同步捕获请求数据
+            var requestPart = await CaptureRequestAsync(context, clientIp);
 
-            // 异步写入文件（不阻塞请求处理）
+            // 捕获响应体 + 计时
+            var sw = Stopwatch.StartNew();
+            var responseBody = await HttpUtil.CaptureResponseBodyAsync(context, () => _next(context));
+            sw.Stop();
+
+            // 组合完整日志并异步写入
+            var logEntry = AppendResponseInfo(requestPart, context.Response.StatusCode, sw.Elapsed, responseBody);
             _ = IpRequestLogger.WriteLogEntryAsync(clientIp, logEntry);
         }
-
-        await _next(context);
+        else
+        {
+            await _next(context);
+        }
     }
 
     /// <summary>
@@ -50,44 +59,32 @@ public class IpLogMiddleware(RequestDelegate next)
             sb.AppendLine($"{header.Key}: {header.Value}");
         }
 
-        // 请求体
-        if (request.ContentLength > 0 || request.ContentType != null)
+        // 请求体：通过 HttpUtil 统一捕获并缓存
+        var bodyContent = await HttpUtil.CaptureRequestBodyAsync(context, IpRequestLogger.MaxRequestBytes);
+        if (!string.IsNullOrEmpty(bodyContent))
         {
-            try
-            {
-                request.EnableBuffering();
-                var originalPosition = request.Body.Position;
+            sb.AppendLine("--- Body ---");
+            sb.AppendLine(bodyContent);
+        }
 
-                using var reader = new StreamReader(
-                    request.Body,
-                    Encoding.UTF8,
-                    detectEncodingFromByteOrderMarks: false,
-                    leaveOpen: true
-                );
+        return sb.ToString();
+    }
 
-                var buffer = new char[IpRequestLogger.MaxRequestBytes];
-                var charsRead = await reader.ReadBlockAsync(buffer, 0, buffer.Length);
-                var bodyContent = new string(buffer, 0, charsRead);
+    /// <summary>
+    /// 在请求部分后面追加响应信息（状态码、耗时、响应体）
+    /// </summary>
+    private static string AppendResponseInfo(string requestPart, int statusCode, TimeSpan elapsed, string? responseBody)
+    {
+        var sb = new StringBuilder(requestPart);
+        var durationStr = elapsed.TotalMilliseconds < 1000
+            ? $"{elapsed.TotalMilliseconds:F1}ms"
+            : $"{elapsed.TotalSeconds:F2}s";
+        sb.AppendLine($"Status: {statusCode} | Duration: {durationStr}");
 
-                var bodyTruncated = request.ContentLength > IpRequestLogger.MaxRequestBytes;
-
-                // 恢复 Body 位置，确保后续中间件还能读取
-                request.Body.Position = originalPosition;
-
-                if (!string.IsNullOrEmpty(bodyContent))
-                {
-                    sb.AppendLine("--- Body ---");
-                    sb.AppendLine(bodyContent);
-                    if (bodyTruncated)
-                    {
-                        sb.AppendLine($"[... 截断，原始大小约: {request.ContentLength} 字节 ...]");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                sb.AppendLine($"--- Body (读取失败: {ex.Message}) ---");
-            }
+        if (!string.IsNullOrEmpty(responseBody))
+        {
+            sb.AppendLine("--- Response Body ---");
+            sb.AppendLine(responseBody);
         }
 
         sb.AppendLine();

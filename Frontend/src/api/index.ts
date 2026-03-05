@@ -83,7 +83,11 @@ export interface IpLogEntry {
   host: string
   requestLine: string
   headers?: string
-  body?: string
+  requestBody?: string
+  responseBody?: string
+  statusCode?: number
+  duration?: string
+  clientIp?: string
   raw: string
 }
 
@@ -825,6 +829,13 @@ export const dashboardApi = {
 
 // ==================== 插件管理 API ====================
 
+export interface PluginActionItem {
+  id: string
+  name: string
+  type: string
+  description?: string
+}
+
 export interface PluginItem {
   id: string
   name: string
@@ -837,6 +848,22 @@ export interface PluginItem {
   isSystem: boolean
   enabledByDefault: boolean
   hasOptions: boolean
+  actions: PluginActionItem[]
+}
+
+// PluginLogEntry 与 IpLogEntry 共用统一的 LogEntry 模型（后端 LogUtil.LogEntry）
+export type PluginLogEntry = IpLogEntry
+
+export interface PluginLogFile {
+  name: string
+  size: number
+  lastModified: string
+}
+
+export interface PluginActionResponse {
+  success: boolean
+  message?: string
+  data?: any
 }
 
 export interface PluginsResponse {
@@ -865,6 +892,12 @@ export const pluginApi = {
 
   saveConfig: (pluginId: string, config: Record<string, string>) =>
     api.post<ApiResponse>(`/plugins/${encodeURIComponent(pluginId)}/config`, config),
+
+  executeAction: (pluginId: string, actionId: string, parameters?: Record<string, string>) =>
+    api.post<PluginActionResponse>(
+      `/plugins/${encodeURIComponent(pluginId)}/actions/${encodeURIComponent(actionId)}`,
+      parameters || {},
+    ),
 }
 
 // ==================== 统计配置 API ====================

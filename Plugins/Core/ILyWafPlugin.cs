@@ -78,6 +78,40 @@ public class PluginMetadata
 }
 
 /// <summary>
+/// 插件操作定义
+/// 用于声明插件支持的可操作功能（如查看日志、清空缓存等）
+/// </summary>
+public class PluginAction
+{
+    /// <summary>操作唯一标识（如 "view-logs"）</summary>
+    public required string Id { get; init; }
+
+    /// <summary>操作显示名称（如 "查看日志"）</summary>
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// 操作类型，前端根据类型渲染不同 UI
+    /// "log-viewer" = 日志查看器（分页、搜索、展开详情）
+    /// "button" = 一次性执行按钮（如清空缓存）
+    /// </summary>
+    public string Type { get; init; } = "button";
+
+    /// <summary>操作说明</summary>
+    public string? Description { get; init; }
+}
+
+/// <summary>
+/// 插件操作执行结果
+/// </summary>
+public class PluginActionResult
+{
+    public bool Success { get; set; } = true;
+    public string? Message { get; set; }
+    /// <summary>JSON 可序列化的数据（具体结构取决于操作类型）</summary>
+    public object? Data { get; set; }
+}
+
+/// <summary>
 /// LyWaf 插件基础接口
 /// 所有插件必须实现此接口
 /// </summary>
@@ -87,46 +121,60 @@ public interface ILyWafPlugin
     /// 获取插件元数据
     /// </summary>
     PluginMetadata Metadata { get; }
-    
+
     /// <summary>
     /// 当前插件状态
     /// </summary>
     PluginState State { get; }
-    
+
     /// <summary>
     /// 配置服务（在 DI 容器构建前调用）
     /// </summary>
     /// <param name="services">服务集合</param>
     /// <param name="configuration">配置</param>
     void ConfigureServices(IServiceCollection services, IConfiguration configuration);
-    
+
     /// <summary>
     /// 初始化插件（在 DI 容器构建后调用）
     /// </summary>
     /// <param name="context">插件上下文</param>
     Task InitializeAsync(IPluginContext context);
-    
+
     /// <summary>
     /// 配置中间件管道
     /// </summary>
     /// <param name="app">应用程序构建器</param>
     void ConfigureMiddleware(IApplicationBuilder app);
-    
+
     /// <summary>
     /// 配置 YARP 反向代理管道（在 MapReverseProxy 内调用）
     /// </summary>
     /// <param name="proxyApp">代理应用程序构建器</param>
     void ConfigureProxyPipeline(IApplicationBuilder proxyApp);
-    
+
     /// <summary>
     /// 启动插件
     /// </summary>
     Task StartAsync(CancellationToken cancellationToken);
-    
+
     /// <summary>
     /// 停止插件
     /// </summary>
     Task StopAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// 获取插件支持的操作列表
+    /// 返回空列表表示无自定义操作
+    /// </summary>
+    IReadOnlyList<PluginAction> GetActions() => [];
+
+    /// <summary>
+    /// 执行插件操作
+    /// </summary>
+    /// <param name="actionId">操作 ID</param>
+    /// <param name="parameters">操作参数</param>
+    Task<PluginActionResult> ExecuteActionAsync(string actionId, Dictionary<string, string>? parameters)
+        => Task.FromResult(new PluginActionResult { Success = false, Message = $"操作 {actionId} 未实现" });
 }
 
 /// <summary>
@@ -208,4 +256,15 @@ public abstract class LyWafPluginBase : ILyWafPlugin
         State = PluginState.Stopped;
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// 获取插件支持的操作列表（子类可重写）
+    /// </summary>
+    public virtual IReadOnlyList<PluginAction> GetActions() => [];
+
+    /// <summary>
+    /// 执行插件操作（子类可重写）
+    /// </summary>
+    public virtual Task<PluginActionResult> ExecuteActionAsync(string actionId, Dictionary<string, string>? parameters)
+        => Task.FromResult(new PluginActionResult { Success = false, Message = $"操作 {actionId} 未实现" });
 }
