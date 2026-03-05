@@ -50,6 +50,7 @@ public class IpLogMiddleware(RequestDelegate next)
         sb.AppendLine($"========== [{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] ==========");
         sb.AppendLine($"{request.Method} {request.Path}{request.QueryString} {request.Protocol}");
         sb.AppendLine($"Host: {request.Host}");
+        sb.AppendLine($"Scheme: {request.Scheme}");
         sb.AppendLine($"Client-IP: {clientIp}");
 
         // 请求头

@@ -169,13 +169,17 @@ public static partial class LogUtil
                 entry.Host = hostLine["Host:".Length..].Trim();
         }
 
-        // 提取 Client-IP 和 Status/Duration
+        // 提取 Client-IP、Scheme 和 Status/Duration
         foreach (var line in lines)
         {
             var trimmed = line.Trim();
             if (trimmed.StartsWith("Client-IP:", StringComparison.OrdinalIgnoreCase))
             {
                 entry.ClientIp = trimmed["Client-IP:".Length..].Trim();
+            }
+            else if (trimmed.StartsWith("Scheme:", StringComparison.OrdinalIgnoreCase))
+            {
+                entry.Scheme = trimmed["Scheme:".Length..].Trim();
             }
             else if (trimmed.StartsWith("Status:", StringComparison.OrdinalIgnoreCase))
             {
@@ -329,6 +333,8 @@ public class LogEntry
     /// <summary>响应时间（如 "12.5ms"）</summary>
     public string? Duration { get; set; }
     public string? ClientIp { get; set; }
+    /// <summary>请求协议（http/https）</summary>
+    public string? Scheme { get; set; }
     public string Raw { get; set; } = "";
 }
 

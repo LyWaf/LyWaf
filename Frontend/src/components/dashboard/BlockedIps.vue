@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onMounted, onUnmounted } from 'vue'
 import Section from '@/components/common/Section.vue'
 import { ipApi } from '@/api'
 import type { IpLogEntry } from '@/api'
@@ -271,7 +271,8 @@ const replayRequest = async (entry: IpLogEntry) => {
     const url = entry.url || '/'
 
     // 构建完整 URL
-    const fullUrl = host ? `${host.includes('://') ? '' : 'http://'}${host}${url}` : url
+    const scheme = entry.scheme || (host.includes('://') ? '' : 'http')
+    const fullUrl = host ? (host.includes('://') ? `${host}${url}` : `${scheme}://${host}${url}`) : url
 
     // 解析 headers
     const headers: Record<string, string> = {}
@@ -319,6 +320,82 @@ const replayRequest = async (entry: IpLogEntry) => {
     replayLoading.value = null
   }
 }
+
+// ======================== 右键菜单：复制为 cURL ========================
+const contextMenu = ref<{ show: boolean; x: number; y: number; entry: IpLogEntry | null }>({
+  show: false, x: 0, y: 0, entry: null,
+})
+
+const onEntryContextMenu = (e: MouseEvent, entry: IpLogEntry) => {
+  e.preventDefault()
+  contextMenu.value = { show: true, x: e.clientX, y: e.clientY, entry }
+}
+
+const closeContextMenu = () => {
+  contextMenu.value.show = false
+}
+
+type CurlFormat = 'bash' | 'cmd' | 'powershell'
+
+const buildCurl = (entry: IpLogEntry, format: CurlFormat): string => {
+  const method = entry.method || 'GET'
+  const host = entry.host || 'localhost'
+  const url = entry.url || '/'
+  const scheme = entry.scheme || (host.includes('://') ? '' : 'http')
+  const fullUrl = host.includes('://') ? `${host}${url}` : `${scheme}://${host}${url}`
+
+  // 引号与续行符
+  const q = format === 'bash' ? "'" : '"'
+  const cont = format === 'bash' ? ' \\' : format === 'cmd' ? ' ^' : ' `'
+  const exe = format === 'powershell' ? 'curl.exe' : 'curl'
+
+  const parts: string[] = [`${exe} -X ${method} ${q}${fullUrl}${q}`]
+
+  // 请求头
+  if (entry.headers) {
+    for (const line of entry.headers.split('\n')) {
+      const colonIdx = line.indexOf(':')
+      if (colonIdx > 0) {
+        const key = line.substring(0, colonIdx).trim()
+        const value = line.substring(colonIdx + 1).trim()
+        if (!['host', 'content-length', 'transfer-encoding', 'connection'].some(
+          h => key.toLowerCase() === h
+        )) {
+          const escaped = format === 'bash' ? value.replace(/'/g, "'\\''") : value.replace(/"/g, '\\"')
+          parts.push(`  -H ${q}${key}: ${escaped}${q}`)
+        }
+      }
+    }
+  }
+
+  // 请求体
+  if (['POST', 'PUT', 'PATCH'].includes(method.toUpperCase()) && entry.requestBody) {
+    const body = format === 'bash'
+      ? entry.requestBody.replace(/'/g, "'\\''")
+      : entry.requestBody.replace(/"/g, '\\"')
+    parts.push(`  -d ${q}${body}${q}`)
+  }
+
+  return parts.join(cont + '\n')
+}
+
+const copyCurl = async (format: CurlFormat) => {
+  const entry = contextMenu.value.entry
+  if (!entry) return
+  const curl = buildCurl(entry, format)
+  try {
+    await navigator.clipboard.writeText(curl)
+    showSuccess(`已复制 cURL（${format === 'bash' ? 'Bash' : format === 'cmd' ? 'CMD' : 'PowerShell'}）`)
+  } catch {
+    showError('复制失败')
+  }
+  closeContextMenu()
+}
+
+// 全局点击关闭右键菜单
+const onDocClick = () => closeContextMenu()
+onMounted(() => document.addEventListener('click', onDocClick))
+onUnmounted(() => document.removeEventListener('click', onDocClick))
 
 // ======================== 其他操作 ========================
 
@@ -555,7 +632,7 @@ const clearAll = async () => {
 
           <!-- 日志条目列表 -->
           <div v-else class="divide-y divide-dark-border">
-            <div v-for="entry in logEntries" :key="entry.index" class="hover:bg-dark-card-hover transition-colors">
+            <div v-for="entry in logEntries" :key="entry.index" class="hover:bg-dark-card-hover transition-colors" @contextmenu="onEntryContextMenu($event, entry)">
               <!-- 条目摘要行 -->
               <div
                 class="flex items-center gap-4 px-5 py-3 cursor-pointer select-none"
@@ -665,6 +742,39 @@ const clearAll = async () => {
           </div>
         </div>
       </div>
+    </div>
+  </Teleport>
+
+  <!-- 右键菜单：复制为 cURL -->
+  <Teleport to="body">
+    <div
+      v-if="contextMenu.show"
+      class="fixed z-[200] bg-dark-card border border-dark-border rounded-lg shadow-2xl py-1 min-w-[200px]"
+      :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+      @click.stop
+    >
+      <div class="px-3 py-1.5 text-xs text-gray-500 select-none">复制为 cURL</div>
+      <button
+        @click="copyCurl('bash')"
+        class="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-dark-card-hover flex items-center gap-2"
+      >
+        <span class="text-green-400 text-xs font-mono w-14">Bash</span>
+        <span class="text-gray-400 text-xs">Linux / macOS</span>
+      </button>
+      <button
+        @click="copyCurl('cmd')"
+        class="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-dark-card-hover flex items-center gap-2"
+      >
+        <span class="text-blue-400 text-xs font-mono w-14">CMD</span>
+        <span class="text-gray-400 text-xs">Windows</span>
+      </button>
+      <button
+        @click="copyCurl('powershell')"
+        class="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-dark-card-hover flex items-center gap-2"
+      >
+        <span class="text-purple-400 text-xs font-mono w-14">PS</span>
+        <span class="text-gray-400 text-xs">PowerShell</span>
+      </button>
     </div>
   </Teleport>
 </template>

@@ -66,20 +66,6 @@ public class AnalysisPlugin : LyWafPluginBase
         context.Items.TryGetValue("ProxyDestUrl", out var destUrl);
         long useTime = (long)e.Duration.TotalMilliseconds;
         await StatisticUtil.DoStatisticRequest(context, (string?)destUrl ?? "", useTime);
-        
-        // context.Request.Body.Position = 0;
-        // Stream rawbody = new MemoryStream();
-        // var request = context.Request;
-        // await request.Body.CopyToAsync(rawbody, 200);
-        // var body = StreamUtil.ConvertToString(rawbody);
-        // var url = RequestUtil.GetRequestUrl(request);
-        // var response = context.Response;
-        // var reqRaw = RequestUtil.RecordRuquest(request, body);
-        // plugin.Logger.Info("以下是curl指令:\n{}\n返回{},长度{}\n当前请求耗时: {} ms\n",
-        //     reqRaw, response.StatusCode,
-        //     response.ContentLength != null ? response.ContentLength : response.Headers.TransferEncoding,
-        //     useTime);
-
     }
 
     public override Task StopAsync(CancellationToken cancellationToken)

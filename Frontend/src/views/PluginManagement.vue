@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { pluginApi } from '@/api'
 import type { PluginItem, PluginLogEntry, PluginLogFile, PluginActionItem } from '@/api'
 import { useToast } from '@/composables/useToast'
@@ -588,6 +588,78 @@ const methodColor = (method: string) => {
   }
 }
 
+// =============== 日志查看器 — 右键菜单：复制为 cURL ===============
+const logContextMenu = ref<{ show: boolean; x: number; y: number; entry: PluginLogEntry | null }>({
+  show: false, x: 0, y: 0, entry: null,
+})
+
+const onLogEntryContextMenu = (e: MouseEvent, entry: PluginLogEntry) => {
+  e.preventDefault()
+  logContextMenu.value = { show: true, x: e.clientX, y: e.clientY, entry }
+}
+
+const closeLogContextMenu = () => {
+  logContextMenu.value.show = false
+}
+
+type CurlFormat = 'bash' | 'cmd' | 'powershell'
+
+const buildCurl = (entry: PluginLogEntry, format: CurlFormat): string => {
+  const method = entry.method || 'GET'
+  const host = entry.host || 'localhost'
+  const url = entry.url || '/'
+  const scheme = entry.scheme || (host.includes('://') ? '' : 'http')
+  const fullUrl = host.includes('://') ? `${host}${url}` : `${scheme}://${host}${url}`
+
+  const q = format === 'bash' ? "'" : '"'
+  const cont = format === 'bash' ? ' \\' : format === 'cmd' ? ' ^' : ' `'
+  const exe = format === 'powershell' ? 'curl.exe' : 'curl'
+
+  const parts: string[] = [`${exe} -X ${method} ${q}${fullUrl}${q}`]
+
+  if (entry.headers) {
+    for (const line of entry.headers.split('\n')) {
+      const colonIdx = line.indexOf(':')
+      if (colonIdx > 0) {
+        const key = line.substring(0, colonIdx).trim()
+        const value = line.substring(colonIdx + 1).trim()
+        if (!['host', 'content-length', 'transfer-encoding', 'connection'].some(
+          h => key.toLowerCase() === h
+        )) {
+          const escaped = format === 'bash' ? value.replace(/'/g, "'\\''") : value.replace(/"/g, '\\"')
+          parts.push(`  -H ${q}${key}: ${escaped}${q}`)
+        }
+      }
+    }
+  }
+
+  if (['POST', 'PUT', 'PATCH'].includes(method.toUpperCase()) && entry.requestBody) {
+    const body = format === 'bash'
+      ? entry.requestBody.replace(/'/g, "'\\''")
+      : entry.requestBody.replace(/"/g, '\\"')
+    parts.push(`  -d ${q}${body}${q}`)
+  }
+
+  return parts.join(cont + '\n')
+}
+
+const copyLogCurl = async (format: CurlFormat) => {
+  const entry = logContextMenu.value.entry
+  if (!entry) return
+  const curl = buildCurl(entry, format)
+  try {
+    await navigator.clipboard.writeText(curl)
+    showSuccess(`已复制 cURL（${format === 'bash' ? 'Bash' : format === 'cmd' ? 'CMD' : 'PowerShell'}）`)
+  } catch {
+    showError('复制失败')
+  }
+  closeLogContextMenu()
+}
+
+const onLogDocClick = () => closeLogContextMenu()
+onMounted(() => document.addEventListener('click', onLogDocClick))
+onUnmounted(() => document.removeEventListener('click', onLogDocClick))
+
 // =============== 通用插件操作（button 类型） ===============
 const executePluginAction = async (plugin: PluginItem, action: PluginActionItem) => {
   if (action.type === 'log-viewer') {
@@ -1008,7 +1080,7 @@ onMounted(loadPlugins)
 
             <!-- 条目列表 -->
             <div v-else class="flex-1 overflow-y-auto divide-y divide-dark-border">
-              <div v-for="entry in logEntries" :key="entry.index" class="hover:bg-dark-card-hover transition-colors group/entry">
+              <div v-for="entry in logEntries" :key="entry.index" class="hover:bg-dark-card-hover transition-colors group/entry" @contextmenu="onLogEntryContextMenu($event, entry)">
                 <!-- 摘要行 -->
                 <div class="flex items-center gap-4 px-5 py-3 cursor-pointer select-none"
                   @click="logToggleExpand(entry.index)">
@@ -1094,4 +1166,37 @@ onMounted(loadPlugins)
       </div>
     </div>
   </div>
+
+  <!-- 右键菜单：复制为 cURL -->
+  <Teleport to="body">
+    <div
+      v-if="logContextMenu.show"
+      class="fixed z-[200] bg-dark-card border border-dark-border rounded-lg shadow-2xl py-1 min-w-[200px]"
+      :style="{ left: logContextMenu.x + 'px', top: logContextMenu.y + 'px' }"
+      @click.stop
+    >
+      <div class="px-3 py-1.5 text-xs text-gray-500 select-none">复制为 cURL</div>
+      <button
+        @click="copyLogCurl('bash')"
+        class="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-dark-card-hover flex items-center gap-2"
+      >
+        <span class="text-green-400 text-xs font-mono w-14">Bash</span>
+        <span class="text-gray-400 text-xs">Linux / macOS</span>
+      </button>
+      <button
+        @click="copyLogCurl('cmd')"
+        class="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-dark-card-hover flex items-center gap-2"
+      >
+        <span class="text-blue-400 text-xs font-mono w-14">CMD</span>
+        <span class="text-gray-400 text-xs">Windows</span>
+      </button>
+      <button
+        @click="copyLogCurl('powershell')"
+        class="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-dark-card-hover flex items-center gap-2"
+      >
+        <span class="text-purple-400 text-xs font-mono w-14">PS</span>
+        <span class="text-gray-400 text-xs">PowerShell</span>
+      </button>
+    </div>
+  </Teleport>
 </template>

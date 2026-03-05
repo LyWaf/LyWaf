@@ -88,6 +88,7 @@ export interface IpLogEntry {
   statusCode?: number
   duration?: string
   clientIp?: string
+  scheme?: string
   raw: string
 }
 

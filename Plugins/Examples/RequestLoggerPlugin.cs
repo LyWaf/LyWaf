@@ -53,7 +53,7 @@ public class RequestLoggerPlugin : LyWafPluginBase
             if (rule == null) return;
 
             // 构建日志条目
-            var logEntry = BuildLogEntry(ctx, e.StatusCode, e.Duration, rule);
+            var logEntry = await BuildLogEntry(ctx, e.StatusCode, e.Duration, rule, Options.MaxBodySize);
 
             // 写入独立日志文件
             if (Options.LogToFile)
@@ -233,7 +233,7 @@ public class RequestLoggerPlugin : LyWafPluginBase
     /// <summary>
     /// 构建格式化的日志条目
     /// </summary>
-    private static string BuildLogEntry(HttpContext context, int statusCode, TimeSpan duration, MatchRule rule)
+    private static async Task<string> BuildLogEntry(HttpContext context, int statusCode, TimeSpan duration, MatchRule rule, int maxBodySize)
     {
         var request = context.Request;
         var sb = new StringBuilder();
@@ -244,6 +244,7 @@ public class RequestLoggerPlugin : LyWafPluginBase
             sb.Append(request.QueryString.Value);
         sb.AppendLine($" {request.Protocol}");
         sb.AppendLine($"Host: {request.Host}");
+        sb.AppendLine($"Scheme: {request.Scheme}");
 
         var clientIp = RequestUtil.GetClientIp(request);
         sb.AppendLine($"Client-IP: {clientIp}");
@@ -263,18 +264,26 @@ public class RequestLoggerPlugin : LyWafPluginBase
             }
         }
 
-        // 请求体
-        if (rule.LogRequestBody && context.Items.TryGetValue(LyWafCache.RequestBody, out var reqBody) && reqBody is string reqBodyStr && reqBodyStr.Length > 0)
+        // 请求体：通过 HttpUtil 统一捕获并缓存
+        if (rule.LogRequestBody)
         {
-            sb.AppendLine("--- Request Body ---");
-            sb.AppendLine(reqBodyStr);
+            var bodyContent = await HttpUtil.CaptureRequestBodyAsync(context, maxBodySize);
+            if (!string.IsNullOrEmpty(bodyContent))
+            {
+                sb.AppendLine("--- Request Body ---");
+                sb.AppendLine(bodyContent);
+            }
         }
 
-        // 响应体
-        if (rule.LogResponseBody && context.Items.TryGetValue(LyWafCache.ResponseBody, out var resBody) && resBody is string resBodyStr && resBodyStr.Length > 0)
+        // 响应体（已通过 HttpUtil.CaptureResponseBodyAsync 捕获到缓存）
+        if (rule.LogResponseBody)
         {
-            sb.AppendLine("--- Response Body ---");
-            sb.AppendLine(resBodyStr);
+            var responseBody = context.Items.TryGetValue(LyWafCache.ResponseBody, out var rb) && rb is string rbs ? rbs : null;
+            if (!string.IsNullOrEmpty(responseBody))
+            {
+                sb.AppendLine("--- Response Body ---");
+                sb.AppendLine(responseBody);
+            }
         }
 
         sb.AppendLine();
