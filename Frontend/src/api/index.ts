@@ -991,4 +991,90 @@ export const authApi = {
     api.post<ApiResponse>('/auth/change-password', { currentPassword, newPassword }),
 }
 
+// ==================== 访问控制（黑白名单）API ====================
+
+export interface AccessControlData {
+  success: boolean
+  ipControl: {
+    enabled: boolean
+    whitelist: string[]
+    blacklist: string[]
+  }
+  geoControl: {
+    enabled: boolean
+    mode: string
+    denyCountries: string[]
+    denyRegions: string[]
+    allowCountries: string[]
+    allowRegions: string[]
+  }
+  stats: {
+    blacklistBlockCount: number
+    geoBlockCount: number
+  }
+  rejectStatusCode: number
+}
+
+export const accessControlApi = {
+  /** 获取所有访问控制数据 */
+  getAll: () =>
+    api.get<AccessControlData>('/ac/all'),
+
+  /** 切换 IP 访问控制 */
+  toggleIpControl: () =>
+    api.post<{ success: boolean; enabled: boolean }>('/ac/ip-control/toggle'),
+
+  /** 切换地理位置访问控制 */
+  toggleGeoControl: () =>
+    api.post<{ success: boolean; enabled: boolean }>('/ac/geo-control/toggle'),
+
+  /** 添加白名单 */
+  addWhitelist: (ipOrCidr: string) =>
+    api.post<{ success: boolean; message: string }>('/ac/whitelist/add', { ipOrCidr }),
+
+  /** 移除白名单 */
+  removeWhitelist: (ipOrCidr: string) =>
+    api.post<{ success: boolean; message: string }>('/ac/whitelist/remove', { ipOrCidr }),
+
+  /** 添加黑名单 */
+  addBlacklist: (ipOrCidr: string) =>
+    api.post<{ success: boolean; message: string }>('/ac/blacklist/add', { ipOrCidr }),
+
+  /** 移除黑名单 */
+  removeBlacklist: (ipOrCidr: string) =>
+    api.post<{ success: boolean; message: string }>('/ac/blacklist/remove', { ipOrCidr }),
+
+  /** 添加禁止国家 */
+  addDenyCountry: (country: string) =>
+    api.post<{ success: boolean; message: string }>('/geo/deny-countries/add', { country }),
+
+  /** 移除禁止国家 */
+  removeDenyCountry: (country: string) =>
+    api.post<{ success: boolean; message: string }>('/geo/deny-countries/remove', { country }),
+
+  /** 添加禁止省份 */
+  addDenyRegion: (region: string) =>
+    api.post<{ success: boolean; message: string }>('/geo/deny-regions/add', { region }),
+
+  /** 移除禁止省份 */
+  removeDenyRegion: (region: string) =>
+    api.post<{ success: boolean; message: string }>('/geo/deny-regions/remove', { region }),
+
+  /** 添加允许国家 */
+  addAllowCountry: (country: string) =>
+    api.post<{ success: boolean; message: string }>('/geo/allow-countries/add', { country }),
+
+  /** 移除允许国家 */
+  removeAllowCountry: (country: string) =>
+    api.post<{ success: boolean; message: string }>('/geo/allow-countries/remove', { country }),
+
+  /** 添加允许省份 */
+  addAllowRegion: (region: string) =>
+    api.post<{ success: boolean; message: string }>('/geo/allow-regions/add', { region }),
+
+  /** 移除允许省份 */
+  removeAllowRegion: (region: string) =>
+    api.post<{ success: boolean; message: string }>('/geo/allow-regions/remove', { region }),
+}
+
 export default http

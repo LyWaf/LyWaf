@@ -5,7 +5,7 @@ import { MapChart } from 'echarts/charts'
 import { GeoComponent, TooltipComponent, VisualMapComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { geoTrafficApi } from '@/api'
-import { countryNameMap, provinceNameMap } from '@/utils/geoNameMap'
+import { countryNameMap, provinceNameMap, cityToProvinceMap } from '@/utils/geoNameMap'
 import type { GeoTrafficItem } from '@/types'
 
 echarts.use([MapChart, GeoComponent, TooltipComponent, VisualMapComponent, CanvasRenderer])
@@ -28,9 +28,22 @@ const countryIntercepts = ref<GeoTrafficItem[]>([])
 const regionVisits = ref<GeoTrafficItem[]>([])
 const regionIntercepts = ref<GeoTrafficItem[]>([])
 
+/** 将原始 region 数据归并到省份并排序 */
+function aggregateToProvince(raw: GeoTrafficItem[]): GeoTrafficItem[] {
+  const agg: Record<string, number> = {}
+  for (const item of raw) {
+    const mapped = provinceNameMap[item.name] || cityToProvinceMap[item.name] || item.name
+    agg[mapped] = (agg[mapped] || 0) + item.value
+  }
+  return Object.entries(agg)
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value)
+}
+
 const currentData = computed(() => {
   if (mapMode.value === 'china') {
-    return dataMode.value === 'visits' ? regionVisits.value : regionIntercepts.value
+    const raw = dataMode.value === 'visits' ? regionVisits.value : regionIntercepts.value
+    return aggregateToProvince(raw)
   }
   return dataMode.value === 'visits' ? countryVisits.value : countryIntercepts.value
 })
@@ -92,12 +105,22 @@ function buildOption(): echarts.EChartsCoreOption {
   }
 
   // 转换名称以匹配 ECharts 地图
-  const seriesData = rawData.map(item => ({
-    name: isChina
-      ? (provinceNameMap[item.name] || item.name)
-      : (countryNameMap[item.name] || item.name),
-    value: item.value,
-  }))
+  let seriesData: Array<{ name: string; value: number }>
+  if (isChina) {
+    // 将城市级数据归并到省份：先映射到省份全名，再按省份聚合
+    const provinceAgg: Record<string, number> = {}
+    for (const item of rawData) {
+      // 优先用 provinceNameMap（省份短名→全名），其次用 cityToProvinceMap（城市→省份全名）
+      const mapped = provinceNameMap[item.name] || cityToProvinceMap[item.name] || item.name
+      provinceAgg[mapped] = (provinceAgg[mapped] || 0) + item.value
+    }
+    seriesData = Object.entries(provinceAgg).map(([name, value]) => ({ name, value }))
+  } else {
+    seriesData = rawData.map(item => ({
+      name: countryNameMap[item.name] || item.name,
+      value: item.value,
+    }))
+  }
 
   const maxVal = seriesData.length > 0 ? Math.max(...seriesData.map(d => d.value)) : 100
 

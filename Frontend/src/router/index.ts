@@ -39,6 +39,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'API 耗时', icon: '⏱️' }
   },
   {
+    path: '/black-white-list',
+    name: 'BlackWhiteList',
+    component: () => import('@/views/BlackWhiteList.vue'),
+    meta: { title: '黑白名单', icon: '📋' }
+  },
+  {
     path: '/config',
     name: 'ConfigEditor',
     component: () => import('@/views/ConfigEditor.vue'),

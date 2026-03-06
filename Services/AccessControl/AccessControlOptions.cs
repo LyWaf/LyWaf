@@ -136,7 +136,7 @@ public class GeoAccessControlConfig
     /// <summary>
     /// IP2Region 数据库文件路径
     /// </summary>
-    public string DatabasePath { get; set; } = "ip2region.xdb";
+    public string DatabasePath { get; set; } = "datas/ip2region.xdb";
 
     /// <summary>
     /// 访问控制模式

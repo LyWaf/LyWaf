@@ -1912,7 +1912,69 @@ public static class ControlApi
         }).RequireHost($"*:{controlPort}");
 
         // =============== 动态访问控制管理 API ===============
-        
+
+        // 获取所有访问控制数据（黑白名单页面用）
+        app.MapGet("/api/ac/all", (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            var options = accessControlService.GetOptions();
+            var whitelist = accessControlService.GetWhitelist();
+            var blacklist = accessControlService.GetBlacklist();
+            var denyCountries = accessControlService.GetDenyCountries();
+            var denyRegions = accessControlService.GetDenyRegions();
+            var allowCountries = accessControlService.GetAllowCountries();
+            var allowRegions = accessControlService.GetAllowRegions();
+            var secSnapshot = SharedData.Security.GetSnapshot();
+
+            return Results.Json(new
+            {
+                success = true,
+                ipControl = new
+                {
+                    enabled = options.IpControl.Enabled,
+                    whitelist,
+                    blacklist,
+                },
+                geoControl = new
+                {
+                    enabled = options.GeoControl.Enabled,
+                    mode = options.GeoControl.Mode.ToString(),
+                    denyCountries,
+                    denyRegions,
+                    allowCountries,
+                    allowRegions,
+                },
+                stats = new
+                {
+                    blacklistBlockCount = secSnapshot.BlacklistBlockCount,
+                    geoBlockCount = secSnapshot.GeoBlockCount,
+                },
+                rejectStatusCode = options.RejectStatusCode,
+                timestamp = DateTime.Now
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 切换 IP 访问控制启用状态
+        app.MapPost("/api/ac/ip-control/toggle", (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            var options = accessControlService.GetOptions();
+            var newState = !options.IpControl.Enabled;
+            accessControlService.SetIpControlEnabled(newState);
+            var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+            audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"IP 访问控制: {(newState ? "启用" : "禁用")}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
+            return Results.Json(new { success = true, enabled = newState, message = newState ? "IP 访问控制已启用" : "IP 访问控制已禁用" });
+        }).RequireHost($"*:{controlPort}");
+
+        // 切换地理位置访问控制启用状态
+        app.MapPost("/api/ac/geo-control/toggle", (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            var options = accessControlService.GetOptions();
+            var newState = !options.GeoControl.Enabled;
+            accessControlService.SetGeoControlEnabled(newState);
+            var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+            audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"地理位置访问控制: {(newState ? "启用" : "禁用")}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
+            return Results.Json(new { success = true, enabled = newState, message = newState ? "地理位置访问控制已启用" : "地理位置访问控制已禁用" });
+        }).RequireHost($"*:{controlPort}");
+
         // 获取白名单列表
         app.MapGet("/api/ac/whitelist", (HttpContext ctx, IAccessControlService accessControlService) =>
         {
