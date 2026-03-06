@@ -275,10 +275,10 @@ public class RequestLoggerPlugin : LyWafPluginBase
             }
         }
 
-        // 响应体（已通过 HttpUtil.CaptureResponseBodyAsync 捕获到缓存）
+        // 响应体
         if (rule.LogResponseBody)
         {
-            var responseBody = context.Items.TryGetValue(LyWafCache.ResponseBody, out var rb) && rb is string rbs ? rbs : null;
+            var responseBody = await HttpUtil.CaptureResponseBodyAsync(context, maxBytes: maxBodySize);
             if (!string.IsNullOrEmpty(responseBody))
             {
                 sb.AppendLine("--- Response Body ---");

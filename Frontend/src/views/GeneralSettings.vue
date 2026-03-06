@@ -89,6 +89,68 @@ const executeDeleteCert = async () => {
 const certTypeLabel = (type: string) => type === 'acme' ? '免费证书' : '上传证书'
 const certTypeColor = (type: string) => type === 'acme' ? 'bg-green-500/15 text-green-400' : 'bg-blue-500/15 text-blue-400'
 
+// ---- ACME 申请/续期 ----
+const showAcmeDialog = ref(false)
+const acmeForm = ref({ domain: '', email: '' })
+const acmeApplying = ref(false)
+const acmeStatus = ref('')
+const renewingCert = ref<CertDetail | null>(null)
+const renewing = ref(false)
+
+const openAcmeDialog = async () => {
+  try {
+    const res = await settingsApi.getAcmeEmail() as unknown as { success: boolean; email: string }
+    if (res?.success && res.email) {
+      acmeForm.value.email = res.email
+    }
+  } catch {}
+  acmeForm.value.domain = ''
+  showAcmeDialog.value = true
+}
+
+const handleAcmeApply = async () => {
+  if (!acmeForm.value.domain || !acmeForm.value.email) {
+    showError('请填写域名和邮箱')
+    return
+  }
+  acmeApplying.value = true
+  acmeStatus.value = '正在申请证书，请耐心等待（约30-60秒）...'
+  try {
+    const res = await settingsApi.acmeApply(acmeForm.value) as unknown as { success: boolean; expiresAt?: string; errorMessage?: string }
+    if (res?.success) {
+      showSuccess(`证书申请成功，到期时间：${res.expiresAt}`)
+      showAcmeDialog.value = false
+      loadCerts()
+    } else {
+      showError(res?.errorMessage || '证书申请失败')
+    }
+  } catch {
+    showError('证书申请失败，请检查域名是否正确解析到本服务器')
+  } finally {
+    acmeApplying.value = false
+    acmeStatus.value = ''
+  }
+}
+
+const handleRenewCert = async (cert: CertDetail) => {
+  renewingCert.value = cert
+  renewing.value = true
+  try {
+    const res = await settingsApi.acmeRenew({ domain: cert.domain }) as unknown as { success: boolean; expiresAt?: string; errorMessage?: string }
+    if (res?.success) {
+      showSuccess(`证书续期成功，新到期时间：${res.expiresAt}`)
+      loadCerts()
+    } else {
+      showError(res?.errorMessage || '证书续期失败')
+    }
+  } catch {
+    showError('证书续期失败')
+  } finally {
+    renewing.value = false
+    renewingCert.value = null
+  }
+}
+
 // ==================== 控制台管理 ====================
 const consoleLoading = ref(false)
 const consoleInfo = ref<{ username: string; lastLoginAt: string | null; controlListen: { host: string; port: number } } | null>(null)
@@ -217,12 +279,20 @@ onMounted(() => {
         <!-- 操作栏 -->
         <div class="flex items-center justify-between mb-4">
           <span class="text-sm text-gray-400">共 {{ certs.length }} 个证书</span>
-          <button @click="showUploadDialog = true" class="btn btn-sm btn-primary flex items-center gap-1.5">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-            </svg>
-            上传证书
-          </button>
+          <div class="flex items-center gap-2">
+            <button @click="openAcmeDialog" class="btn btn-sm btn-success flex items-center gap-1.5">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+              申请免费证书
+            </button>
+            <button @click="showUploadDialog = true" class="btn btn-sm btn-primary flex items-center gap-1.5">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+              </svg>
+              上传证书
+            </button>
+          </div>
         </div>
 
         <!-- 加载 -->
@@ -260,15 +330,21 @@ onMounted(() => {
                 <td class="py-3 text-gray-400 text-xs max-w-[200px] truncate">{{ cert.issuer || '-' }}</td>
                 <td class="py-3 text-gray-400">{{ cert.notAfter || '-' }}</td>
                 <td class="py-3 text-gray-500 font-mono text-xs">{{ cert.pemFile }}</td>
-                <td class="py-3 text-right">
+                <td class="py-3 text-right space-x-1">
                   <button
-                    v-if="cert.type === 'uploaded'"
+                    v-if="cert.type === 'acme'"
+                    @click="handleRenewCert(cert)"
+                    :disabled="renewing && renewingCert?.domain === cert.domain"
+                    class="text-green-400 hover:text-green-300 text-xs px-2 py-1 rounded hover:bg-green-500/10 transition-colors"
+                  >
+                    {{ renewing && renewingCert?.domain === cert.domain ? '续期中...' : '续期' }}
+                  </button>
+                  <button
                     @click="confirmDeleteCert(cert)"
                     class="text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded hover:bg-red-500/10 transition-colors"
                   >
                     删除
                   </button>
-                  <span v-else class="text-gray-600 text-xs">自动管理</span>
                 </td>
               </tr>
             </tbody>
@@ -411,6 +487,46 @@ onMounted(() => {
               class="btn btn-sm btn-primary"
             >
               {{ uploading ? '上传中...' : '上传' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ==================== 申请免费证书对话框 ==================== -->
+    <Teleport to="body">
+      <div v-if="showAcmeDialog" class="fixed inset-0 z-[100] flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/60" @click="!acmeApplying && (showAcmeDialog = false)"></div>
+        <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
+          <h3 class="text-lg font-semibold text-gray-100 mb-4">申请免费证书</h3>
+          <p class="text-xs text-gray-500 mb-4">
+            使用 Let's Encrypt 免费申请 SSL 证书。域名必须已解析到本服务器，且 80 端口可访问。
+          </p>
+          <div class="space-y-4">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">域名</label>
+              <input v-model="acmeForm.domain" type="text" class="input w-full"
+                     placeholder="example.com" :disabled="acmeApplying" />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">联系邮箱</label>
+              <input v-model="acmeForm.email" type="email" class="input w-full"
+                     placeholder="admin@example.com" :disabled="acmeApplying" />
+              <p class="text-xs text-gray-600 mt-1">用于 Let's Encrypt 账户注册和证书到期通知</p>
+            </div>
+          </div>
+          <div v-if="acmeApplying" class="mt-4 flex items-center gap-2 text-sm text-yellow-400">
+            <span class="w-4 h-4 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin shrink-0"></span>
+            {{ acmeStatus }}
+          </div>
+          <div class="flex items-center justify-end gap-3 mt-6">
+            <button @click="showAcmeDialog = false" :disabled="acmeApplying" class="btn btn-sm text-gray-400 hover:text-gray-200">取消</button>
+            <button
+              @click="handleAcmeApply"
+              :disabled="acmeApplying"
+              class="btn btn-sm btn-success"
+            >
+              {{ acmeApplying ? '申请中...' : '申请证书' }}
             </button>
           </div>
         </div>

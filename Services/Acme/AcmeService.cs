@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
 using Certes;
 using Certes.Acme;
 using Certes.Acme.Resource;
@@ -29,6 +30,16 @@ public interface IAcmeService
     X509Certificate2? GetCertificate(string domain);
 
     /// <summary>
+    /// 手动申请/续期证书（按需初始化 ACME 上下文）
+    /// </summary>
+    Task<AcmeRequestResult> ManualRequestCertificateAsync(string domain, string email, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 获取已保存的 ACME 联系邮箱
+    /// </summary>
+    string? GetSavedEmail();
+
+    /// <summary>
     /// 启动证书管理（后台任务）
     /// </summary>
     Task StartAsync(CancellationToken cancellationToken);
@@ -37,6 +48,17 @@ public interface IAcmeService
     /// 停止证书管理
     /// </summary>
     Task StopAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// ACME 手动申请结果
+/// </summary>
+public class AcmeRequestResult
+{
+    public bool Success { get; set; }
+    public string? ErrorMessage { get; set; }
+    public string? Domain { get; set; }
+    public string? ExpiresAt { get; set; }
 }
 
 /// <summary>
@@ -393,6 +415,134 @@ public class AcmeService : IAcmeService, IHostedService, IDisposable
             _semaphore.Release();
         }
     }
+
+    #region 手动申请/续期
+
+    private static readonly string AcmeSettingsFile = Path.Combine("certs", "acme-settings.json");
+
+    /// <summary>
+    /// 获取已保存的邮箱
+    /// </summary>
+    public string? GetSavedEmail()
+    {
+        try
+        {
+            if (!File.Exists(AcmeSettingsFile)) return _options.Email;
+            var json = File.ReadAllText(AcmeSettingsFile);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("email", out var emailProp))
+                return emailProp.GetString();
+        }
+        catch { }
+        return string.IsNullOrEmpty(_options.Email) ? null : _options.Email;
+    }
+
+    /// <summary>
+    /// 保存邮箱
+    /// </summary>
+    private void SaveEmail(string email)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(AcmeSettingsFile);
+            if (!string.IsNullOrEmpty(dir)) System.IO.Directory.CreateDirectory(dir);
+            File.WriteAllText(AcmeSettingsFile, JsonSerializer.Serialize(new { email }));
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn(ex, "保存 ACME 邮箱失败");
+        }
+    }
+
+    /// <summary>
+    /// 按需初始化 ACME 上下文（不依赖 Enabled 配置）
+    /// </summary>
+    private async Task EnsureAcmeContextAsync(string email)
+    {
+        if (_acmeContext != null) return;
+
+        var directoryUrl = _options.UseStaging
+            ? WellKnownServers.LetsEncryptStagingV2
+            : WellKnownServers.LetsEncryptV2;
+
+        if (!string.IsNullOrEmpty(_options.DirectoryUrl))
+            directoryUrl = new Uri(_options.DirectoryUrl);
+
+        // 确保证书目录存在
+        System.IO.Directory.CreateDirectory(_options.CertificatePath);
+
+        // 尝试加载现有账户密钥
+        if (File.Exists(_options.AccountKeyPath))
+        {
+            try
+            {
+                var accountKeyPem = await File.ReadAllTextAsync(_options.AccountKeyPath);
+                var accountKey = KeyFactory.FromPem(accountKeyPem);
+                _acmeContext = new AcmeContext(directoryUrl, accountKey);
+                await _acmeContext.Account();
+                _logger.Info("已加载现有 ACME 账户（手动模式）");
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn(ex, "加载 ACME 账户失败，将创建新账户");
+            }
+        }
+
+        // 创建新账户
+        _acmeContext = new AcmeContext(directoryUrl);
+        await _acmeContext.NewAccount(email, termsOfServiceAgreed: true);
+
+        // 保存账户密钥
+        var keyPem = _acmeContext.AccountKey.ToPem();
+        var keyDir = Path.GetDirectoryName(_options.AccountKeyPath);
+        if (!string.IsNullOrEmpty(keyDir)) System.IO.Directory.CreateDirectory(keyDir);
+        await File.WriteAllTextAsync(_options.AccountKeyPath, keyPem);
+
+        _logger.Info("已创建新 ACME 账户（手动模式）: {Email}", email);
+    }
+
+    /// <summary>
+    /// 手动申请/续期证书
+    /// </summary>
+    public async Task<AcmeRequestResult> ManualRequestCertificateAsync(string domain, string email, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(domain))
+            return new AcmeRequestResult { ErrorMessage = "域名不能为空" };
+        if (string.IsNullOrWhiteSpace(email) || !email.Contains('@'))
+            return new AcmeRequestResult { ErrorMessage = "请填写有效的联系邮箱" };
+
+        try
+        {
+            // 按需初始化 ACME 上下文
+            await EnsureAcmeContextAsync(email);
+
+            // 保存邮箱
+            SaveEmail(email);
+
+            // 确保证书目录存在
+            System.IO.Directory.CreateDirectory(_options.CertificatePath);
+
+            // 申请证书（复用已有逻辑）
+            var cert = await RequestCertificateAsync(domain, cancellationToken);
+            if (cert == null)
+                return new AcmeRequestResult { ErrorMessage = "证书申请失败，请确保域名已解析到本服务器且 80 端口可访问" };
+
+            return new AcmeRequestResult
+            {
+                Success = true,
+                Domain = domain,
+                ExpiresAt = cert.NotAfter.ToString("yyyy-MM-dd")
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "手动申请证书失败: {Domain}", domain);
+            return new AcmeRequestResult { ErrorMessage = $"证书申请失败: {ex.Message}" };
+        }
+    }
+
+    #endregion
 
     public void Dispose()
     {

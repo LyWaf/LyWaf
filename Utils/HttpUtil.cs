@@ -44,23 +44,37 @@ public static class HttpUtil
     }
 
     /// <summary>
-    /// 捕获响应体。包装 Response.Body 流，执行 next()，读取响应体并存入 LyWafCache。
-    /// 如果内层已捕获（缓存存在），直接复用缓存内容，不重复解析流。
+    /// 捕获响应体。
+    /// 传入 next 时：包装 Response.Body 流，执行 next()，读取响应体并存入 LyWafCache。
+    /// 不传 next 时：优先从 LyWafCache 读取缓存，否则从当前 Response.Body 读取。
     /// </summary>
-    /// <param name="context">HTTP 上下文</param>
-    /// <param name="next">后续管道（内部会调用）</param>
-    /// <param name="maxBytes">最大捕获大小，默认 65536</param>
-    /// <returns>响应体字符串，可能为 null</returns>
-    public static async Task<string?> CaptureResponseBodyAsync(HttpContext context, Func<Task> next, int maxBytes = DefaultMaxBodySize)
+    public static async Task<string?> CaptureResponseBodyAsync(HttpContext context, Func<Task>? next = null, int maxBytes = DefaultMaxBodySize)
     {
-        // 已有缓存：仍需调用 next，但无需包装流
+        // 已有缓存
         if (context.Items.TryGetValue(LyWafCache.ResponseBody, out var cached) && cached is string s && s.Length > 0)
         {
-            await next();
+            if (next != null) await next();
             return s;
         }
 
-        // 包装响应流
+        // 无 next：直接从当前 Response.Body（调用方已包装的 MemoryStream）读取
+        if (next == null)
+        {
+            var stream = context.Response.Body;
+            if (stream is not { CanSeek: true, Length: > 0 })
+                return null;
+            try
+            {
+                stream.Position = 0;
+                var body = await ReadStreamAsync(stream, maxBytes);
+                if (!string.IsNullOrEmpty(body))
+                    context.Items[LyWafCache.ResponseBody] = body;
+                return body;
+            }
+            catch { return null; }
+        }
+
+        // 有 next：包装响应流
         var originalBody = context.Response.Body;
         using var memStream = new MemoryStream();
         context.Response.Body = memStream;

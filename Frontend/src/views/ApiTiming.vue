@@ -257,32 +257,32 @@ onUnmounted(() => {
     <!-- 数据表格 -->
     <div class="card overflow-hidden">
       <div class="overflow-x-auto">
-        <table class="w-full">
+        <table class="w-full min-w-[900px]">
           <thead>
             <tr class="border-b border-dark-border">
-              <th class="px-4 py-3 text-left text-sm font-medium text-gray-400">方法</th>
-              <th class="px-4 py-3 text-left text-sm font-medium text-gray-400">路径</th>
-              <th class="px-4 py-3 text-left text-sm font-medium text-gray-400">后端</th>
-              <th 
+              <th class="px-4 py-3 text-left text-sm font-medium text-gray-400 whitespace-nowrap">方法</th>
+              <th class="px-4 py-3 text-left text-sm font-medium text-gray-400 whitespace-nowrap">路径</th>
+              <th class="px-4 py-3 text-left text-sm font-medium text-gray-400 whitespace-nowrap">后端</th>
+              <th
                 @click="toggleSort('requestCount')"
-                class="px-4 py-3 text-right text-sm font-medium text-gray-400 cursor-pointer hover:text-primary-500"
+                class="px-4 py-3 text-right text-sm font-medium text-gray-400 whitespace-nowrap cursor-pointer hover:text-primary-500"
               >
                 请求数 {{ sortField === 'requestCount' ? (sortOrder === 'desc' ? '↓' : '↑') : '' }}
               </th>
-              <th 
+              <th
                 @click="toggleSort('avgTotalTime')"
-                class="px-4 py-3 text-right text-sm font-medium text-gray-400 cursor-pointer hover:text-primary-500"
+                class="px-4 py-3 text-right text-sm font-medium text-gray-400 whitespace-nowrap cursor-pointer hover:text-primary-500"
               >
                 平均总耗时 {{ sortField === 'avgTotalTime' ? (sortOrder === 'desc' ? '↓' : '↑') : '' }}
               </th>
-              <th 
+              <th
                 @click="toggleSort('avgBackendTime')"
-                class="px-4 py-3 text-right text-sm font-medium text-gray-400 cursor-pointer hover:text-primary-500"
+                class="px-4 py-3 text-right text-sm font-medium text-gray-400 whitespace-nowrap cursor-pointer hover:text-primary-500"
               >
                 后端耗时 {{ sortField === 'avgBackendTime' ? (sortOrder === 'desc' ? '↓' : '↑') : '' }}
               </th>
-              <th class="px-4 py-3 text-right text-sm font-medium text-gray-400">最大/最小</th>
-              <th class="px-4 py-3 text-center text-sm font-medium text-gray-400">状态码分布</th>
+              <th class="px-4 py-3 text-right text-sm font-medium text-gray-400 whitespace-nowrap">最小/最大</th>
+              <th class="px-4 py-3 text-center text-sm font-medium text-gray-400 whitespace-nowrap">状态码分布</th>
             </tr>
           </thead>
           <tbody>
@@ -324,10 +324,10 @@ onUnmounted(() => {
               <td class="px-4 py-3 text-gray-400 text-sm truncate max-w-[150px]" :title="item.backend">
                 {{ formatBackend(item.backend) }}
               </td>
-              <td class="px-4 py-3 text-right text-gray-200">{{ formatNumber(item.requestCount) }}</td>
-              <td class="px-4 py-3 text-right text-blue-400">{{ formatTime(item.avgTotalTime) }}</td>
-              <td class="px-4 py-3 text-right text-green-400">{{ formatTime(item.avgBackendTime) }}</td>
-              <td class="px-4 py-3 text-right text-sm">
+              <td class="px-4 py-3 text-right text-gray-200 whitespace-nowrap">{{ formatNumber(item.requestCount) }}</td>
+              <td class="px-4 py-3 text-right text-blue-400 whitespace-nowrap">{{ formatTime(item.avgTotalTime) }}</td>
+              <td class="px-4 py-3 text-right text-green-400 whitespace-nowrap">{{ formatTime(item.avgBackendTime) }}</td>
+              <td class="px-4 py-3 text-right text-sm whitespace-nowrap">
                 <span class="text-gray-500">{{ formatTime(item.minTotalTime) }}</span>
                 <span class="text-gray-600 mx-1">/</span>
                 <span class="text-yellow-400">{{ formatTime(item.maxTotalTime) }}</span>

@@ -83,7 +83,11 @@ body {
   .btn-warning {
     @apply bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30;
   }
-  
+
+  .btn-success {
+    @apply bg-green-600/80 text-white hover:bg-green-500;
+  }
+
   .btn-sm {
     @apply px-3 py-1.5 text-sm;
   }

@@ -949,6 +949,15 @@ export const settingsApi = {
   deleteCert: (pemFile: string) =>
     api.post<ApiResponse>('/settings/certs/delete', { pemFile }),
 
+  acmeApply: (data: { domain: string; email: string }) =>
+    api.post<{ success: boolean; domain?: string; expiresAt?: string; errorMessage?: string }>('/settings/certs/acme-apply', data, { timeout: 120000 }),
+
+  acmeRenew: (data: { domain: string; email?: string }) =>
+    api.post<{ success: boolean; domain?: string; expiresAt?: string; errorMessage?: string }>('/settings/certs/acme-renew', data, { timeout: 120000 }),
+
+  getAcmeEmail: () =>
+    api.get<{ success: boolean; email: string }>('/settings/acme-email'),
+
   getConsole: () =>
     api.get<ConsoleInfo & { success: boolean }>('/settings/console'),
 
