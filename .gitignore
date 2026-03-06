@@ -19,3 +19,4 @@ bintemp_check
 temp/*
 config.nginx.ly
 logs/*
+certs/*
