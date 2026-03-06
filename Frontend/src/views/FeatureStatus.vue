@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import FeatureSwitch from '@/components/common/FeatureSwitch.vue'
-import IpManagement from '@/components/dashboard/IpManagement.vue'
-import GeoAccess from '@/components/dashboard/GeoAccess.vue'
+import AccessControlPanel from '@/components/dashboard/AccessControlPanel.vue'
 import WafRules from '@/components/dashboard/WafRules.vue'
 import { featureApi, dashboardApi } from '@/api'
 import { useToast } from '@/composables/useToast'
@@ -82,10 +81,7 @@ const getFeatureName = (feature: keyof FeatureStatus) => {
     <!-- 攻击防护 (WAF 规则) -->
     <WafRules />
 
-    <!-- 黑白名单 (IP 管理) -->
-    <IpManagement />
-
-    <!-- 地理访问控制 -->
-    <GeoAccess />
+    <!-- IP / 地理位置访问控制 -->
+    <AccessControlPanel />
   </div>
 </template>

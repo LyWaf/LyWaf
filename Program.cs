@@ -38,6 +38,7 @@ using LyWaf.Services.StreamServer;
 using LyWaf.Services.ABTest;
 using LyWaf.Services.Captcha;
 using LyWaf.Services.WafRule;
+using LyWaf.Services.BlackWhiteList;
 using LyWaf.Services.AuditLog;
 using LyWaf.Config;
 using LyWaf.Shared;
@@ -1091,6 +1092,7 @@ public class Program
         builder.Services.AddSingleton<ICcRuleChecker, CcRuleChecker>();
         builder.Services.AddSingleton<IAccessControlService, AccessControlService>();
         builder.Services.AddSingleton<IWafRuleService, WafRuleService>();
+        builder.Services.AddSingleton<IBlackWhiteListService, BlackWhiteListService>();
         builder.Services.AddSingleton<IWafInfoService, WafInfoService>();
         builder.Services.AddSingleton<IAcmeService, AcmeService>();
         builder.Services.AddHostedService(sp => (AcmeService)sp.GetRequiredService<IAcmeService>());
@@ -1229,6 +1231,10 @@ public class Program
         var wafRuleService = app.Services.GetRequiredService<IWafRuleService>();
         wafRuleService.Initialize();
 
+        // 初始化黑白名单服务（加载 .lywaf.blackwhite.json）
+        var bwService = app.Services.GetRequiredService<IBlackWhiteListService>();
+        bwService.Initialize();
+
         // 注册控制台 API
         app.MapControlApi(wafInfos);
         
@@ -1252,7 +1258,7 @@ public class Program
             // 高优先级插件（Highest, High）- 在核心中间件之前
             proxyApp.UseLyWafPluginsInProxyHigh();
             
-            // IP访问控制和连接限制（应放在较前面位置）
+            // IP访问控制（含黑白名单规则、IP/地理限制、连接限制）
             proxyApp.UseMiddleware<AccessControlMiddleware>();
             // IP 请求日志记录（在访问控制之后，WAF 之前捕获完整请求）
             proxyApp.UseMiddleware<IpLogMiddleware>();
@@ -1275,6 +1281,14 @@ public class Program
             // 启用负载均衡中间件（使用自定义代理管道时必须显式添加）
             proxyApp.UseLoadBalancing();
         }).RequireHost(proxyPorts);
+
+        // 注册应用关闭时的清理：释放 SharedData 中所有静态字典的 Timer
+        app.Lifetime.ApplicationStopping.Register(() =>
+        {
+            _logger.Info("应用正在关闭，释放静态资源...");
+            SharedData.DisposeAll();
+        });
+
         app.Run();
     }
 }

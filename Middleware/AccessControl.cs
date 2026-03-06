@@ -1,4 +1,5 @@
 using LyWaf.Services.AccessControl;
+using LyWaf.Services.BlackWhiteList;
 using LyWaf.Shared;
 using LyWaf.Utils;
 using NLog;
@@ -8,15 +9,17 @@ namespace LyWaf.Middleware;
 
 /// <summary>
 /// 访问控制和连接限制中间件
-/// 处理基于 IP 的访问控制（黑白名单）、地理位置限制和连接数限制
+/// 处理黑白名单规则、IP 访问控制、地理位置限制和连接数限制
 /// </summary>
 public class AccessControlMiddleware(
     RequestDelegate next,
-    IAccessControlService accessControlService)
+    IAccessControlService accessControlService,
+    IBlackWhiteListService bwService)
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly RequestDelegate _next = next;
     private readonly IAccessControlService _accessControlService = accessControlService;
+    private readonly IBlackWhiteListService _bwService = bwService;
 
     public async Task InvokeAsync(HttpContext context)
     {
@@ -24,12 +27,61 @@ public class AccessControlMiddleware(
         var clientIp = RequestUtil.GetClientIp(context.Request);
         var path = context.Request.Path.Value ?? "/";
 
-        // 1. 访问控制检查（IP + 地理位置）
-        var checkResult = _accessControlService.CheckAccess(clientIp, path);
-        if (!checkResult.IsAllowed)
+        // 0. 黑白名单规则检查（白名单放行跳过后续检查，黑名单直接拦截）
+        var bwResult = _bwService.CheckRequest(context, clientIp);
+        if (bwResult.IsMatched)
         {
-            await WriteRejectResponse(context, checkResult, clientIp);
-            return;
+            var geoInfo = _accessControlService.GetGeoInfo(clientIp);
+            var host = context.Request.Host.ToString();
+            var application = $"{context.Request.Scheme}://{host}/";
+
+            _bwService.RecordHit(clientIp, application,
+                geoInfo?.Region ?? "", geoInfo?.City ?? "",
+                bwResult.MatchedRule!.Name, bwResult.MatchedRule!.Type.ToString());
+
+            if (bwResult.RuleType == BwRuleType.Black)
+            {
+                _logger.Warn("黑名单拦截: ClientIp={ClientIp}, Rule={Rule}, Host={Host}",
+                    clientIp, bwResult.MatchedRule!.Name, host);
+
+                SharedData.Security.RecordEvent(SecurityEventType.BlacklistBlock, clientIp);
+
+                await WafUtil.WriteErrorOutput(context, 403,
+                    new Dictionary<string, string?>
+                    {
+                        ["reason"] = $"黑名单规则: {bwResult.MatchedRule!.Name}",
+                    },
+                    isIntercept: true, isAttack: false,
+                    eventType: SecurityEventType.BlacklistBlock);
+                return;
+            }
+            // 白名单命中：跳过后续 IP/地理 访问控制检查，直接进入连接限制
+        }
+        else
+        {
+            // 1. 访问控制检查（IP + 地理位置）— 仅在未命中白名单时执行
+            var checkResult = _accessControlService.CheckAccess(clientIp, path);
+            if (!checkResult.IsAllowed)
+            {
+                // 记录到检测事件
+                var geoInfo = checkResult.GeoInfo ?? _accessControlService.GetGeoInfo(clientIp);
+                var host = context.Request.Host.ToString();
+                var application = $"{context.Request.Scheme}://{host}/";
+                var ruleName = checkResult.DenyReason switch
+                {
+                    AccessDenyReason.IpDenied => "IP黑名单",
+                    AccessDenyReason.PathIpDenied => "路径IP限制",
+                    AccessDenyReason.GeoDenied => $"地理位置限制({geoInfo?.Country}/{geoInfo?.Region})",
+                    AccessDenyReason.PathGeoDenied => $"路径地理位置限制({geoInfo?.Country}/{geoInfo?.Region})",
+                    _ => "访问控制"
+                };
+                _bwService.RecordHit(clientIp, application,
+                    geoInfo?.Region ?? "", geoInfo?.City ?? "",
+                    ruleName, "Black");
+
+                await WriteRejectResponse(context, checkResult, clientIp);
+                return;
+            }
         }
 
         // 2. 连接限制检查
@@ -123,7 +175,7 @@ public class AccessControlMiddleware(
         // 如果 RejectMessage 为空，使用 WafUtil 的模板
         if (string.IsNullOrEmpty(checkResult.RejectMessage))
         {
-            await WafUtil.WriteErrorOutput(context, checkResult.RejectStatusCode, extraValues, 
+            await WafUtil.WriteErrorOutput(context, checkResult.RejectStatusCode, extraValues,
                 isIntercept: true, isAttack: false, eventType: eventType);
             return;
         }

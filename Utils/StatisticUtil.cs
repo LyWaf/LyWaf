@@ -61,7 +61,9 @@ public class StatisticUtil
             var geoInfo = accessControlService?.GetGeoInfo(client_ip);
             if (geoInfo != null && !string.IsNullOrEmpty(geoInfo.Country))
             {
-                SharedData.GeoTraffic.RecordVisit(geoInfo.Country, geoInfo.Region);
+                // 优先用省份，省份为空时用城市作为回退
+                var region = !string.IsNullOrEmpty(geoInfo.Region) ? geoInfo.Region : geoInfo.City;
+                SharedData.GeoTraffic.RecordVisit(geoInfo.Country, region);
             }
         }
         catch { /* 地理统计为 best-effort，不影响请求处理 */ }
@@ -151,7 +153,8 @@ public class StatisticUtil
             var geoInfo = accessControlService?.GetGeoInfo(clientIp);
             if (geoInfo != null && !string.IsNullOrEmpty(geoInfo.Country))
             {
-                SharedData.GeoTraffic.RecordIntercept(geoInfo.Country, geoInfo.Region);
+                var region = !string.IsNullOrEmpty(geoInfo.Region) ? geoInfo.Region : geoInfo.City;
+                SharedData.GeoTraffic.RecordIntercept(geoInfo.Country, region);
             }
         }
         catch { /* best-effort */ }

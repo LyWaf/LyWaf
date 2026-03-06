@@ -194,4 +194,25 @@ public static class SharedData
     public static readonly ExpiringSafeDictionary<string, DateTime> IpLogTargets =
                             new(defaultExpiration: TimeSpan.FromMinutes(10),
                                 cleanupInterval: TimeSpan.FromMinutes(5));
+
+    /// <summary>
+    /// 释放所有静态字典资源（停止内部 Timer），用于应用关闭时的清理
+    /// </summary>
+    public static void DisposeAll()
+    {
+        IpDict.Dispose();
+        Limit.Dispose();
+        CacheDict.Dispose();
+        DestStas.Dispose();
+        ReqStas.Dispose();
+        ClientStas.Dispose();
+        NewClientVisits.Dispose();
+        LimitCcStas.Dispose();
+        ClientDetailVisits.Dispose();
+        ClientFb.Dispose();
+        CaptchaPending.Dispose();
+        ClientThrottled.Dispose();
+        ApiTimings.Dispose();
+        IpLogTargets.Dispose();
+    }
 }
