@@ -87,12 +87,7 @@ const formatNum = (n: number): string => {
     <!-- 标题栏 -->
     <div class="card">
       <div class="flex items-center gap-3">
-        <h2 class="text-lg font-semibold text-gray-100">黑白名单</h2>
-        <div class="flex items-center bg-dark-bg rounded-lg p-0.5 border border-dark-border">
-          <button class="px-3 py-1 text-xs font-medium rounded-md bg-primary-500/20 text-primary-400 border border-primary-500/30">
-            检测事件
-          </button>
-        </div>
+        <h2 class="text-lg font-semibold text-gray-100">拦截事件</h2>
       </div>
     </div>
 
@@ -126,7 +121,7 @@ const formatNum = (n: number): string => {
     <template v-else>
       <div v-if="events.length === 0" class="card text-center py-12 text-gray-500">
         <p class="text-lg mb-2">暂无检测事件</p>
-        <p class="text-sm">黑白名单规则命中后，检测事件将在此处显示</p>
+        <p class="text-sm">拦截事件将在此处显示</p>
       </div>
 
       <div v-else class="card !p-0 overflow-hidden">

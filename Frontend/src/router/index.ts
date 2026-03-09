@@ -39,10 +39,10 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'API 耗时', icon: '⏱️' }
   },
   {
-    path: '/black-white-list',
-    name: 'BlackWhiteList',
-    component: () => import('@/views/BlackWhiteList.vue'),
-    meta: { title: '黑白名单', icon: '📋' }
+    path: '/intercept-events',
+    name: 'InterceptEvents',
+    component: () => import('@/views/InterceptEvents.vue'),
+    meta: { title: '拦截事件', icon: '📋' }
   },
   {
     path: '/config',

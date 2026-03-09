@@ -18,7 +18,7 @@ const menuItems: MenuItem[] = [
   { path: '/security', name: '安全态势', icon: '🛡️' },
   { path: '/feature-status', name: '防护应用', icon: '⚙️' },
   { path: '/cc-protection', name: 'CC 防护', icon: '⚡' },
-  { path: '/black-white-list', name: '黑白名单', icon: '📋' },
+  { path: '/intercept-events', name: '拦截事件', icon: '📋' },
   { path: '/api-timing', name: 'API 耗时', icon: '⏱️' },
   {
     name: '配置管理', icon: '📄', children: [
