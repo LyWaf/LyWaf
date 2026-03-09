@@ -636,138 +636,17 @@ public static class ControlApi
             return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
         }).RequireHost($"*:{controlPort}");
 
-        // =============== 黑白名单规则管理 API ===============
+        // =============== 黑白名单检测事件 API ===============
 
-        // 获取所有黑白名单规则
-        app.MapGet("/api/bw-rules", (HttpContext ctx) =>
+        // 获取检测事件
+        app.MapGet("/api/bw-events", (HttpContext ctx) =>
         {
-            var bwService = ctx.RequestServices.GetRequiredService<LyWaf.Services.BlackWhiteList.IBlackWhiteListService>();
-            var rules = bwService.GetRules();
-            return Results.Json(new
-            {
-                success = true,
-                count = rules.Count,
-                rules = rules.Select(r => new
-                {
-                    id = r.Id,
-                    name = r.Name,
-                    type = r.Type.ToString(),
-                    enabled = r.Enabled,
-                    conditions = r.Conditions.Select(c => new
-                    {
-                        field = c.Field.ToString(),
-                        fieldName = c.FieldName,
-                        @operator = c.Operator.ToString(),
-                        value = c.Value,
-                        ignoreCase = c.IgnoreCase,
-                    }),
-                    hitCount = r.HitCount,
-                    todayHitCount = r.TodayHitCount,
-                    createdAt = r.CreatedAt,
-                    updatedAt = r.UpdatedAt,
-                }),
-            });
-        }).RequireHost($"*:{controlPort}");
-
-        // 创建黑白名单规则
-        app.MapPost("/api/bw-rules", async (HttpContext ctx) =>
-        {
-            try
-            {
-                var bwService = ctx.RequestServices.GetRequiredService<LyWaf.Services.BlackWhiteList.IBlackWhiteListService>();
-                var rule = await ctx.Request.ReadFromJsonAsync<LyWaf.Services.BlackWhiteList.BwRule>();
-                if (rule == null || string.IsNullOrWhiteSpace(rule.Name))
-                    return Results.Json(new { success = false, message = "规则名称不能为空" }, statusCode: 400);
-
-                if (bwService.AddRule(rule))
-                {
-                    var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
-                    audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"创建黑白名单规则: {rule.Name}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-                    return Results.Json(new { success = true, message = "规则已创建", id = rule.Id });
-                }
-                return Results.Json(new { success = false, message = "创建失败" }, statusCode: 400);
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"创建失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
-
-        // 更新黑白名单规则
-        app.MapPut("/api/bw-rules/{id}", async (string id, HttpContext ctx) =>
-        {
-            try
-            {
-                var bwService = ctx.RequestServices.GetRequiredService<LyWaf.Services.BlackWhiteList.IBlackWhiteListService>();
-                var rule = await ctx.Request.ReadFromJsonAsync<LyWaf.Services.BlackWhiteList.BwRule>();
-                if (rule == null)
-                    return Results.Json(new { success = false, message = "无效的规则数据" }, statusCode: 400);
-                rule.Id = id;
-
-                if (bwService.UpdateRule(rule))
-                {
-                    var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
-                    audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"更新黑白名单规则: {rule.Name} ({id})", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-                    return Results.Json(new { success = true, message = "规则已更新" });
-                }
-                return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"更新失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
-
-        // 删除黑白名单规则
-        app.MapDelete("/api/bw-rules/{id}", (string id, HttpContext ctx) =>
-        {
-            var bwService = ctx.RequestServices.GetRequiredService<LyWaf.Services.BlackWhiteList.IBlackWhiteListService>();
-            var existing = bwService.GetRule(id);
-            var ruleName = existing?.Name ?? id;
-
-            if (bwService.DeleteRule(id))
-            {
-                var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
-                audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"删除黑白名单规则: {ruleName} ({id})", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-                return Results.Json(new { success = true, message = "规则已删除" });
-            }
-            return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
-        }).RequireHost($"*:{controlPort}");
-
-        // 切换黑白名单规则启用状态
-        app.MapPost("/api/bw-rules/{id}/toggle", (string id, HttpContext ctx) =>
-        {
-            var bwService = ctx.RequestServices.GetRequiredService<LyWaf.Services.BlackWhiteList.IBlackWhiteListService>();
-            if (bwService.ToggleRule(id))
-            {
-                var rule = bwService.GetRule(id);
-                var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
-                audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", $"切换黑白名单规则: {rule?.Name ?? id} → {(rule?.Enabled == true ? "启用" : "禁用")}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-                return Results.Json(new { success = true, enabled = rule?.Enabled, message = rule?.Enabled == true ? "规则已启用" : "规则已禁用" });
-            }
-            return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
-        }).RequireHost($"*:{controlPort}");
-
-        // 重置黑白名单命中计数
-        app.MapPost("/api/bw-rules/reset-hits", (HttpContext ctx) =>
-        {
-            var bwService = ctx.RequestServices.GetRequiredService<LyWaf.Services.BlackWhiteList.IBlackWhiteListService>();
-            bwService.ResetHitCounts();
-            var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
-            audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", "重置黑白名单命中计数", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-            return Results.Json(new { success = true, message = "命中计数已重置" });
-        }).RequireHost($"*:{controlPort}");
-
-        // 获取黑白名单检测事件
-        app.MapGet("/api/bw-rules/events", (HttpContext ctx) =>
-        {
-            var bwService = ctx.RequestServices.GetRequiredService<LyWaf.Services.BlackWhiteList.IBlackWhiteListService>();
             var ip = ctx.Request.Query["ip"].FirstOrDefault();
             var domain = ctx.Request.Query["domain"].FirstOrDefault();
             DateTime? startTime = DateTime.TryParse(ctx.Request.Query["startTime"].FirstOrDefault(), out var st) ? st : null;
             DateTime? endTime = DateTime.TryParse(ctx.Request.Query["endTime"].FirstOrDefault(), out var et) ? et : null;
 
-            var events = bwService.GetHitEvents(ip, domain, startTime, endTime);
+            var events = SharedData.GetBwHitEvents(ip, domain, startTime, endTime);
             return Results.Json(new
             {
                 success = true,
@@ -788,11 +667,10 @@ public static class ControlApi
             });
         }).RequireHost($"*:{controlPort}");
 
-        // 清除黑白名单检测事件
-        app.MapPost("/api/bw-rules/events/clear", (HttpContext ctx) =>
+        // 清除检测事件
+        app.MapPost("/api/bw-events/clear", (HttpContext ctx) =>
         {
-            var bwService = ctx.RequestServices.GetRequiredService<LyWaf.Services.BlackWhiteList.IBlackWhiteListService>();
-            bwService.ClearHitEvents();
+            SharedData.ClearBwHitEvents();
             var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
             audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", "清除黑白名单检测事件", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
             return Results.Json(new { success = true, message = "检测事件已清除" });

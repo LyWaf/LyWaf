@@ -991,27 +991,7 @@ export const authApi = {
     api.post<ApiResponse>('/auth/change-password', { currentPassword, newPassword }),
 }
 
-// ==================== 黑白名单规则 API ====================
-
-export interface BwCondition {
-  field: string
-  fieldName?: string
-  operator: string
-  value: string
-  ignoreCase: boolean
-}
-
-export interface BwRule {
-  id: string
-  name: string
-  type: 'White' | 'Black'
-  enabled: boolean
-  conditions: BwCondition[]
-  hitCount: number
-  todayHitCount: number
-  createdAt: string
-  updatedAt?: string
-}
+// ==================== 黑白名单检测事件 API ====================
 
 export interface BwHitEvent {
   sourceIp: string
@@ -1026,24 +1006,17 @@ export interface BwHitEvent {
   lastHitTime: string
 }
 
-export const bwRuleApi = {
-  list: () => api.get<{ success: boolean; count: number; rules: BwRule[] }>('/bw-rules'),
-  create: (data: Record<string, unknown>) => api.post<{ success: boolean; message: string; id: string }>('/bw-rules', data),
-  update: (id: string, data: Record<string, unknown>) => api.put<{ success: boolean; message: string }>(`/bw-rules/${id}`, data),
-  delete: (id: string) => api.delete<{ success: boolean; message: string }>(`/bw-rules/${id}`),
-  toggle: (id: string) => api.post<{ success: boolean; enabled: boolean; message: string }>(`/bw-rules/${id}/toggle`),
-  resetHits: () => api.post<{ success: boolean; message: string }>('/bw-rules/reset-hits'),
-  // 检测事件
-  events: (params?: { ip?: string; domain?: string; startTime?: string; endTime?: string }) => {
+export const bwEventApi = {
+  list: (params?: { ip?: string; domain?: string; startTime?: string; endTime?: string }) => {
     const query = new URLSearchParams()
     if (params?.ip) query.set('ip', params.ip)
     if (params?.domain) query.set('domain', params.domain)
     if (params?.startTime) query.set('startTime', params.startTime)
     if (params?.endTime) query.set('endTime', params.endTime)
     const qs = query.toString()
-    return api.get<{ success: boolean; count: number; events: BwHitEvent[] }>(`/bw-rules/events${qs ? '?' + qs : ''}`)
+    return api.get<{ success: boolean; count: number; events: BwHitEvent[] }>(`/bw-events${qs ? '?' + qs : ''}`)
   },
-  clearEvents: () => api.post<{ success: boolean; message: string }>('/bw-rules/events/clear'),
+  clear: () => api.post<{ success: boolean; message: string }>('/bw-events/clear'),
 }
 
 // ==================== 访问控制（黑白名单）API ====================

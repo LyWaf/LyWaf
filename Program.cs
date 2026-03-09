@@ -38,7 +38,6 @@ using LyWaf.Services.StreamServer;
 using LyWaf.Services.ABTest;
 using LyWaf.Services.Captcha;
 using LyWaf.Services.WafRule;
-using LyWaf.Services.BlackWhiteList;
 using LyWaf.Services.AuditLog;
 using LyWaf.Config;
 using LyWaf.Shared;
@@ -1092,7 +1091,6 @@ public class Program
         builder.Services.AddSingleton<ICcRuleChecker, CcRuleChecker>();
         builder.Services.AddSingleton<IAccessControlService, AccessControlService>();
         builder.Services.AddSingleton<IWafRuleService, WafRuleService>();
-        builder.Services.AddSingleton<IBlackWhiteListService, BlackWhiteListService>();
         builder.Services.AddSingleton<IWafInfoService, WafInfoService>();
         builder.Services.AddSingleton<IAcmeService, AcmeService>();
         builder.Services.AddHostedService(sp => (AcmeService)sp.GetRequiredService<IAcmeService>());
@@ -1230,10 +1228,6 @@ public class Program
         // 初始化 WAF 自定义规则服务（加载 .lywaf.rules.json）
         var wafRuleService = app.Services.GetRequiredService<IWafRuleService>();
         wafRuleService.Initialize();
-
-        // 初始化黑白名单服务（加载 .lywaf.blackwhite.json）
-        var bwService = app.Services.GetRequiredService<IBlackWhiteListService>();
-        bwService.Initialize();
 
         // 注册控制台 API
         app.MapControlApi(wafInfos);

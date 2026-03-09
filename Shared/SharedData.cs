@@ -7,6 +7,22 @@ using LyWaf.Struct;
 namespace LyWaf.Shared;
 
 /// <summary>
+/// 黑白名单检测事件（按 IP+应用 聚合）
+/// </summary>
+public class BwHitEvent
+{
+    public string SourceIp { get; set; } = "";
+    public string Region { get; set; } = "";
+    public string City { get; set; } = "";
+    public string Application { get; set; } = "";
+    public string RuleName { get; set; } = "";
+    public string RuleType { get; set; } = "";
+    public long HitCount;
+    public DateTime FirstHitTime { get; set; } = DateTime.UtcNow;
+    public DateTime LastHitTime { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
 /// 全局共享数据存储
 /// 用于存储各类统计信息、限速状态、封禁记录等运行时数据
 /// 所有数据使用 ExpiringSafeDictionary 实现自动过期清理
@@ -194,6 +210,67 @@ public static class SharedData
     public static readonly ExpiringSafeDictionary<string, DateTime> IpLogTargets =
                             new(defaultExpiration: TimeSpan.FromMinutes(10),
                                 cleanupInterval: TimeSpan.FromMinutes(5));
+
+    // ============ 黑白名单检测事件统计 ============
+
+    /// <summary>
+    /// 黑白名单检测事件（按 IP+应用 聚合）
+    /// Key: "ip|application"
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, BwHitEvent> _bwHitEvents = new();
+
+    /// <summary>
+    /// 记录一次拦截事件
+    /// </summary>
+    public static void RecordBwHit(string sourceIp, string application, string region, string city, string ruleName, string ruleType)
+    {
+        var key = $"{sourceIp}|{application}";
+        _bwHitEvents.AddOrUpdate(key,
+            _ => new BwHitEvent
+            {
+                SourceIp = sourceIp,
+                Region = region,
+                City = city,
+                Application = application,
+                RuleName = ruleName,
+                RuleType = ruleType,
+                HitCount = 1,
+                FirstHitTime = DateTime.UtcNow,
+                LastHitTime = DateTime.UtcNow,
+            },
+            (_, existing) =>
+            {
+                Interlocked.Increment(ref existing.HitCount);
+                existing.LastHitTime = DateTime.UtcNow;
+                existing.RuleName = ruleName;
+                return existing;
+            });
+    }
+
+    /// <summary>
+    /// 获取检测事件列表（支持过滤）
+    /// </summary>
+    public static List<BwHitEvent> GetBwHitEvents(string? ipFilter = null, string? domainFilter = null,
+        DateTime? startTime = null, DateTime? endTime = null)
+    {
+        var query = _bwHitEvents.Values.AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(ipFilter))
+            query = query.Where(e => e.SourceIp.Contains(ipFilter, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(domainFilter))
+            query = query.Where(e => e.Application.Contains(domainFilter, StringComparison.OrdinalIgnoreCase));
+        if (startTime.HasValue)
+            query = query.Where(e => e.FirstHitTime >= startTime.Value);
+        if (endTime.HasValue)
+            query = query.Where(e => e.LastHitTime <= endTime.Value);
+
+        return query.OrderByDescending(e => e.LastHitTime).ToList();
+    }
+
+    /// <summary>
+    /// 清除所有检测事件
+    /// </summary>
+    public static void ClearBwHitEvents() => _bwHitEvents.Clear();
 
     /// <summary>
     /// 释放所有静态字典资源（停止内部 Timer），用于应用关闭时的清理

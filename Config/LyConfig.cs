@@ -896,14 +896,30 @@ public class LyConfigParser
         // 如果当前 name 是站点地址
         if (IsSiteAddress(name))
         {
-            // 收集逗号分隔的多个地址（如 localhost:5003, localhost:5004）
+            // 收集多个地址：支持逗号分隔（localhost:5003, localhost:5004）
+            // 和空格分隔（localhost:5003 localhost:5004）
             var addresses = new List<string> { name };
-            while (Current.Type == TokenType.Comma)
+            while (true)
             {
-                Consume(); // 消费逗号
-                SkipNewLines();
-                if (Current.Type == TokenType.Identifier && IsSiteAddress(Current.Value))
+                if (Current.Type == TokenType.Comma)
                 {
+                    Consume(); // 消费逗号
+                    SkipNewLines();
+                    if (Current.Type == TokenType.Identifier && IsSiteAddress(Current.Value))
+                    {
+                        addresses.Add(Consume(TokenType.Identifier).Value);
+                        SkipNewLines();
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+                else if (Current.Type == TokenType.Identifier && IsSiteAddress(Current.Value)
+                    && Current.Value != "import" && !SiteDirectives.Contains(Current.Value)
+                    && !Current.Value.StartsWith('/'))
+                {
+                    // 空格分隔的下一个站点地址（排除指令关键字和路径）
                     addresses.Add(Consume(TokenType.Identifier).Value);
                     SkipNewLines();
                 }

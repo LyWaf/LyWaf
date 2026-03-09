@@ -1,8 +1,10 @@
 
+using LyWaf.Services.AccessControl;
 using LyWaf.Services.LyLog;
 using LyWaf.Services.Protect;
 using LyWaf.Services.Statistic;
 using LyWaf.Services.WafRule;
+using LyWaf.Shared;
 using LyWaf.Utils;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http.Features;
@@ -10,7 +12,7 @@ using NLog;
 
 namespace LyWaf.Middleware;
 
-public class WafControlMiddleware(RequestDelegate next, IStatisticService statisticService, IProtectService protectService, ILyLogService logService, ICcRuleChecker ccRuleChecker, IWafRuleService wafRuleService)
+public class WafControlMiddleware(RequestDelegate next, IStatisticService statisticService, IProtectService protectService, ILyLogService logService, ICcRuleChecker ccRuleChecker, IWafRuleService wafRuleService, IAccessControlService accessControlService)
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly RequestDelegate _next = next;
@@ -19,6 +21,8 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
     private readonly ILyLogService _logService = logService;
     private readonly ICcRuleChecker _ccRuleChecker = ccRuleChecker;
     private readonly IWafRuleService _wafRuleService = wafRuleService;
+    private readonly IAccessControlService _accessControlService = accessControlService;
+
     public async Task<bool> WhitePathCheck(HttpContext context)
     {
         var path = await statisticService.GetMatchPath(context.Request.Path);
@@ -46,11 +50,23 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
         await TryCheckWaf(context);
     }
 
+    /// <summary>
+    /// 记录 WAF 拦截到检测事件统计
+    /// </summary>
+    private void RecordWafHit(HttpContext context, string clientIp, string reason)
+    {
+        var geoInfo = _accessControlService.GetGeoInfo(clientIp);
+        var host = context.Request.Host.Host;
+        SharedData.RecordBwHit(clientIp, host,
+            geoInfo?.Region ?? "", geoInfo?.City ?? "",
+            reason, "Black");
+    }
+
     public async Task TryCheckWaf(HttpContext context)
     {
         try
         {
-            
+
             var httpMaxRequestBodySizeFeature = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
             if (httpMaxRequestBodySizeFeature is not null)
             {
@@ -66,8 +82,9 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             if (reason != null)
             {
                 // 被封禁的 IP 访问，记录为黑名单拦截
-                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason }, 
-                    isAttack: false, eventType: Shared.SecurityEventType.BlacklistBlock);
+                RecordWafHit(context, clientIp, $"封禁IP: {reason}");
+                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason },
+                    isAttack: false, eventType: SecurityEventType.BlacklistBlock);
                 return;
             }
             if (await WhitePathCheck(context))
@@ -79,16 +96,18 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             {
                 // WAF Args 攻击检测，标记为攻击
                 _ccRuleChecker.RecordAttackEvent(clientIp); // 记录攻击事件用于 CC 高频攻击检测
-                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason }, 
-                    isAttack: true, eventType: Shared.SecurityEventType.WafIntercept);
+                RecordWafHit(context, clientIp, reason);
+                await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason },
+                    isAttack: true, eventType: SecurityEventType.WafIntercept);
                 return;
             }
             if ((reason = await CheckPostAttck(context)) != null)
             {
                 // WAF Post 攻击检测，标记为攻击
                 _ccRuleChecker.RecordAttackEvent(clientIp); // 记录攻击事件用于 CC 高频攻击检测
+                RecordWafHit(context, clientIp, reason);
                 await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason },
-                    isAttack: true, eventType: Shared.SecurityEventType.WafIntercept);
+                    isAttack: true, eventType: SecurityEventType.WafIntercept);
                 return;
             }
 
@@ -98,6 +117,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             {
                 if (ruleResult.Action != WafRuleAction.Observe)
                 {
+                    RecordWafHit(context, clientIp, $"WAF规则: {ruleResult.TriggeredRule?.Name}");
                     await _wafRuleService.ExecuteAction(context, ruleResult, clientIp);
                     return;
                 }
