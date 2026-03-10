@@ -147,7 +147,12 @@ public class ReqestShortMsg(HttpContext context, string path, long costTime)
 public class TrafficStatistic
 {
     private readonly object _lock = new();
-    
+
+    // 恢复基线值（从 DuckDB 恢复时设置，HashSet 无法恢复具体元素，只记录计数基线）
+    private int _baseUniqueVisitors;
+    private int _baseUniqueIps;
+    private int _baseAttackIps;
+
     /// <summary>
     /// 总请求次数
     /// </summary>
@@ -323,10 +328,10 @@ public class TrafficStatistic
             {
                 TotalRequests = TotalRequests,
                 PageViews = PageViews,
-                UniqueVisitors = UniqueVisitors.Count,
-                UniqueIps = UniqueIps.Count,
+                UniqueVisitors = _baseUniqueVisitors + UniqueVisitors.Count,
+                UniqueIps = _baseUniqueIps + UniqueIps.Count,
                 InterceptCount = InterceptCount,
-                AttackIps = AttackIps.Count,
+                AttackIps = _baseAttackIps + AttackIps.Count,
                 Error4xxCount = Error4xxCount,
                 Intercept4xxCount = Intercept4xxCount,
                 Error5xxCount = Error5xxCount,
@@ -335,6 +340,27 @@ public class TrafficStatistic
                 Error5xxRate = Error5xxRate,
                 StartTime = StartTime
             };
+        }
+    }
+
+    /// <summary>
+    /// 从 DuckDB 恢复累计数据（启动时调用）
+    /// </summary>
+    public void RestoreFrom(long totalRequests, long pageViews, int uniqueVisitors, int uniqueIps,
+        long interceptCount, int attackIps, long error4xx, long intercept4xx, long error5xx, DateTime startTime)
+    {
+        lock (_lock)
+        {
+            TotalRequests = totalRequests;
+            PageViews = pageViews;
+            _baseUniqueVisitors = uniqueVisitors;
+            _baseUniqueIps = uniqueIps;
+            InterceptCount = interceptCount;
+            _baseAttackIps = attackIps;
+            Error4xxCount = error4xx;
+            Intercept4xxCount = intercept4xx;
+            Error5xxCount = error5xx;
+            StartTime = startTime;
         }
     }
 }
@@ -773,6 +799,60 @@ public class SecurityStatistic
             }
         }
     }
+
+    /// <summary>
+    /// 从 DuckDB 恢复累计计数（启动时调用）
+    /// </summary>
+    public void RestoreCounters(DateTime startTime, long wafIntercept, long blacklistBlock,
+        long ccAttack, long crawlerDetect, long geoBlock, long rateLimit)
+    {
+        lock (_lock)
+        {
+            StartTime = startTime;
+            WafInterceptCount = wafIntercept;
+            BlacklistBlockCount = blacklistBlock;
+            CcAttackCount = ccAttack;
+            CrawlerDetectCount = crawlerDetect;
+            GeoBlockCount = geoBlock;
+            RateLimitCount = rateLimit;
+        }
+    }
+
+    /// <summary>
+    /// 从 DuckDB 恢复时间片历史（启动时调用）
+    /// </summary>
+    public void RestoreTimeSlots(List<SecurityTimeSlot> slots)
+    {
+        lock (_lock)
+        {
+            _timeSlots.Clear();
+            _currentSlot = null;
+            foreach (var slot in slots)
+            {
+                _timeSlots.AddLast(slot);
+            }
+            // 保持最大数量
+            while (_timeSlots.Count > MaxTimeSlots)
+            {
+                _timeSlots.RemoveFirst();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 从 DuckDB 恢复攻击源统计（启动时调用）
+    /// </summary>
+    public void RestoreAttackSources(List<AttackSourceStat> sources)
+    {
+        lock (_lock)
+        {
+            _attackSources.Clear();
+            foreach (var source in sources)
+            {
+                _attackSources[source.Ip] = source;
+            }
+        }
+    }
 }
 
 /// <summary>
@@ -863,6 +943,25 @@ public class GeoTrafficStatistic
             _countryIntercepts.Clear();
             _regionVisits.Clear();
             _regionIntercepts.Clear();
+        }
+    }
+
+    /// <summary>
+    /// 从 DuckDB 恢复地理数据（启动时调用）
+    /// </summary>
+    public void RestoreFrom(GeoTrafficSnapshot snapshot)
+    {
+        lock (_lock)
+        {
+            _countryVisits.Clear();
+            _countryIntercepts.Clear();
+            _regionVisits.Clear();
+            _regionIntercepts.Clear();
+
+            foreach (var (k, v) in snapshot.CountryVisits) _countryVisits[k] = v;
+            foreach (var (k, v) in snapshot.CountryIntercepts) _countryIntercepts[k] = v;
+            foreach (var (k, v) in snapshot.RegionVisits) _regionVisits[k] = v;
+            foreach (var (k, v) in snapshot.RegionIntercepts) _regionIntercepts[k] = v;
         }
     }
 }

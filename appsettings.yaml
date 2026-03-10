@@ -1,3 +1,9 @@
+DuckDb:
+  Enabled: true
+  DatabasePath: "datas/lywaf_stats.duckdb"
+  FlushIntervalSeconds: 60
+  DetailRetentionDays: 30
+  AggregateRetentionDays: 365
 LyLog:
   Enabled: true
   Global:

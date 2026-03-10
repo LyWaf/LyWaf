@@ -39,7 +39,7 @@ public class AccessControlMiddleware(
                 AccessDenyReason.PathGeoDenied => $"路径地理位置限制({geoInfo?.Country}/{geoInfo?.Region})",
                 _ => "访问控制"
             };
-            SharedData.RecordBwHit(clientIp, host,
+            SharedData.RecordInterceptEvent(clientIp, host,
                 geoInfo?.Region ?? "", geoInfo?.City ?? "",
                 ruleName, "Black");
 

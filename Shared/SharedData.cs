@@ -7,9 +7,9 @@ using LyWaf.Struct;
 namespace LyWaf.Shared;
 
 /// <summary>
-/// 黑白名单检测事件（按 IP+应用 聚合）
+/// 拦截事件（按 IP+应用 聚合）
 /// </summary>
-public class BwHitEvent
+public class InterceptEvent
 {
     public string SourceIp { get; set; } = "";
     public string Region { get; set; } = "";
@@ -211,22 +211,22 @@ public static class SharedData
                             new(defaultExpiration: TimeSpan.FromMinutes(10),
                                 cleanupInterval: TimeSpan.FromMinutes(5));
 
-    // ============ 黑白名单检测事件统计 ============
+    // ============ 拦截事件统计 ============
 
     /// <summary>
-    /// 黑白名单检测事件（按 IP+应用 聚合）
+    /// 拦截事件（按 IP+应用 聚合）
     /// Key: "ip|application"
     /// </summary>
-    private static readonly ConcurrentDictionary<string, BwHitEvent> _bwHitEvents = new();
+    private static readonly ConcurrentDictionary<string, InterceptEvent> _interceptEvents = new();
 
     /// <summary>
     /// 记录一次拦截事件
     /// </summary>
-    public static void RecordBwHit(string sourceIp, string application, string region, string city, string ruleName, string ruleType)
+    public static void RecordInterceptEvent(string sourceIp, string application, string region, string city, string ruleName, string ruleType)
     {
         var key = $"{sourceIp}|{application}";
-        _bwHitEvents.AddOrUpdate(key,
-            _ => new BwHitEvent
+        _interceptEvents.AddOrUpdate(key,
+            _ => new InterceptEvent
             {
                 SourceIp = sourceIp,
                 Region = region,
@@ -248,12 +248,12 @@ public static class SharedData
     }
 
     /// <summary>
-    /// 获取检测事件列表（支持过滤）
+    /// 获取拦截事件列表（支持过滤）
     /// </summary>
-    public static List<BwHitEvent> GetBwHitEvents(string? ipFilter = null, string? domainFilter = null,
+    public static List<InterceptEvent> GetInterceptEvents(string? ipFilter = null, string? domainFilter = null,
         DateTime? startTime = null, DateTime? endTime = null)
     {
-        var query = _bwHitEvents.Values.AsEnumerable();
+        var query = _interceptEvents.Values.AsEnumerable();
 
         if (!string.IsNullOrWhiteSpace(ipFilter))
             query = query.Where(e => e.SourceIp.Contains(ipFilter, StringComparison.OrdinalIgnoreCase));
@@ -268,9 +268,9 @@ public static class SharedData
     }
 
     /// <summary>
-    /// 清除所有检测事件
+    /// 清除所有拦截事件
     /// </summary>
-    public static void ClearBwHitEvents() => _bwHitEvents.Clear();
+    public static void ClearInterceptEvents() => _interceptEvents.Clear();
 
     /// <summary>
     /// 释放所有静态字典资源（停止内部 Timer），用于应用关闭时的清理

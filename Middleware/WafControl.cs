@@ -57,7 +57,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
     {
         var geoInfo = _accessControlService.GetGeoInfo(clientIp);
         var host = context.Request.Host.Host;
-        SharedData.RecordBwHit(clientIp, host,
+        SharedData.RecordInterceptEvent(clientIp, host,
             geoInfo?.Region ?? "", geoInfo?.City ?? "",
             reason, "Black");
     }

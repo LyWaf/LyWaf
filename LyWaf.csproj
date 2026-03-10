@@ -28,6 +28,8 @@
     <PackageReference Include="Certes" Version="3.0.4" />
     <!-- 图片处理库：用于实时图片缩放、裁剪、格式转换 -->
     <PackageReference Include="SkiaSharp" Version="3.116.1" />
+    <!-- 嵌入式分析数据库：用于统计数据持久化 -->
+    <PackageReference Include="DuckDB.NET.Data.Full" Version="1.4.4" />
   </ItemGroup>
   
   <ItemGroup>
@@ -52,6 +54,9 @@
   <ItemGroup>
     <Content Remove=".lywaf.*" />
     <Content Remove="config.ly.*" />
+    <!-- 排除 DuckDB 运行时数据库文件（由程序启动时自动创建） -->
+    <Content Remove="datas\*.duckdb" />
+    <Content Remove="datas\*.duckdb.*" />
     <None Remove=".lywaf.*" />
     <Content Remove="publish\**" />
     <Content Remove="temp\**" />

@@ -1096,6 +1096,16 @@ public class Program
         builder.Services.AddHostedService(sp => (AcmeService)sp.GetRequiredService<IAcmeService>());
         builder.Services.AddSingleton<ICustomDnsService, CustomDnsService>();
         builder.Services.AddSingleton<IAuditLogService, AuditLogService>();
+
+        // 注册 DuckDB 持久化服务
+        builder.Services.Configure<LyWaf.Services.DuckDb.DuckDbOptions>(builder.Configuration.GetSection("DuckDb"));
+        builder.Services.AddSingleton<LyWaf.Services.DuckDb.IDuckDbService, LyWaf.Services.DuckDb.DuckDbService>();
+        builder.Services.AddSingleton<LyWaf.Services.DuckDb.IDuckDbQueryService, LyWaf.Services.DuckDb.DuckDbQueryService>();
+        builder.Services.AddHostedService<LyWaf.Services.DuckDb.StatisticRecoveryService>();  // 启动时恢复数据（先于 Flush）
+        builder.Services.AddSingleton<LyWaf.Services.DuckDb.StatisticFlushService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LyWaf.Services.DuckDb.StatisticFlushService>());
+        builder.Services.AddHostedService<LyWaf.Services.DuckDb.DataRetentionService>();  // 数据保留策略
+        builder.Services.AddSingleton<LyWaf.Services.DuckDb.RuntimeLogService>();  // 运行日志
         builder.Services.AddHostedService<HttpProxyService>();  // 统一代理服务（HTTP/HTTPS/SOCKS5）
         builder.Services.AddHostedService<StreamService>();     // TCP 流代理服务
         builder.Services.AddSingleton<IProbingRequestFactory, LyxProbingRequestFactory>();
@@ -1231,7 +1241,18 @@ public class Program
 
         // 注册控制台 API
         app.MapControlApi(wafInfos);
-        
+
+        // 记录进程启动到运行日志
+        try
+        {
+            var runtimeLog = app.Services.GetService<LyWaf.Services.DuckDb.RuntimeLogService>();
+            runtimeLog?.RecordStartup();
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn(ex, "记录运行日志启动失败");
+        }
+
         // 启用 WebSocket 支持（使 context.WebSockets.IsWebSocketRequest 可用）
         app.UseWebSockets();
 
@@ -1276,10 +1297,39 @@ public class Program
             proxyApp.UseLoadBalancing();
         }).RequireHost(proxyPorts);
 
-        // 注册应用关闭时的清理：释放 SharedData 中所有静态字典的 Timer
+        // 注册应用关闭时的清理
         app.Lifetime.ApplicationStopping.Register(() =>
         {
             _logger.Info("应用正在关闭，释放静态资源...");
+            // 先执行 DuckDB 最终刷写，再关闭连接
+            try
+            {
+                var flushService = app.Services.GetService<LyWaf.Services.DuckDb.StatisticFlushService>();
+                flushService?.FinalFlush();
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "DuckDB 最终刷写失败");
+            }
+            // 记录进程关闭到运行日志
+            try
+            {
+                var runtimeLog = app.Services.GetService<LyWaf.Services.DuckDb.RuntimeLogService>();
+                runtimeLog?.RecordShutdown();
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn(ex, "记录运行日志关闭失败");
+            }
+            try
+            {
+                var duckDb = app.Services.GetService<LyWaf.Services.DuckDb.IDuckDbService>();
+                duckDb?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "DuckDB 连接关闭失败");
+            }
             SharedData.DisposeAll();
         });
 

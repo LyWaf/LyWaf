@@ -963,6 +963,27 @@ export const settingsApi = {
 
   getAuditLogs: (offset = 0, limit = 50) =>
     api.get<AuditLogsResponse>('/settings/audit-logs', { params: { offset, limit } }),
+
+  getRuntimeLogs: (offset = 0, limit = 20) =>
+    api.get<{ success: boolean; items: RuntimeLogEntry[]; total: number }>('/settings/runtime-logs', { params: { offset, limit } }),
+}
+
+export interface RuntimeLogEntry {
+  id: number
+  startTime: string
+  stopTime: string | null
+  exitReason: string
+  durationSeconds: number
+  peakMemoryMb: number
+  finalMemoryMb: number
+  gcGen0: number
+  gcGen1: number
+  gcGen2: number
+  totalRequests: number
+  totalIntercepts: number
+  dotnetVersion: string
+  osDescription: string
+  processId: number
 }
 
 // ==================== 认证 API ====================
@@ -991,9 +1012,9 @@ export const authApi = {
     api.post<ApiResponse>('/auth/change-password', { currentPassword, newPassword }),
 }
 
-// ==================== 黑白名单检测事件 API ====================
+// ==================== 拦截事件 API ====================
 
-export interface BwHitEvent {
+export interface InterceptEvent {
   sourceIp: string
   region: string
   city: string
@@ -1006,7 +1027,7 @@ export interface BwHitEvent {
   lastHitTime: string
 }
 
-export const bwEventApi = {
+export const interceptEventApi = {
   list: (params?: { ip?: string; domain?: string; startTime?: string; endTime?: string }) => {
     const query = new URLSearchParams()
     if (params?.ip) query.set('ip', params.ip)
@@ -1014,9 +1035,9 @@ export const bwEventApi = {
     if (params?.startTime) query.set('startTime', params.startTime)
     if (params?.endTime) query.set('endTime', params.endTime)
     const qs = query.toString()
-    return api.get<{ success: boolean; count: number; events: BwHitEvent[] }>(`/bw-events${qs ? '?' + qs : ''}`)
+    return api.get<{ success: boolean; count: number; events: InterceptEvent[] }>(`/intercept-events${qs ? '?' + qs : ''}`)
   },
-  clear: () => api.post<{ success: boolean; message: string }>('/bw-events/clear'),
+  clear: () => api.post<{ success: boolean; message: string }>('/intercept-events/clear'),
 }
 
 // ==================== 访问控制（黑白名单）API ====================

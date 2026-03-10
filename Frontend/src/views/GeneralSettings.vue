@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { settingsApi, authApi } from '@/api'
+import type { RuntimeLogEntry } from '@/api'
 import { useToast } from '@/composables/useToast'
 import type { CertDetail, AuditLogEntry } from '@/types'
 
 const { showSuccess, showError } = useToast()
 
 // ==================== Tab 切换 ====================
-const activeTab = ref<'certs' | 'console' | 'logs'>('certs')
+const activeTab = ref<'certs' | 'console' | 'logs' | 'runtime'>('certs')
 const tabs = [
   { key: 'certs' as const, label: '证书管理', icon: '🔒' },
   { key: 'console' as const, label: '控制台管理', icon: '🖥️' },
   { key: 'logs' as const, label: '系统日志', icon: '📋' },
+  { key: 'runtime' as const, label: '运行日志', icon: '🕐' },
 ]
 
 // ==================== 证书管理 ====================
@@ -233,12 +235,72 @@ const goPage = (page: number) => {
   loadLogs()
 }
 
+// ==================== 运行日志 ====================
+const runtimeLoading = ref(false)
+const runtimeLogs = ref<RuntimeLogEntry[]>([])
+const runtimeTotal = ref(0)
+const runtimePage = ref(1)
+const runtimePageSize = 15
+
+const loadRuntimeLogs = async () => {
+  runtimeLoading.value = true
+  try {
+    const offset = (runtimePage.value - 1) * runtimePageSize
+    const res = await settingsApi.getRuntimeLogs(offset, runtimePageSize) as unknown as { success: boolean; items: RuntimeLogEntry[]; total: number }
+    if (res?.success) {
+      runtimeLogs.value = res.items
+      runtimeTotal.value = res.total
+    }
+  } catch {
+    showError('加载运行日志失败')
+  } finally {
+    runtimeLoading.value = false
+  }
+}
+
+const runtimeTotalPages = () => Math.ceil(runtimeTotal.value / runtimePageSize) || 1
+
+const goRuntimePage = (page: number) => {
+  if (page < 1 || page > runtimeTotalPages()) return
+  runtimePage.value = page
+  loadRuntimeLogs()
+}
+
+const formatDuration = (seconds: number): string => {
+  if (seconds <= 0) return '-'
+  if (seconds < 60) return `${seconds} 秒`
+  if (seconds < 3600) {
+    const m = Math.floor(seconds / 60)
+    const s = seconds % 60
+    return s > 0 ? `${m} 分 ${s} 秒` : `${m} 分钟`
+  }
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  if (h < 24) return m > 0 ? `${h} 小时 ${m} 分` : `${h} 小时`
+  const d = Math.floor(h / 24)
+  const rh = h % 24
+  return rh > 0 ? `${d} 天 ${rh} 小时` : `${d} 天`
+}
+
+const formatNum = (n: number): string => {
+  if (n >= 10000) return (n / 10000).toFixed(1) + '万'
+  return n.toLocaleString()
+}
+
+const exitReasonBg = (reason: string): string => {
+  if (!reason) return 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
+  if (reason === '正常关闭') return 'bg-green-500/15 text-green-400 border-green-500/30'
+  if (reason === '异常退出') return 'bg-red-500/15 text-red-400 border-red-500/30'
+  return 'bg-gray-500/15 text-gray-400 border-gray-500/30'
+}
+
 // ==================== 初始化 ====================
-const switchTab = (key: 'certs' | 'console' | 'logs') => {
+const switchTab = (key: 'certs' | 'console' | 'logs' | 'runtime') => {
   activeTab.value = key
   if (key === 'certs' && certs.value.length === 0) loadCerts()
   if (key === 'console' && !consoleInfo.value) loadConsole()
   if (key === 'logs' && logs.value.length === 0) loadLogs()
+  if (key === 'runtime' && runtimeLogs.value.length === 0) loadRuntimeLogs()
 }
 
 onMounted(() => {
@@ -252,7 +314,7 @@ onMounted(() => {
     <div class="card">
       <div class="flex items-center gap-3">
         <h2 class="text-lg font-semibold text-gray-100">通用设置</h2>
-        <span class="text-xs text-gray-500">证书管理、控制台管理、系统操作日志</span>
+        <span class="text-xs text-gray-500">证书管理、控制台管理、系统操作日志、运行日志</span>
       </div>
     </div>
 
@@ -438,6 +500,101 @@ onMounted(() => {
                 @click="goPage(logsPage + 1)"
                 :disabled="logsPage >= totalPages()"
                 :class="['px-3 py-1 text-xs rounded transition-colors', logsPage >= totalPages() ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200']"
+              >
+                下一页
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== Tab 4: 运行日志 ==================== -->
+      <div v-if="activeTab === 'runtime'" class="p-5">
+        <!-- 操作栏 -->
+        <div class="flex items-center justify-between mb-4">
+          <span class="text-sm text-gray-400">共 {{ runtimeTotal }} 条运行记录</span>
+          <button @click="loadRuntimeLogs" class="btn btn-sm btn-primary flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            刷新
+          </button>
+        </div>
+
+        <!-- 加载 -->
+        <div v-if="runtimeLoading" class="flex items-center justify-center py-12">
+          <span class="w-6 h-6 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></span>
+        </div>
+
+        <!-- 空状态 -->
+        <div v-else-if="runtimeLogs.length === 0" class="text-center py-12 text-gray-500">
+          <p class="text-lg mb-2">暂无运行记录</p>
+          <p class="text-sm">进程启动和停止记录将在此显示</p>
+        </div>
+
+        <!-- 运行日志表格 -->
+        <div v-else>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="text-left text-gray-400 border-b border-dark-border">
+                  <th class="pb-3 font-medium">启动时间</th>
+                  <th class="pb-3 font-medium">停止时间</th>
+                  <th class="pb-3 font-medium">状态</th>
+                  <th class="pb-3 font-medium">运行时长</th>
+                  <th class="pb-3 font-medium text-right">峰值内存</th>
+                  <th class="pb-3 font-medium text-right">总请求</th>
+                  <th class="pb-3 font-medium text-right">总拦截</th>
+                  <th class="pb-3 font-medium">PID</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="entry in runtimeLogs" :key="entry.id" class="border-b border-dark-border/50 hover:bg-white/[0.02]">
+                  <td class="py-3 text-gray-200 font-mono text-xs whitespace-nowrap">{{ entry.startTime }}</td>
+                  <td class="py-3 text-gray-400 font-mono text-xs whitespace-nowrap">{{ entry.stopTime || '-' }}</td>
+                  <td class="py-3">
+                    <span :class="['px-2 py-0.5 rounded text-xs border', exitReasonBg(entry.exitReason)]">
+                      {{ entry.exitReason || '运行中' }}
+                    </span>
+                  </td>
+                  <td class="py-3 text-gray-300 text-sm whitespace-nowrap">
+                    {{ entry.stopTime ? formatDuration(entry.durationSeconds) : '运行中...' }}
+                  </td>
+                  <td class="py-3 text-gray-400 text-sm text-right whitespace-nowrap">
+                    <template v-if="entry.peakMemoryMb > 0">
+                      {{ entry.peakMemoryMb.toFixed(1) }} MB
+                    </template>
+                    <template v-else>-</template>
+                  </td>
+                  <td class="py-3 text-gray-400 text-sm text-right whitespace-nowrap">
+                    {{ entry.totalRequests > 0 ? formatNum(entry.totalRequests) : '-' }}
+                  </td>
+                  <td class="py-3 text-sm text-right whitespace-nowrap">
+                    <span v-if="entry.totalIntercepts > 0" class="text-red-400">{{ formatNum(entry.totalIntercepts) }}</span>
+                    <span v-else class="text-gray-500">-</span>
+                  </td>
+                  <td class="py-3 text-gray-500 font-mono text-xs">{{ entry.processId || '-' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 分页 -->
+          <div class="flex items-center justify-between mt-4 pt-4 border-t border-dark-border">
+            <span class="text-xs text-gray-500">共 {{ runtimeTotal }} 条记录</span>
+            <div class="flex items-center gap-2">
+              <button
+                @click="goRuntimePage(runtimePage - 1)"
+                :disabled="runtimePage <= 1"
+                :class="['px-3 py-1 text-xs rounded transition-colors', runtimePage <= 1 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200']"
+              >
+                上一页
+              </button>
+              <span class="text-xs text-gray-400">{{ runtimePage }} / {{ runtimeTotalPages() }}</span>
+              <button
+                @click="goRuntimePage(runtimePage + 1)"
+                :disabled="runtimePage >= runtimeTotalPages()"
+                :class="['px-3 py-1 text-xs rounded transition-colors', runtimePage >= runtimeTotalPages() ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200']"
               >
                 下一页
               </button>

@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { bwEventApi } from '@/api'
-import type { BwHitEvent } from '@/api'
+import { interceptEventApi } from '@/api'
+import type { InterceptEvent } from '@/api'
 import { useToast } from '@/composables/useToast'
 
 const { showSuccess, showError } = useToast()
 
 const loading = ref(false)
-const events = ref<BwHitEvent[]>([])
+const events = ref<InterceptEvent[]>([])
 
 // 过滤
 const filterIp = ref('')
@@ -24,7 +24,7 @@ const loadEvents = async () => {
     if (filterStartTime.value) params.startTime = filterStartTime.value
     if (filterEndTime.value) params.endTime = filterEndTime.value
 
-    const res = await bwEventApi.list(params) as any
+    const res = await interceptEventApi.list(params) as any
     if (res?.success) {
       events.value = res.events || []
     }
@@ -37,7 +37,7 @@ const loadEvents = async () => {
 
 const clearEvents = async () => {
   try {
-    const res = await bwEventApi.clear() as any
+    const res = await interceptEventApi.clear() as any
     if (res?.success) {
       events.value = []
       showSuccess('检测事件已清除')
