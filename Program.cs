@@ -1079,6 +1079,9 @@ public class Program
         builder.Services.Configure<LyWaf.Services.LyLog.LyLogOptions>(builder.Configuration.GetSection("LyLog"));
         builder.Services.Configure<LyWaf.Services.ErrorTemplate.ErrorTemplateOptions>(builder.Configuration.GetSection("ErrorTemplate"));
 
+        // 缩短关机超时，避免 WebSocket 等长连接导致关机卡住
+        builder.Services.Configure<HostOptions>(opts => opts.ShutdownTimeout = TimeSpan.FromSeconds(5));
+
         // 注册自定义响应压缩中间件（支持 MinSize）
         builder.Services.AddSingleton<ResponseCompressMiddleware>();
 

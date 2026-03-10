@@ -66,6 +66,14 @@ public class RequestLoggerPlugin : LyWafPluginBase
             {
                 context.Logger.Info("{LogEntry}", logEntry.TrimEnd());
             }
+
+            // 拦截日志（独立于正常请求日志，使用独立 Items 键避免冲突）
+            if (ctx.Items.TryGetValue("RequestLogger.InterceptRule", out var ir) && ir is MatchRule interceptRule)
+            {
+                var interceptEntry = await BuildLogEntry(ctx, e.StatusCode, e.Duration, interceptRule, Options.MaxBodySize);
+                if (Options.LogToFile)
+                    await WriteToFileAsync(interceptEntry, interceptRule);
+            }
         });
 
         context.Logger.Info($"请求日志记录器已初始化 (v{Metadata.Version})");
@@ -249,6 +257,10 @@ public class RequestLoggerPlugin : LyWafPluginBase
         var clientIp = RequestUtil.GetClientIp(request);
         sb.AppendLine($"Client-IP: {clientIp}");
 
+        // 拦截原因（WAF 拦截日志用）
+        if (context.Items.TryGetValue("RequestLogger.Reason", out var reasonObj) && reasonObj is string reasonStr)
+            sb.AppendLine($"Reason: {reasonStr}");
+
         if (rule.LogDuration)
             sb.AppendLine($"Status: {statusCode} | Duration: {duration.TotalMilliseconds:F1}ms");
         else
@@ -301,8 +313,15 @@ public class RequestLoggerPlugin : LyWafPluginBase
                 ? Options.LogDirectory
                 : Path.Combine(AppContext.BaseDirectory, Options.LogDirectory);
             Directory.CreateDirectory(dir);
-            var host = rule.Host.Replace("*", "any");
-            var filePath = Path.Combine(dir, $"req_{host}_{DateTime.Now:yyyy-MM-dd}.log");
+            string fileName;
+            if (!string.IsNullOrEmpty(rule.FilePrefix))
+                fileName = $"{rule.FilePrefix}_{DateTime.Now:yyyy-MM-dd}.log";
+            else
+            {
+                var host = rule.Host.Replace("*", "any");
+                fileName = $"req_{host}_{DateTime.Now:yyyy-MM-dd}.log";
+            }
+            var filePath = Path.Combine(dir, fileName);
             await _fileLock.WaitAsync();
             try
             {
@@ -545,4 +564,8 @@ public class MatchRule
     /// <summary>是否记录响应时间</summary>
     [Description("记录响应时间")]
     public bool LogDuration { get; set; } = true;
+
+    /// <summary>自定义日志文件名前缀（为空则使用默认 req_{host}）</summary>
+    [Description("文件名前缀")]
+    public string FilePrefix { get; set; } = "";
 }

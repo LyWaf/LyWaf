@@ -1042,6 +1042,43 @@ export const interceptEventApi = {
   clear: () => api.post<{ success: boolean; message: string }>('/intercept-events/clear'),
 }
 
+// ==================== 拦截明细日志 API ====================
+
+export interface InterceptLogFile {
+  name: string
+  size: number
+  lastModified: string
+}
+
+export interface InterceptLogEntry {
+  index: number
+  time: string
+  method: string
+  url: string
+  host: string
+  requestLine: string
+  headers?: string
+  requestBody?: string
+  responseBody?: string
+  statusCode?: number
+  duration?: string
+  clientIp?: string
+  scheme?: string
+  raw: string
+}
+
+export const interceptLogApi = {
+  listFiles: () => api.get<{ success: boolean; files: InterceptLogFile[] }>('/intercept-logs/files'),
+  getEntries: (params: { file: string; offset?: number; limit?: number; search?: string }) => {
+    const query = new URLSearchParams()
+    query.set('file', params.file)
+    if (params.offset !== undefined) query.set('offset', params.offset.toString())
+    if (params.limit !== undefined) query.set('limit', params.limit.toString())
+    if (params.search) query.set('search', params.search)
+    return api.get<{ success: boolean; entries: InterceptLogEntry[]; total: number; offset: number; limit: number; fileName: string }>(`/intercept-logs/entries?${query.toString()}`)
+  },
+}
+
 // ==================== 访问控制（黑白名单）API ====================
 
 export interface AccessControlData {

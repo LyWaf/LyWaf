@@ -676,6 +676,44 @@ public static class ControlApi
             return Results.Json(new { success = true, message = "拦截事件已清除" });
         }).RequireHost($"*:{controlPort}");
 
+        // =============== 拦截明细日志 API ===============
+
+        // 列出拦截日志文件
+        app.MapGet("/api/intercept-logs/files", () =>
+        {
+            var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
+            var files = LogUtil.ListLogFiles(dir, "intercept_*.log");
+            return Results.Json(new { success = true, files });
+        }).RequireHost($"*:{controlPort}");
+
+        // 读取拦截日志条目
+        app.MapGet("/api/intercept-logs/entries", async (HttpContext ctx) =>
+        {
+            var fileName = ctx.Request.Query["file"].FirstOrDefault() ?? "";
+            if (string.IsNullOrEmpty(fileName) || fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\'))
+                return Results.Json(new { success = false, message = "无效的文件名" });
+
+            var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
+            var filePath = Path.Combine(dir, fileName);
+            if (!File.Exists(filePath))
+                return Results.Json(new { success = false, message = $"文件不存在: {fileName}" });
+
+            _ = int.TryParse(ctx.Request.Query["offset"].FirstOrDefault() ?? "0", out var offset);
+            _ = int.TryParse(ctx.Request.Query["limit"].FirstOrDefault() ?? "20", out var limit);
+            var search = ctx.Request.Query["search"].FirstOrDefault();
+
+            var (entries, total) = await LogUtil.ParseLogFileAsync(filePath, offset, Math.Clamp(limit, 1, 100), search);
+            return Results.Json(new
+            {
+                success = true,
+                entries,
+                total,
+                offset,
+                limit,
+                fileName,
+            });
+        }).RequireHost($"*:{controlPort}");
+
         // API 耗时统计数据列表
         app.MapGet("/api/timing/list", (HttpContext ctx) =>
         {

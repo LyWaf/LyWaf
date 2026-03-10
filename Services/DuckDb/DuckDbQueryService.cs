@@ -319,7 +319,7 @@ public class DuckDbQueryService : IDuckDbQueryService
             using (var countCmd = conn.CreateCommand())
             {
                 countCmd.CommandText = $"SELECT COUNT(*) FROM intercept_events {whereClause}";
-                foreach (var p in parameters) countCmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(p.Value));
+                foreach (var p in parameters) countCmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(p.Value!));
                 total = Convert.ToInt32(countCmd.ExecuteScalar());
             }
 
@@ -330,7 +330,7 @@ public class DuckDbQueryService : IDuckDbQueryService
                 FROM intercept_events {whereClause}
                 ORDER BY last_hit_time DESC
                 LIMIT {limit} OFFSET {offset}";
-            foreach (var p in parameters) cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(p.Value));
+            foreach (var p in parameters) cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(p.Value!));
 
             using var reader = cmd.ExecuteReader();
             while (reader.Read())

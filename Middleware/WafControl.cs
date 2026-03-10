@@ -1,4 +1,5 @@
 
+using LyWaf.Plugins.Examples;
 using LyWaf.Services.AccessControl;
 using LyWaf.Services.LyLog;
 using LyWaf.Services.Protect;
@@ -51,6 +52,24 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
     }
 
     /// <summary>
+    /// 设置拦截日志标记，让 RequestLoggerPlugin 在 RequestCompletedEvent 中记录
+    /// </summary>
+    private static void SetInterceptLogMark(HttpContext context, string reason)
+    {
+        context.Items["RequestLogger.InterceptRule"] = new MatchRule
+        {
+            Host = "*",
+            FilePrefix = "intercept",
+            LogQueryString = true,
+            LogRequestBody = true,
+            LogHeaders = false,
+            LogResponseBody = false,
+            LogDuration = false,
+        };
+        context.Items["RequestLogger.Reason"] = reason;
+    }
+
+    /// <summary>
     /// 记录 WAF 拦截到检测事件统计
     /// </summary>
     private void RecordWafHit(HttpContext context, string clientIp, string reason)
@@ -97,6 +116,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
                 // WAF Args 攻击检测，标记为攻击
                 _ccRuleChecker.RecordAttackEvent(clientIp); // 记录攻击事件用于 CC 高频攻击检测
                 RecordWafHit(context, clientIp, reason);
+                SetInterceptLogMark(context, reason);
                 await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason },
                     isAttack: true, eventType: SecurityEventType.WafIntercept);
                 return;
@@ -106,6 +126,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
                 // WAF Post 攻击检测，标记为攻击
                 _ccRuleChecker.RecordAttackEvent(clientIp); // 记录攻击事件用于 CC 高频攻击检测
                 RecordWafHit(context, clientIp, reason);
+                SetInterceptLogMark(context, reason);
                 await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason },
                     isAttack: true, eventType: SecurityEventType.WafIntercept);
                 return;
@@ -117,7 +138,9 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             {
                 if (ruleResult.Action != WafRuleAction.Observe)
                 {
-                    RecordWafHit(context, clientIp, $"WAF规则: {ruleResult.TriggeredRule?.Name}");
+                    var wafReason = $"WAF规则: {ruleResult.TriggeredRule?.Name}";
+                    RecordWafHit(context, clientIp, wafReason);
+                    SetInterceptLogMark(context, wafReason);
                     await _wafRuleService.ExecuteAction(context, ruleResult, clientIp);
                     return;
                 }
