@@ -1,33 +1,52 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import Section from '@/components/common/Section.vue'
 import { wafApi, dashboardApi } from '@/api'
 import { useToast } from '@/composables/useToast'
-import type { WafRule } from '@/types'
+
+interface RuleItem {
+  id: string
+  pattern: string
+  source: 'file' | 'custom'
+}
+
+const props = defineProps<{
+  ruleType: 'args' | 'post'
+  enabled: boolean
+  loading: boolean
+}>()
+
+const emit = defineEmits<{
+  toggle: []
+}>()
 
 const { showSuccess, showError } = useToast()
 
-const argsRules = ref<WafRule[]>([])
-const postRules = ref<WafRule[]>([])
+const rules = ref<RuleItem[]>([])
+const typeLabel = props.ruleType === 'args' ? 'Args' : 'Post'
+const title = `WAF ${typeLabel} 检测`
 
 onMounted(async () => {
   try {
     const data = await dashboardApi.getData()
     if (data.success && data.wafRules) {
-      argsRules.value = (data.wafRules.args || []).map((p, i) => ({ id: `a${i}`, pattern: p, type: 'args' as const }))
-      postRules.value = (data.wafRules.post || []).map((p, i) => ({ id: `p${i}`, pattern: p, type: 'post' as const }))
+      const key = props.ruleType
+      const patterns: string[] = data.wafRules[key] || []
+      const fileCount = key === 'args' ? data.wafRules.argsFileCount : data.wafRules.postFileCount
+      rules.value = patterns.map((p, i) => ({
+        id: `${key[0]}${i}`,
+        pattern: p,
+        source: i < fileCount ? 'file' as const : 'custom' as const
+      }))
     }
   } catch { /* 静默处理 */ }
 })
 
 // 弹窗状态
 const showDialog = ref(false)
-const dialogType = ref<'args' | 'post'>('args')
 const dialogPattern = ref('')
 const dialogLoading = ref(false)
 
-const openAddDialog = (type: 'args' | 'post') => {
-  dialogType.value = type
+const openAddDialog = () => {
   dialogPattern.value = ''
   showDialog.value = true
 }
@@ -41,24 +60,15 @@ const submitRule = async () => {
 
   dialogLoading.value = true
   try {
-    if (dialogType.value === 'args') {
-      const res = await wafApi.addArgsRule(pattern)
-      if (res.success) {
-        argsRules.value.push({ id: Date.now().toString(), pattern, type: 'args' })
-        showSuccess('Args 规则已添加')
-        showDialog.value = false
-      } else {
-        showError((res as any).message || '添加失败')
-      }
+    const res = props.ruleType === 'args'
+      ? await wafApi.addArgsRule(pattern)
+      : await wafApi.addPostRule(pattern)
+    if (res.success) {
+      rules.value.push({ id: Date.now().toString(), pattern, source: 'custom' })
+      showSuccess(`${typeLabel} 规则已添加`)
+      showDialog.value = false
     } else {
-      const res = await wafApi.addPostRule(pattern)
-      if (res.success) {
-        postRules.value.push({ id: Date.now().toString(), pattern, type: 'post' })
-        showSuccess('Post 规则已添加')
-        showDialog.value = false
-      } else {
-        showError((res as any).message || '添加失败')
-      }
+      showError((res as any).message || '添加失败')
     }
   } catch {
     showError('添加失败')
@@ -69,26 +79,21 @@ const submitRule = async () => {
 
 // 删除弹窗
 const showDeleteConfirm = ref(false)
-const deleteTarget = ref<{ rule: WafRule; type: 'args' | 'post' } | null>(null)
+const deleteTarget = ref<RuleItem | null>(null)
 
-const confirmDelete = (rule: WafRule, type: 'args' | 'post') => {
-  deleteTarget.value = { rule, type }
+const confirmDelete = (rule: RuleItem) => {
+  deleteTarget.value = rule
   showDeleteConfirm.value = true
 }
 
 const doDelete = async () => {
   if (!deleteTarget.value) return
-  const { rule, type } = deleteTarget.value
   try {
-    const res = type === 'args'
-      ? await wafApi.removeArgsRule(rule.pattern)
-      : await wafApi.removePostRule(rule.pattern)
+    const res = props.ruleType === 'args'
+      ? await wafApi.removeArgsRule(deleteTarget.value.pattern)
+      : await wafApi.removePostRule(deleteTarget.value.pattern)
     if (res.success) {
-      if (type === 'args') {
-        argsRules.value = argsRules.value.filter(r => r.id !== rule.id)
-      } else {
-        postRules.value = postRules.value.filter(r => r.id !== rule.id)
-      }
+      rules.value = rules.value.filter(r => r.id !== deleteTarget.value!.id)
       showSuccess('规则已删除')
     }
   } catch {
@@ -101,67 +106,77 @@ const doDelete = async () => {
 </script>
 
 <template>
-  <Section id="waf-rules" title="WAF 规则">
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- Args 规则 -->
-      <div>
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-gray-300 font-medium">
-            Args 检测规则
-            <span class="badge badge-info ml-2">{{ argsRules.length }}</span>
-          </h3>
-          <button @click="openAddDialog('args')" class="btn btn-sm btn-primary">+ 添加</button>
-        </div>
-        <div class="space-y-2 max-h-[300px] overflow-y-auto">
-          <div
-            v-for="rule in argsRules"
-            :key="rule.id"
-            class="flex items-center justify-between p-3 bg-dark-card-hover rounded-lg"
-          >
-            <code class="text-blue-400 text-sm truncate flex-1 mr-2">{{ rule.pattern }}</code>
-            <button
-              @click="confirmDelete(rule, 'args')"
-              class="text-gray-500 hover:text-red-400 transition-colors shrink-0"
-            >
-              ×
-            </button>
-          </div>
-          <div v-if="argsRules.length === 0" class="text-gray-500 text-sm text-center py-4">
-            暂无 Args 检测规则
-          </div>
-        </div>
+  <div class="card">
+    <!-- 标题栏 -->
+    <div class="flex items-center justify-between mb-4 pb-3 border-b border-dark-border">
+      <div class="flex items-center gap-3">
+        <h2 class="text-base font-semibold text-gray-100">{{ title }}</h2>
+        <span class="text-xs text-gray-500">共 {{ rules.length }} 条规则</span>
       </div>
-
-      <!-- Post 规则 -->
-      <div>
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-gray-300 font-medium">
-            Post 检测规则
-            <span class="badge badge-info ml-2">{{ postRules.length }}</span>
-          </h3>
-          <button @click="openAddDialog('post')" class="btn btn-sm btn-primary">+ 添加</button>
-        </div>
-        <div class="space-y-2 max-h-[300px] overflow-y-auto">
-          <div
-            v-for="rule in postRules"
-            :key="rule.id"
-            class="flex items-center justify-between p-3 bg-dark-card-hover rounded-lg"
-          >
-            <code class="text-blue-400 text-sm truncate flex-1 mr-2">{{ rule.pattern }}</code>
-            <button
-              @click="confirmDelete(rule, 'post')"
-              class="text-gray-500 hover:text-red-400 transition-colors shrink-0"
-            >
-              ×
-            </button>
-          </div>
-          <div v-if="postRules.length === 0" class="text-gray-500 text-sm text-center py-4">
-            暂无 Post 检测规则
-          </div>
-        </div>
+      <div class="flex items-center gap-3">
+        <button @click="openAddDialog" class="btn btn-sm btn-primary flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+          </svg>
+          添加
+        </button>
+        <button
+          @click="emit('toggle')"
+          :disabled="loading"
+          :class="[
+            'relative w-12 h-6 rounded-full transition-colors flex-shrink-0',
+            enabled ? 'bg-primary-500' : 'bg-gray-600'
+          ]"
+        >
+          <span
+            :class="[
+              'absolute top-1 w-4 h-4 rounded-full bg-white transition-transform',
+              enabled ? 'left-7' : 'left-1'
+            ]"
+          />
+        </button>
       </div>
     </div>
-  </Section>
+
+    <!-- 规则列表 -->
+    <div class="max-h-[400px] overflow-y-auto -mx-5 -mb-5">
+      <table class="w-full text-sm">
+        <tbody>
+          <tr
+            v-for="rule in rules"
+            :key="rule.id"
+            class="border-t border-dark-border/50 hover:bg-white/[0.03] transition-colors"
+          >
+            <td class="px-5 py-2 w-14">
+              <span v-if="rule.source === 'file'"
+                class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-cyan-500/15 text-cyan-400 whitespace-nowrap">
+                内置
+              </span>
+              <span v-else
+                class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-500/15 text-green-400 whitespace-nowrap">
+                自定义
+              </span>
+            </td>
+            <td class="py-2 pr-4">
+              <code class="text-blue-400 text-xs font-mono truncate block max-w-[600px]" :title="rule.pattern">{{ rule.pattern }}</code>
+            </td>
+            <td class="px-5 py-2 w-16 text-right">
+              <button
+                v-if="rule.source === 'custom'"
+                @click="confirmDelete(rule)"
+                class="text-xs text-red-400 hover:text-red-300 px-2 py-0.5 rounded hover:bg-red-500/10 transition-colors"
+              >
+                移除
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-if="rules.length === 0" class="text-center py-8 text-gray-500 text-sm">
+        暂无 {{ typeLabel }} 检测规则
+      </div>
+    </div>
+  </div>
 
   <!-- 添加规则弹窗 -->
   <Teleport to="body">
@@ -169,7 +184,7 @@ const doDelete = async () => {
       <div class="absolute inset-0 bg-black/60" @click="showDialog = false"></div>
       <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-[460px] max-w-[90vw]">
         <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
-          <h3 class="text-lg font-semibold text-gray-100">添加 {{ dialogType === 'args' ? 'Args' : 'Post' }} 检测规则</h3>
+          <h3 class="text-lg font-semibold text-gray-100">添加 {{ typeLabel }} 检测规则</h3>
           <button @click="showDialog = false" class="text-gray-400 hover:text-gray-200 text-xl leading-none">&times;</button>
         </div>
         <div class="px-6 py-5">
@@ -181,7 +196,7 @@ const doDelete = async () => {
             placeholder="例如 (union|select|insert|update|delete)"
             @keydown.enter="submitRule"
           />
-          <p class="text-xs text-gray-500 mt-2">用于检测请求中 {{ dialogType === 'args' ? 'URL 参数' : 'POST 数据' }} 的恶意内容</p>
+          <p class="text-xs text-gray-500 mt-2">用于检测请求中 {{ ruleType === 'args' ? 'URL 参数' : 'POST 数据' }} 的恶意内容</p>
         </div>
         <div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border">
           <button @click="showDialog = false" class="btn btn-secondary">取消</button>
@@ -201,7 +216,7 @@ const doDelete = async () => {
         <div class="px-6 py-5">
           <h3 class="text-lg font-semibold text-gray-100 mb-2">确认删除</h3>
           <p class="text-gray-400">确定要删除此规则吗？</p>
-          <code v-if="deleteTarget" class="block mt-2 text-sm text-red-400 bg-dark-card-hover p-2 rounded break-all">{{ deleteTarget.rule.pattern }}</code>
+          <code v-if="deleteTarget" class="block mt-2 text-sm text-red-400 bg-dark-card-hover p-2 rounded break-all">{{ deleteTarget.pattern }}</code>
         </div>
         <div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border">
           <button @click="showDeleteConfirm = false" class="btn btn-secondary">取消</button>

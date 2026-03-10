@@ -960,7 +960,9 @@ public static class ControlApi
                     wafRules = new
                     {
                         args = protectService.GetArgsRegexList(),
-                        post = protectService.GetPostRegexList()
+                        post = protectService.GetPostRegexList(),
+                        argsFileCount = protectService.GetArgsFilePatternCount(),
+                        postFileCount = protectService.GetPostFilePatternCount()
                     },
                     ccRules = statisticService.GetLimitCcRules().Select(r => new
                     {

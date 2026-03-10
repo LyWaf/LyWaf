@@ -305,21 +305,23 @@ onUnmounted(() => {
                   {{ item.method }}
                 </span>
               </td>
-              <td class="px-4 py-3 text-gray-300 font-mono text-sm">
-                <span>{{ item.path }}</span>
-                <a
-                   v-if="item.method === 'GET' && item.originalHost"
-                   :href="item.originalHost + item.path"
-                   target="_blank"
-                   rel="noopener noreferrer"
-                   class="ml-1.5 inline-flex items-center text-gray-500 hover:text-primary-400 transition-colors"
-                   title="在新窗口中打开原始请求"
-                   @click.stop
-                 >
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                </a>
+              <td class="px-4 py-3 text-gray-300 font-mono text-sm max-w-[360px]" :title="item.path">
+                <div class="flex items-center">
+                  <span class="truncate">{{ item.path }}</span>
+                  <a
+                     v-if="item.method === 'GET' && item.originalHost"
+                     :href="item.originalHost + item.path"
+                     target="_blank"
+                     rel="noopener noreferrer"
+                     class="ml-1.5 flex-shrink-0 inline-flex items-center text-gray-500 hover:text-primary-400 transition-colors"
+                     title="在新窗口中打开原始请求"
+                     @click.stop
+                   >
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </a>
+                </div>
               </td>
               <td class="px-4 py-3 text-gray-400 text-sm truncate max-w-[150px]" :title="item.backend">
                 {{ formatBackend(item.backend) }}

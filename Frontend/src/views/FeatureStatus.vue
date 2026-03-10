@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import FeatureSwitch from '@/components/common/FeatureSwitch.vue'
 import AccessControlPanel from '@/components/dashboard/AccessControlPanel.vue'
 import WafRules from '@/components/dashboard/WafRules.vue'
 import { featureApi, dashboardApi } from '@/api'
@@ -66,22 +65,26 @@ const getFeatureName = (feature: keyof FeatureStatus) => {
 
 <template>
   <div class="space-y-6">
-    <!-- 功能开关 -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      <FeatureSwitch
-        v-for="(enabled, key) in features"
-        :key="key"
-        :label="getFeatureName(key as keyof FeatureStatus)"
-        :enabled="enabled"
-        :loading="featureLoading === key"
-        @toggle="toggleFeature(key as keyof FeatureStatus)"
-      />
-    </div>
+    <!-- IP 访问控制 -->
+    <AccessControlPanel mode="ip" />
 
-    <!-- 攻击防护 (WAF 规则) -->
-    <WafRules />
+    <!-- 地理位置访问控制 -->
+    <AccessControlPanel mode="geo" />
 
-    <!-- IP / 地理位置访问控制 -->
-    <AccessControlPanel />
+    <!-- WAF Args 检测 -->
+    <WafRules
+      rule-type="args"
+      :enabled="features.wafArgs"
+      :loading="featureLoading === 'wafArgs'"
+      @toggle="toggleFeature('wafArgs')"
+    />
+
+    <!-- WAF Post 检测 -->
+    <WafRules
+      rule-type="post"
+      :enabled="features.wafPost"
+      :loading="featureLoading === 'wafPost'"
+      @toggle="toggleFeature('wafPost')"
+    />
   </div>
 </template>

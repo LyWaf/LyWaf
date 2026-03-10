@@ -58,6 +58,16 @@ public interface IProtectService
     /// 设置 Post 检测启用状态
     /// </summary>
     void SetPostCheckEnabled(bool enabled);
+
+    /// <summary>
+    /// 获取从文件加载的 Args 规则数量
+    /// </summary>
+    int GetArgsFilePatternCount();
+
+    /// <summary>
+    /// 获取从文件加载的 Post 规则数量
+    /// </summary>
+    int GetPostFilePatternCount();
 }
 
 
@@ -74,6 +84,10 @@ public class ProtectService : IProtectService
     private readonly HashSet<string> _dynamicArgsRegex = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _dynamicPostRegex = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _regexLock = new();
+
+    // 从文件加载的规则模式（用于 API 查询）
+    private List<string> _argsFilePatterns = [];
+    private List<string> _postFilePatterns = [];
 
     public ProtectService(
         IOptionsMonitor<ProtectOptions> options, IMemoryCache cache)
@@ -119,6 +133,7 @@ public class ProtectService : IProtectService
         lock (_regexLock)
         {
             List<Regex> regexes = [];
+            _argsFilePatterns = ReadPatternsFromFile(_options.CheckArgsFile);
             regexes.AddRange(BuildRegexesFromFile(_options.CheckArgsFile));
             foreach (var reg in _options.RegexArgsList)
             {
@@ -139,6 +154,7 @@ public class ProtectService : IProtectService
             argsRegexes = regexes;
 
             regexes = [];
+            _postFilePatterns = ReadPatternsFromFile(_options.CheckPostFile);
             regexes.AddRange(BuildRegexesFromFile(_options.CheckPostFile));
             foreach (var reg in _options.RegexPostList)
             {
@@ -158,6 +174,26 @@ public class ProtectService : IProtectService
             }
             postRegexes = regexes;
         }
+    }
+
+    /// <summary>
+    /// 从文件读取规则模式字符串（用于 API 返回）
+    /// </summary>
+    private static List<string> ReadPatternsFromFile(string path)
+    {
+        var patterns = new List<string>();
+        if (!File.Exists(path)) return patterns;
+        try
+        {
+            var lines = File.ReadAllLines(path);
+            foreach (var line in lines)
+            {
+                if (!string.IsNullOrWhiteSpace(line))
+                    patterns.Add(line);
+            }
+        }
+        catch { /* 静默处理 */ }
+        return patterns;
     }
 
     private static List<Regex> BuildRegexesFromFile(string path)
@@ -297,29 +333,47 @@ public class ProtectService : IProtectService
     }
 
     /// <summary>
-    /// 获取 Args 检测正则列表
+    /// 获取 Args 检测正则列表（包含文件规则、配置规则和动态规则）
     /// </summary>
     public List<string> GetArgsRegexList()
     {
         lock (_regexLock)
         {
-            var list = new List<string>(_options.RegexArgsList);
+            var list = new List<string>(_argsFilePatterns);
+            list.AddRange(_options.RegexArgsList);
             list.AddRange(_dynamicArgsRegex);
             return list;
         }
     }
 
     /// <summary>
-    /// 获取 Post 检测正则列表
+    /// 获取 Post 检测正则列表（包含文件规则、配置规则和动态规则）
     /// </summary>
     public List<string> GetPostRegexList()
     {
         lock (_regexLock)
         {
-            var list = new List<string>(_options.RegexPostList);
+            var list = new List<string>(_postFilePatterns);
+            list.AddRange(_options.RegexPostList);
             list.AddRange(_dynamicPostRegex);
             return list;
         }
+    }
+
+    /// <summary>
+    /// 获取从文件加载的 Args 规则数量
+    /// </summary>
+    public int GetArgsFilePatternCount()
+    {
+        lock (_regexLock) { return _argsFilePatterns.Count; }
+    }
+
+    /// <summary>
+    /// 获取从文件加载的 Post 规则数量
+    /// </summary>
+    public int GetPostFilePatternCount()
+    {
+        lock (_regexLock) { return _postFilePatterns.Count; }
     }
 
     /// <summary>

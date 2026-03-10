@@ -426,8 +426,10 @@ export interface DashboardData {
   blacklist: string[]
   geoAccess: GeoAccess
   wafRules: {
-    args: WafRule[]
-    post: WafRule[]
+    args: string[]
+    post: string[]
+    argsFileCount: number
+    postFileCount: number
   }
   ccRules: CcRule[]
   blockedIps: IpInfo[]

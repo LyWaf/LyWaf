@@ -17,6 +17,9 @@ public class StatisticFlushService : BackgroundService
     // 跟踪上次刷写的安全事件时间片时间，避免重复写入
     private DateTime _lastFlushedSlotTime = DateTime.MinValue;
 
+    // FinalFlush 完成后置为 true，阻止后续循环再次刷写
+    private volatile bool _finalFlushed;
+
     public StatisticFlushService(IDuckDbService db, IOptions<DuckDbOptions> options)
     {
         _db = db;
@@ -37,6 +40,7 @@ public class StatisticFlushService : BackgroundService
         {
             try
             {
+                if (_finalFlushed) break;
                 FlushAll();
             }
             catch (Exception ex)
@@ -70,6 +74,10 @@ public class StatisticFlushService : BackgroundService
         catch (Exception ex)
         {
             _logger.Error(ex, "DuckDB 最终刷写失败");
+        }
+        finally
+        {
+            _finalFlushed = true;
         }
     }
 

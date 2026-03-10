@@ -4,6 +4,10 @@ import { accessControlApi } from '@/api'
 import type { AccessControlData } from '@/api'
 import { useToast } from '@/composables/useToast'
 
+const props = defineProps<{
+  mode: 'ip' | 'geo'
+}>()
+
 const { showSuccess, showError } = useToast()
 
 // 数据
@@ -21,40 +25,73 @@ const showDeleteConfirm = ref(false)
 const deleteTarget = ref<{ type: string; value: string } | null>(null)
 const deleting = ref(false)
 
-// 统计
-const whiteCount = computed(() => data.value?.ipControl.whitelist.length ?? 0)
-const blackCount = computed(() => data.value?.ipControl.blacklist.length ?? 0)
-const geoEntryCount = computed(() => {
-  if (!data.value) return 0
-  const g = data.value.geoControl
-  return g.denyCountries.length + g.denyRegions.length + g.allowCountries.length + g.allowRegions.length
+// 标题
+const title = computed(() => props.mode === 'ip' ? 'IP 访问控制' : '地理位置访问控制')
+
+const subtitle = computed(() => {
+  if (!data.value) return ''
+  if (props.mode === 'ip') {
+    const wc = data.value.ipControl.whitelist.length
+    const bc = data.value.ipControl.blacklist.length
+    return `白名单 ${wc} / 黑名单 ${bc} / 累计拦截 ${formatHit(data.value.stats?.blacklistBlockCount ?? 0)}`
+  } else {
+    const g = data.value.geoControl
+    const count = g.denyCountries.length + g.denyRegions.length + g.allowCountries.length + g.allowRegions.length
+    return `地理规则 ${count} / 模式: ${data.value.geoControl.mode === 'Deny' ? '禁止' : '允许'} / 累计拦截 ${formatHit(data.value.stats?.geoBlockCount ?? 0)}`
+  }
 })
 
-// 构建统一的条目列表
+// 是否启用
+const isEnabled = computed(() => {
+  if (!data.value) return false
+  return props.mode === 'ip' ? data.value.ipControl.enabled : data.value.geoControl.enabled
+})
+
+// 构建统一的条目列表（按模式过滤）
 const entries = computed(() => {
   if (!data.value) return []
-  const list: Array<{ type: string; label: string; category: string; value: string }> = []
+  const list: Array<{ type: string; label: string; value: string }> = []
 
-  for (const ip of data.value.ipControl.whitelist) {
-    list.push({ type: 'whitelist', label: '白名单', category: 'IP', value: ip })
-  }
-  for (const ip of data.value.ipControl.blacklist) {
-    list.push({ type: 'blacklist', label: '黑名单', category: 'IP', value: ip })
-  }
-  for (const c of data.value.geoControl.denyCountries) {
-    list.push({ type: 'denyCountry', label: '禁止国家', category: '地理位置', value: c })
-  }
-  for (const r of data.value.geoControl.denyRegions) {
-    list.push({ type: 'denyRegion', label: '禁止省份', category: '地理位置', value: r })
-  }
-  for (const c of data.value.geoControl.allowCountries) {
-    list.push({ type: 'allowCountry', label: '允许国家', category: '地理位置', value: c })
-  }
-  for (const r of data.value.geoControl.allowRegions) {
-    list.push({ type: 'allowRegion', label: '允许省份', category: '地理位置', value: r })
+  if (props.mode === 'ip') {
+    for (const ip of data.value.ipControl.whitelist) {
+      list.push({ type: 'whitelist', label: '白名单', value: ip })
+    }
+    for (const ip of data.value.ipControl.blacklist) {
+      list.push({ type: 'blacklist', label: '黑名单', value: ip })
+    }
+  } else {
+    for (const c of data.value.geoControl.denyCountries) {
+      list.push({ type: 'denyCountry', label: '禁止国家', value: c })
+    }
+    for (const r of data.value.geoControl.denyRegions) {
+      list.push({ type: 'denyRegion', label: '禁止省份', value: r })
+    }
+    for (const c of data.value.geoControl.allowCountries) {
+      list.push({ type: 'allowCountry', label: '允许国家', value: c })
+    }
+    for (const r of data.value.geoControl.allowRegions) {
+      list.push({ type: 'allowRegion', label: '允许省份', value: r })
+    }
   }
 
   return list
+})
+
+// 添加选项
+const addMenuOptions = computed(() => {
+  if (props.mode === 'ip') {
+    return [
+      { type: 'whitelist' as const, label: 'IP 白名单' },
+      { type: 'blacklist' as const, label: 'IP 黑名单' },
+    ]
+  } else {
+    return [
+      { type: 'denyCountry' as const, label: '禁止国家' },
+      { type: 'denyRegion' as const, label: '禁止省份' },
+      { type: 'allowCountry' as const, label: '允许国家' },
+      { type: 'allowRegion' as const, label: '允许省份' },
+    ]
+  }
 })
 
 // 加载
@@ -72,26 +109,21 @@ const loadData = async () => {
   }
 }
 
-// 切换 IP 控制
-const toggleIpControl = async () => {
+// 切换
+const toggle = async () => {
   try {
-    const res = await accessControlApi.toggleIpControl() as unknown as { success: boolean; enabled: boolean }
-    if (res?.success) {
-      if (data.value) data.value.ipControl.enabled = res.enabled
-      showSuccess(res.enabled ? 'IP 访问控制已启用' : 'IP 访问控制已禁用')
-    }
-  } catch {
-    showError('操作失败')
-  }
-}
-
-// 切换 Geo 控制
-const toggleGeoControl = async () => {
-  try {
-    const res = await accessControlApi.toggleGeoControl() as unknown as { success: boolean; enabled: boolean }
-    if (res?.success) {
-      if (data.value) data.value.geoControl.enabled = res.enabled
-      showSuccess(res.enabled ? '地理位置访问控制已启用' : '地理位置访问控制已禁用')
+    if (props.mode === 'ip') {
+      const res = await accessControlApi.toggleIpControl() as unknown as { success: boolean; enabled: boolean }
+      if (res?.success) {
+        if (data.value) data.value.ipControl.enabled = res.enabled
+        showSuccess(res.enabled ? 'IP 访问控制已启用' : 'IP 访问控制已禁用')
+      }
+    } else {
+      const res = await accessControlApi.toggleGeoControl() as unknown as { success: boolean; enabled: boolean }
+      if (res?.success) {
+        if (data.value) data.value.geoControl.enabled = res.enabled
+        showSuccess(res.enabled ? '地理位置访问控制已启用' : '地理位置访问控制已禁用')
+      }
     }
   } catch {
     showError('操作失败')
@@ -211,54 +243,51 @@ onMounted(() => {
 
 <template>
   <div class="card">
-    <!-- 标题 -->
+    <!-- 标题栏 -->
     <div class="flex items-center justify-between mb-4 pb-3 border-b border-dark-border">
       <div class="flex items-center gap-3">
-        <h2 class="text-base font-semibold text-gray-100">IP / 地理位置访问控制</h2>
-        <span class="text-xs text-gray-500">
-          白名单 {{ whiteCount }} / 黑名单 {{ blackCount }} / 地理规则 {{ geoEntryCount }} /
-          累计拦截 {{ formatHit((data?.stats.blacklistBlockCount ?? 0) + (data?.stats.geoBlockCount ?? 0)) }}
-        </span>
+        <h2 class="text-base font-semibold text-gray-100">{{ title }}</h2>
+        <span class="text-xs text-gray-500">{{ subtitle }}</span>
       </div>
-      <div class="relative group">
-        <button class="btn btn-sm btn-primary flex items-center gap-1.5">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-          </svg>
-          添加
-        </button>
-        <div class="absolute right-0 top-full mt-1 w-40 bg-dark-card border border-dark-border rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
-          <button @click="openAdd('whitelist')" class="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-white/5 rounded-t-lg">IP 白名单</button>
-          <button @click="openAdd('blacklist')" class="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-white/5">IP 黑名单</button>
-          <div class="border-t border-dark-border"></div>
-          <button @click="openAdd('denyCountry')" class="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-white/5">禁止国家</button>
-          <button @click="openAdd('denyRegion')" class="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-white/5">禁止省份</button>
-          <button @click="openAdd('allowCountry')" class="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-white/5">允许国家</button>
-          <button @click="openAdd('allowRegion')" class="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-white/5 rounded-b-lg">允许省份</button>
+      <div class="flex items-center gap-3">
+        <!-- 添加按钮 -->
+        <div class="relative group">
+          <button class="btn btn-sm btn-primary flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            </svg>
+            添加
+          </button>
+          <div class="absolute right-0 top-full mt-1 w-40 bg-dark-card border border-dark-border rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
+            <button
+              v-for="(opt, idx) in addMenuOptions"
+              :key="opt.type"
+              @click="openAdd(opt.type)"
+              :class="[
+                'w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-white/5',
+                idx === 0 ? 'rounded-t-lg' : '',
+                idx === addMenuOptions.length - 1 ? 'rounded-b-lg' : '',
+              ]"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
         </div>
-      </div>
-    </div>
-
-    <!-- 开关 -->
-    <div class="grid grid-cols-2 gap-3 mb-4" v-if="data">
-      <div class="p-3 rounded-lg bg-dark-bg flex items-center justify-between">
-        <div>
-          <div class="text-sm text-gray-200 font-medium">IP 访问控制</div>
-          <div class="text-xs text-gray-500">启用 IP 黑名单拦截</div>
-        </div>
-        <button @click="toggleIpControl"
-          :class="['relative w-10 h-5 rounded-full transition-colors flex-shrink-0', data.ipControl.enabled ? 'bg-primary-500' : 'bg-gray-600']">
-          <span :class="['absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', data.ipControl.enabled ? 'left-5' : 'left-0.5']" />
-        </button>
-      </div>
-      <div class="p-3 rounded-lg bg-dark-bg flex items-center justify-between">
-        <div>
-          <div class="text-sm text-gray-200 font-medium">地理位置控制</div>
-          <div class="text-xs text-gray-500">模式: {{ data.geoControl.mode === 'Deny' ? '禁止' : '允许' }}</div>
-        </div>
-        <button @click="toggleGeoControl"
-          :class="['relative w-10 h-5 rounded-full transition-colors flex-shrink-0', data.geoControl.enabled ? 'bg-primary-500' : 'bg-gray-600']">
-          <span :class="['absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform', data.geoControl.enabled ? 'left-5' : 'left-0.5']" />
+        <!-- 开关 -->
+        <button
+          v-if="data"
+          @click="toggle"
+          :class="[
+            'relative w-12 h-6 rounded-full transition-colors flex-shrink-0',
+            isEnabled ? 'bg-primary-500' : 'bg-gray-600'
+          ]"
+        >
+          <span
+            :class="[
+              'absolute top-1 w-4 h-4 rounded-full bg-white transition-transform',
+              isEnabled ? 'left-7' : 'left-1'
+            ]"
+          />
         </button>
       </div>
     </div>
@@ -271,7 +300,7 @@ onMounted(() => {
     <!-- 条目列表 -->
     <template v-else-if="data">
       <div v-if="entries.length === 0" class="text-center py-8 text-gray-500">
-        <p class="text-sm">暂无 IP 或地理位置规则</p>
+        <p class="text-sm">暂无{{ mode === 'ip' ? 'IP 访问控制' : '地理位置' }}规则</p>
       </div>
 
       <div v-else class="overflow-x-auto -mx-5 -mb-5">
@@ -279,7 +308,6 @@ onMounted(() => {
           <thead>
             <tr class="border-t border-dark-border text-left text-xs text-gray-500">
               <th class="px-5 py-2.5 w-24">类型</th>
-              <th class="px-4 py-2.5 w-24">分类</th>
               <th class="px-4 py-2.5">值</th>
               <th class="px-5 py-2.5 w-20">操作</th>
             </tr>
@@ -292,7 +320,6 @@ onMounted(() => {
                   {{ entry.label }}
                 </span>
               </td>
-              <td class="px-4 py-2.5 text-gray-500 text-xs">{{ entry.category }}</td>
               <td class="px-4 py-2.5 text-gray-200 font-mono text-sm">{{ entry.value }}</td>
               <td class="px-5 py-2.5">
                 <button @click="confirmDelete(entry)"

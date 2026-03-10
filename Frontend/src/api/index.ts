@@ -818,6 +818,8 @@ export interface DashboardResponse {
   wafRules: {
     args: string[]
     post: string[]
+    argsFileCount: number
+    postFileCount: number
   }
   ccRules: Array<{ path: string; period: number; limitNum: number; fbTime: number }>
   blockedIps: Array<{ ip: string; type: string; reason: string; remainingSeconds?: number }>

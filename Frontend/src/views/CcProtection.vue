@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { advancedCcApi } from '@/api'
 import CcRuleEditor from '@/components/cc/CcRuleEditor.vue'
 import { useToast } from '@/composables/useToast'
@@ -18,20 +18,12 @@ const ruleTypeLabels: Record<CcRuleType, string> = {
 const loading = ref(false)
 const rules = ref<AdvancedCcRule[]>([])
 
-// 按类型分组的规则
-const rulesByType = computed(() => {
-  const grouped: Record<CcRuleType, AdvancedCcRule[]> = {
-    FrequentAccess: [],
-    FrequentAttack: [],
-    FrequentError: [],
-  }
-  for (const rule of rules.value) {
-    if (grouped[rule.type]) {
-      grouped[rule.type].push(rule)
-    }
-  }
-  return grouped
-})
+// 规则类型样式
+const ruleTypeColors: Record<CcRuleType, string> = {
+  FrequentAccess: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  FrequentAttack: 'bg-red-500/15 text-red-400 border-red-500/30',
+  FrequentError: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
+}
 
 // 编辑器状态
 const showEditor = ref(false)
@@ -163,75 +155,77 @@ onUnmounted(() => {
 
 <template>
   <div class="space-y-6">
-    <!-- 各类型规则列表 -->
-    <template v-for="type in Object.keys(rulesByType) as CcRuleType[]" :key="type">
-      <div class="card">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-medium text-gray-100">{{ ruleTypeLabels[type] }}</h2>
-          <button @click="openAddDialog" class="btn btn-sm btn-secondary flex items-center gap-1">
-            添加规则 
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-            </svg>
-          </button>
+    <div class="card">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-medium text-gray-100">CC 防护规则</h2>
+        <button @click="openAddDialog" class="btn btn-sm btn-secondary flex items-center gap-1">
+          添加规则
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="space-y-3">
+        <!-- 规则列表 -->
+        <div
+          v-for="rule in rules"
+          :key="rule.id"
+          class="flex items-center justify-between p-4 bg-dark-card-hover rounded-lg"
+        >
+          <div class="flex items-center gap-4">
+            <!-- 启用开关 -->
+            <button
+              @click="toggleRule(rule)"
+              :class="[
+                'relative w-12 h-6 rounded-full transition-colors flex-shrink-0',
+                rule.enabled ? 'bg-primary-500' : 'bg-gray-600'
+              ]"
+            >
+              <span
+                :class="[
+                  'absolute top-1 w-4 h-4 rounded-full bg-white transition-transform',
+                  rule.enabled ? 'left-7' : 'left-1'
+                ]"
+              />
+            </button>
+
+            <div>
+              <div class="flex items-center gap-2">
+                <h3 class="font-medium text-gray-200">{{ rule.name }}</h3>
+                <span :class="['px-2 py-0.5 rounded text-xs border', ruleTypeColors[rule.type]]">
+                  {{ ruleTypeLabels[rule.type] }}
+                </span>
+              </div>
+              <p class="text-sm text-gray-500 mt-1">{{ formatRuleDescription(rule) }}</p>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-3 flex-shrink-0">
+            <button
+              @click="openEditDialog(rule)"
+              class="text-sm text-primary-400 hover:text-primary-300"
+            >
+              编辑
+            </button>
+            <button
+              @click="deleteRule(rule)"
+              class="text-sm text-red-400 hover:text-red-300"
+            >
+              删除
+            </button>
+          </div>
         </div>
 
-        <div class="space-y-3">
-          <!-- 规则列表 -->
-          <div
-            v-for="rule in rulesByType[type]"
-            :key="rule.id"
-            class="flex items-center justify-between p-4 bg-dark-card-hover rounded-lg"
-          >
-            <div class="flex items-center gap-4">
-              <!-- 启用开关 -->
-              <button
-                @click="toggleRule(rule)"
-                :class="[
-                  'relative w-12 h-6 rounded-full transition-colors',
-                  rule.enabled ? 'bg-primary-500' : 'bg-gray-600'
-                ]"
-              >
-                <span
-                  :class="[
-                    'absolute top-1 w-4 h-4 rounded-full bg-white transition-transform',
-                    rule.enabled ? 'left-7' : 'left-1'
-                  ]"
-                />
-              </button>
-
-              <div>
-                <h3 class="font-medium text-gray-200">{{ rule.name }}</h3>
-                <p class="text-sm text-gray-500 mt-1">{{ formatRuleDescription(rule) }}</p>
-              </div>
-            </div>
-
-            <div class="flex items-center gap-3">
-              <button
-                @click="openEditDialog(rule)"
-                class="text-sm text-primary-400 hover:text-primary-300"
-              >
-                编辑
-              </button>
-              <button
-                @click="deleteRule(rule)"
-                class="text-sm text-red-400 hover:text-red-300"
-              >
-                删除
-              </button>
-            </div>
-          </div>
-
-          <!-- 空状态 -->
-          <div
-            v-if="rulesByType[type].length === 0"
-            class="text-center py-8 text-gray-500"
-          >
-            暂无 {{ ruleTypeLabels[type] }} 规则
-          </div>
+        <!-- 空状态 -->
+        <div
+          v-if="rules.length === 0"
+          class="text-center py-8 text-gray-500"
+        >
+          暂无 CC 防护规则
         </div>
       </div>
-    </template>
+    </div>
 
     <!-- 规则编辑器 -->
     <CcRuleEditor
