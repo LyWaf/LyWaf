@@ -251,7 +251,6 @@ public class TrafficStatistic
     {
         lock (_lock)
         {
-            TotalRequests++;
             InterceptCount++;
             UniqueIps.Add(clientIp);
             

@@ -21,6 +21,10 @@ public class RuntimeLogService
     /// <summary>进程启动时间</summary>
     private readonly DateTime _startTime;
 
+    /// <summary>恢复后的基线值（用于计算当次运行的增量）</summary>
+    private long _baselineTotalRequests;
+    private long _baselineInterceptCount;
+
     public RuntimeLogService(IDuckDbService db, IOptions<DuckDbOptions> options)
     {
         _db = db;
@@ -70,6 +74,30 @@ public class RuntimeLogService
     }
 
     /// <summary>
+    /// 捕获恢复后的基线值（在 StatisticRecoveryService 恢复完成后调用）
+    /// 后续 shutdown 时用当前值减去基线，得到当次运行的增量
+    /// </summary>
+    public void CaptureBaseline()
+    {
+        try
+        {
+            var trafficSnapshot = SharedData.Traffic.GetSnapshot();
+            var securitySnapshot = SharedData.Security.GetSnapshot();
+
+            _baselineTotalRequests = trafficSnapshot.TotalRequests;
+            _baselineInterceptCount = securitySnapshot.WafInterceptCount + securitySnapshot.BlacklistBlockCount
+                + securitySnapshot.CcAttackCount + securitySnapshot.CrawlerDetectCount
+                + securitySnapshot.GeoBlockCount + securitySnapshot.RateLimitCount;
+
+            _logger.Info("运行日志：已捕获基线 (请求={Req}, 拦截={Int})", _baselineTotalRequests, _baselineInterceptCount);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn(ex, "捕获基线失败");
+        }
+    }
+
+    /// <summary>
     /// 记录进程正常关闭（在 ApplicationStopping 中调用）
     /// </summary>
     public void RecordShutdown()
@@ -91,13 +119,15 @@ public class RuntimeLogService
             var gen1 = GC.CollectionCount(1);
             var gen2 = GC.CollectionCount(2);
 
-            // 业务统计
+            // 业务统计（减去恢复基线，得到当次运行的增量）
             var trafficSnapshot = SharedData.Traffic.GetSnapshot();
             var securitySnapshot = SharedData.Security.GetSnapshot();
-            var totalRequests = trafficSnapshot.TotalRequests;
-            var totalIntercepts = securitySnapshot.WafInterceptCount + securitySnapshot.BlacklistBlockCount
+            var totalRequests = Math.Max(0, trafficSnapshot.TotalRequests - _baselineTotalRequests);
+            var totalIntercepts = Math.Max(0,
+                securitySnapshot.WafInterceptCount + securitySnapshot.BlacklistBlockCount
                 + securitySnapshot.CcAttackCount + securitySnapshot.CrawlerDetectCount
-                + securitySnapshot.GeoBlockCount + securitySnapshot.RateLimitCount;
+                + securitySnapshot.GeoBlockCount + securitySnapshot.RateLimitCount
+                - _baselineInterceptCount);
 
             var conn = _db.GetConnection();
             using var cmd = conn.CreateCommand();

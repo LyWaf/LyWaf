@@ -30,9 +30,6 @@ public class PortMatcherPolicy : MatcherPolicy, IEndpointSelectorPolicy
     {
         var requestPort = httpContext.Connection.LocalPort;
         var requestHost = httpContext.Request.Host.Host;
-        
-        _logger.Debug("PortMatcherPolicy.ApplyAsync: 请求 {Host}:{Port}, 候选端点数: {Count}", 
-            requestHost, requestPort, candidates.Count);
 
         // 记录匹配的端点
         var specificMatches = new List<int>(); // 精确匹配（带端口）
@@ -58,9 +55,6 @@ public class PortMatcherPolicy : MatcherPolicy, IEndpointSelectorPolicy
             var hosts = routeModel.Config.Match.Hosts;
             var routeId = routeModel.Config.RouteId;
             
-            _logger.Trace("PortMatcherPolicy: 检查路由 {RouteId}, Hosts={Hosts}", 
-                routeId, hosts != null ? string.Join(",", hosts) : "null");
-            
             if (hosts == null || hosts.Count == 0)
             {
                 // 没有 Hosts 限制，作为通配符匹配
@@ -73,19 +67,15 @@ public class PortMatcherPolicy : MatcherPolicy, IEndpointSelectorPolicy
             if (matchResult == MatchResult.Specific)
             {
                 specificMatches.Add(i);
-                _logger.Debug("PortMatcherPolicy: 精确匹配路由 {RouteId}", routeId);
             }
             else if (matchResult == MatchResult.Wildcard)
             {
                 wildcardMatches.Add(i);
-                _logger.Debug("PortMatcherPolicy: 通配符匹配路由 {RouteId}", routeId);
             }
             else
             {
                 // 不匹配，标记为无效
                 candidates.SetValidity(i, false);
-                _logger.Debug("PortMatcherPolicy: 排除路由 {RouteId}, Hosts={Hosts}, 请求端口={Port}", 
-                    routeId, string.Join(",", hosts), requestPort);
             }
         }
 
@@ -95,9 +85,6 @@ public class PortMatcherPolicy : MatcherPolicy, IEndpointSelectorPolicy
             foreach (var idx in wildcardMatches)
             {
                 candidates.SetValidity(idx, false);
-                var routeModel = candidates[idx].Endpoint.Metadata.GetMetadata<RouteModel>();
-                _logger.Debug("PortMatcherPolicy: 排除通配符路由 {RouteId}，因为有精确匹配", 
-                    routeModel?.Config.RouteId);
             }
         }
         

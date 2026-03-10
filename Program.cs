@@ -1242,17 +1242,6 @@ public class Program
         // 注册控制台 API
         app.MapControlApi(wafInfos);
 
-        // 记录进程启动到运行日志
-        try
-        {
-            var runtimeLog = app.Services.GetService<LyWaf.Services.DuckDb.RuntimeLogService>();
-            runtimeLog?.RecordStartup();
-        }
-        catch (Exception ex)
-        {
-            _logger.Warn(ex, "记录运行日志启动失败");
-        }
-
         // 启用 WebSocket 支持（使 context.WebSockets.IsWebSocketRequest 可用）
         app.UseWebSockets();
 

@@ -538,14 +538,14 @@ onMounted(() => {
             <table class="w-full text-sm">
               <thead>
                 <tr class="text-left text-gray-400 border-b border-dark-border">
-                  <th class="pb-3 font-medium">启动时间</th>
-                  <th class="pb-3 font-medium">停止时间</th>
-                  <th class="pb-3 font-medium">状态</th>
-                  <th class="pb-3 font-medium">运行时长</th>
-                  <th class="pb-3 font-medium text-right">峰值内存</th>
-                  <th class="pb-3 font-medium text-right">总请求</th>
-                  <th class="pb-3 font-medium text-right">总拦截</th>
-                  <th class="pb-3 font-medium">PID</th>
+                  <th class="pb-3 font-medium min-w-[140px]">启动时间</th>
+                  <th class="pb-3 font-medium min-w-[140px]">停止时间</th>
+                  <th class="pb-3 font-medium min-w-[80px]">状态</th>
+                  <th class="pb-3 font-medium min-w-[100px]">运行时长</th>
+                  <th class="pb-3 font-medium text-right min-w-[90px]">峰值内存</th>
+                  <th class="pb-3 font-medium text-right min-w-[80px]">当次请求</th>
+                  <th class="pb-3 font-medium text-right min-w-[80px] pr-6">当次拦截</th>
+                  <th class="pb-3 font-medium min-w-[70px] pl-6">PID</th>
                 </tr>
               </thead>
               <tbody>
@@ -569,11 +569,11 @@ onMounted(() => {
                   <td class="py-3 text-gray-400 text-sm text-right whitespace-nowrap">
                     {{ entry.totalRequests > 0 ? formatNum(entry.totalRequests) : '-' }}
                   </td>
-                  <td class="py-3 text-sm text-right whitespace-nowrap">
+                  <td class="py-3 text-sm text-right whitespace-nowrap pr-6">
                     <span v-if="entry.totalIntercepts > 0" class="text-red-400">{{ formatNum(entry.totalIntercepts) }}</span>
                     <span v-else class="text-gray-500">-</span>
                   </td>
-                  <td class="py-3 text-gray-500 font-mono text-xs">{{ entry.processId || '-' }}</td>
+                  <td class="py-3 text-gray-500 font-mono text-xs pl-6">{{ entry.processId || '-' }}</td>
                 </tr>
               </tbody>
             </table>

@@ -12,10 +12,12 @@ public class StatisticRecoveryService : IHostedService
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly IDuckDbService _db;
+    private readonly RuntimeLogService? _runtimeLog;
 
-    public StatisticRecoveryService(IDuckDbService db)
+    public StatisticRecoveryService(IDuckDbService db, RuntimeLogService? runtimeLog = null)
     {
         _db = db;
+        _runtimeLog = runtimeLog;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -27,6 +29,9 @@ public class StatisticRecoveryService : IHostedService
             // 先初始化 Schema（确保表存在）
             await _db.InitializeSchemaAsync();
 
+            // Schema 就绪后立即记录启动（必须在恢复之前，以便 MarkAbnormalExits 正确标记）
+            _runtimeLog?.RecordStartup();
+
             RecoverTraffic();
             RecoverSecurityCounters();
             RecoverSecurityTimeSlots();
@@ -36,6 +41,9 @@ public class StatisticRecoveryService : IHostedService
             RecoverEndpointStats();
             RecoverInterceptEvents();
             _logger.Info("DuckDB 数据恢复完成");
+
+            // 恢复完成后，捕获基线值（用于计算当次运行增量）
+            _runtimeLog?.CaptureBaseline();
         }
         catch (Exception ex)
         {
