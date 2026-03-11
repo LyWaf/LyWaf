@@ -124,6 +124,55 @@ const onSearchEnter = () => {
   loadLogEntries()
 }
 
+// ==================== 导出 CSV ====================
+const exportModalOpen = ref(false)
+const exporting = ref(false)
+
+const exportCsv = async () => {
+  if (!selectedFile.value) return
+  exporting.value = true
+  try {
+    const res = await interceptLogApi.getEntries({
+      file: selectedFile.value,
+      offset: 0,
+      limit: 10000,
+      search: logSearch.value || undefined,
+      startTime: logStartTime.value || undefined,
+      endTime: logEndTime.value || undefined,
+    }) as any
+    if (!res?.success || !res.entries?.length) {
+      showError('没有可导出的数据')
+      return
+    }
+    const entries: InterceptLogEntry[] = res.entries
+    const header = ['动作', '方法', '请求地址', '拦截原因', '源IP', '状态码', '耗时', '时间']
+    const rows = entries.map(e => [
+      e.statusCode === 403 ? '已拦截' : '观察',
+      e.method || '',
+      `${(e.scheme || 'http')}://${e.host || ''}${e.url || ''}`,
+      e.reason || '',
+      e.clientIp || '',
+      String(e.statusCode || ''),
+      e.duration || '',
+      e.time || '',
+    ])
+    const csvContent = '\uFEFF' + [header, ...rows].map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(',')).join('\n')
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `intercept_${selectedFile.value.replace('.log', '')}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+    showSuccess(`已导出 ${entries.length} 条记录`)
+    exportModalOpen.value = false
+  } catch {
+    showError('导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
 // ==================== 详情弹窗 ====================
 const detailEntry = ref<InterceptLogEntry | null>(null)
 const detailTab = ref<'request' | 'response'>('request')
@@ -413,6 +462,12 @@ const formatNum = (n: number): string => {
             </svg>
             刷新
           </button>
+          <button @click="exportModalOpen = true" class="btn btn-sm btn-secondary flex items-center gap-1.5" :disabled="logTotal === 0">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            导出
+          </button>
           <div class="ml-auto text-xs text-gray-500" v-if="logTotal > 0">
             共 {{ logTotal }} 条记录
           </div>
@@ -615,6 +670,33 @@ const formatNum = (n: number): string => {
           <!-- 底部 -->
           <div class="flex items-center justify-end px-6 py-3 border-t border-dark-border">
             <button @click="closeDetail" class="btn btn-sm btn-secondary">关闭</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 导出确认弹窗 -->
+    <Teleport to="body">
+      <div v-if="exportModalOpen" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50" @click.self="exportModalOpen = false">
+        <div class="bg-dark-card border border-dark-border rounded-lg shadow-2xl w-[420px] p-6">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-base font-bold text-gray-100 flex items-center gap-2">
+              导出日志
+              <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </h3>
+            <button @click="exportModalOpen = false" class="text-gray-500 hover:text-gray-300">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
+          <p class="text-sm text-gray-400 mb-6">将当前筛选结果的前 10000 条日志内容导出为 .csv 文件</p>
+          <div class="flex items-center justify-end gap-3">
+            <button @click="exportModalOpen = false" class="btn btn-sm btn-secondary">取消</button>
+            <button @click="exportCsv" class="btn btn-sm btn-primary flex items-center gap-1.5" :disabled="exporting">
+              <span v-if="exporting" class="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+              {{ exporting ? '导出中...' : '确认导出' }}
+            </button>
           </div>
         </div>
       </div>

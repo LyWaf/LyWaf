@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import StatCard from '@/components/common/StatCard.vue'
 import { securityApi } from '@/api'
@@ -52,6 +52,7 @@ const loadData = async () => {
   try {
     const data = await securityApi.getStats(selectedHours.value)
     stats.value = data
+    await nextTick()
     updateCharts()
   } catch (error) {
     console.error('加载安全统计失败:', error)
@@ -67,8 +68,8 @@ const updateCharts = () => {
   eventTypes.forEach(eventType => {
     const canvasId = `chart-${eventType.key}`
     const canvas = document.getElementById(canvasId) as HTMLCanvasElement
-    if (!canvas) return
-    
+    if (!canvas || !canvas.getContext('2d')) return
+
     // 销毁旧图表
     if (charts.value[eventType.key]) {
       charts.value[eventType.key]?.destroy()
