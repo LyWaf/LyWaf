@@ -99,6 +99,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '统计配置', icon: '📈' }
   },
   {
+    path: '/param-config',
+    name: 'ParamConfig',
+    component: () => import('@/views/ParamConfig.vue'),
+    meta: { title: '参数配置', icon: '🔧' }
+  },
+  {
     path: '/error-templates',
     name: 'ErrorTemplates',
     component: () => import('@/views/ErrorTemplates.vue'),

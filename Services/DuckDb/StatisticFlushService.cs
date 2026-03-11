@@ -194,20 +194,28 @@ public class StatisticFlushService : BackgroundService
     {
         try
         {
-            var topSources = SharedData.Security.GetTopAttackSources(1000);
-            if (topSources.Count == 0) return;
+            var typedSources = SharedData.Security.GetAllTypedAttackSources(200);
+            if (typedSources.Count == 0) return;
 
             var conn = _db.GetConnection();
-            foreach (var source in topSources)
+
+            // 清空旧数据，重新写入
+            using (var delCmd = conn.CreateCommand())
+            {
+                delCmd.CommandText = "DELETE FROM security_attack_sources";
+                delCmd.ExecuteNonQuery();
+            }
+
+            foreach (var (eventType, ip, count) in typedSources)
             {
                 using var cmd = conn.CreateCommand();
-                cmd.CommandText = @"INSERT OR REPLACE INTO security_attack_sources
+                cmd.CommandText = @"INSERT INTO security_attack_sources
                     (ip, event_type, hit_count, last_attack_time)
                     VALUES ($1, $2, $3, $4)";
-                cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(source.Ip));
-                cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter((int)source.LastEventType));
-                cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(source.Count));
-                cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(source.LastAttackTime));
+                cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(ip));
+                cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter((int)eventType));
+                cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(count));
+                cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(DateTime.UtcNow));
                 cmd.ExecuteNonQuery();
             }
         }

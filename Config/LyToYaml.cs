@@ -2124,6 +2124,14 @@ public static class LyToAppSettingsConverter
                 ProcessStatisticConfig(value, result);
                 break;
 
+            case "param":
+            case "params":
+            case "paramoptions":
+            case "param_options":
+                // 参数配置
+                ProcessParamConfig(value, result);
+                break;
+
             default:
                 // 其他配置直接映射（首字母大写）
                 var normalizedKey = char.ToUpper(key[0]) + key[1..];
@@ -3467,6 +3475,36 @@ public static class LyToAppSettingsConverter
         }
 
         result["Protect"] = protectDict;
+    }
+
+    /// <summary>
+    /// 处理 Param 块（参数配置）
+    /// <para>
+    /// config.ly 格式：
+    /// <code>
+    /// Param {
+    ///     IsFirstServer = true
+    /// }
+    /// </code>
+    /// </para>
+    /// </summary>
+    private static void ProcessParamConfig(object value, Dictionary<string, object> result)
+    {
+        if (value is not Dictionary<string, object> paramConfig)
+            return;
+
+        var paramDict = new Dictionary<string, object>();
+        foreach (var kv in paramConfig)
+        {
+            var normalizedKey = kv.Key.ToLower() switch
+            {
+                "isfirstserver" or "is_first_server" or "firstserver" or "first_server" => "IsFirstServer",
+                _ => char.ToUpper(kv.Key[0]) + kv.Key[1..],
+            };
+            paramDict[normalizedKey] = kv.Value;
+        }
+
+        result["Param"] = paramDict;
     }
 
     /// <summary>

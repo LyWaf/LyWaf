@@ -46,6 +46,14 @@ public class RequestLoggerPlugin : LyWafPluginBase
 
             var ctx = e.Context;
 
+            // 拦截日志（独立于正常请求日志，不受 MatchedRule 匹配结果影响）
+            if (ctx.Items.TryGetValue("RequestLogger.InterceptRule", out var ir) && ir is MatchRule interceptRule)
+            {
+                var interceptEntry = await BuildLogEntry(ctx, e.StatusCode, e.Duration, interceptRule, Options.MaxBodySize);
+                if (Options.LogToFile)
+                    await WriteToFileAsync(interceptEntry, interceptRule);
+            }
+
             // 从中间件获取匹配的规则，或重新查找
             var rule = ctx.Items.TryGetValue("RequestLogger.MatchedRule", out var r) && r is MatchRule mr
                 ? mr
@@ -65,14 +73,6 @@ public class RequestLoggerPlugin : LyWafPluginBase
             if (Options.LogToEvent)
             {
                 context.Logger.Info("{LogEntry}", logEntry.TrimEnd());
-            }
-
-            // 拦截日志（独立于正常请求日志，使用独立 Items 键避免冲突）
-            if (ctx.Items.TryGetValue("RequestLogger.InterceptRule", out var ir) && ir is MatchRule interceptRule)
-            {
-                var interceptEntry = await BuildLogEntry(ctx, e.StatusCode, e.Duration, interceptRule, Options.MaxBodySize);
-                if (Options.LogToFile)
-                    await WriteToFileAsync(interceptEntry, interceptRule);
             }
         });
 

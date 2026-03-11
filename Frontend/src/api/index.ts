@@ -529,6 +529,19 @@ export const configFileApi = {
     api.post<ConvertResponse>('/config/convert', { content }),
 }
 
+// ==================== 参数配置 API ====================
+
+export const paramApi = {
+  get: () =>
+    api.get<{ success: boolean; isFirstServer: boolean }>('/param'),
+
+  update: (data: { isFirstServer?: boolean }) =>
+    api.post<{ success: boolean; isFirstServer: boolean; message: string }>('/param', data),
+
+  getEnv: () =>
+    api.get<{ success: boolean; items: Array<{ key: string; value: string }>; total: number }>('/param/env'),
+}
+
 // ==================== 补丁 API ====================
 
 export const patchApi = {

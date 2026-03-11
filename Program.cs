@@ -36,6 +36,7 @@ using LyWaf.Services.Dns;
 using LyWaf.Services.ProxyServer;
 using LyWaf.Services.StreamServer;
 using LyWaf.Services.ABTest;
+using LyWaf.Services.Param;
 using LyWaf.Services.Captcha;
 using LyWaf.Services.WafRule;
 using LyWaf.Services.AuditLog;
@@ -1076,6 +1077,7 @@ public class Program
         builder.Services.Configure<ProxyServerOptions>(builder.Configuration.GetSection("ProxyServer"));
         builder.Services.Configure<StreamServerOptions>(builder.Configuration.GetSection("StreamServer"));
         builder.Services.Configure<ABTestOptions>(builder.Configuration.GetSection("ABTest"));
+        builder.Services.Configure<ParamOptions>(builder.Configuration.GetSection("Param"));
         builder.Services.Configure<LyWaf.Services.LyLog.LyLogOptions>(builder.Configuration.GetSection("LyLog"));
         builder.Services.Configure<LyWaf.Services.ErrorTemplate.ErrorTemplateOptions>(builder.Configuration.GetSection("ErrorTemplate"));
 
@@ -1226,6 +1228,14 @@ public class Program
             reverse.LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
         }
         var app = builder.Build();
+
+        // 同步 ParamOptions 到 SharedData
+        var paramOptions = app.Services.GetService<Microsoft.Extensions.Options.IOptionsMonitor<ParamOptions>>();
+        if (paramOptions != null)
+        {
+            SharedData.IsFirstServer = paramOptions.CurrentValue.IsFirstServer;
+            paramOptions.OnChange((opts, _) => SharedData.IsFirstServer = opts.IsFirstServer);
+        }
 
         // 初始化 ServiceLocator，确保自定义 DNS 等服务可以通过 ServiceLocator 获取
         ServiceLocator.Initialize(app.Services);

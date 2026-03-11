@@ -1,6 +1,7 @@
 
 using System.Security.AccessControl;
 using System.Text;
+using LyWaf.Shared;
 
 namespace LyWaf.Utils
 {
@@ -10,6 +11,12 @@ namespace LyWaf.Utils
 
         public static string GetClientIp(HttpRequest request)
         {
+            // 首台服务器模式：直接取连接 IP，忽略可被伪造的代理头
+            if (SharedData.IsFirstServer)
+            {
+                return request.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "";
+            }
+
             if (request.Headers.TryGetValue("X-Forwarded-For", out var val))
             {
                 var s = val.ToString().Split(",");

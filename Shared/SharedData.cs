@@ -48,6 +48,12 @@ public static class SharedData
     public static volatile bool RestartRequested = false;
 
     /// <summary>
+    /// 当前是否为首台服务器（直接面对客户端，不经过代理）
+    /// 为 true 时 GetClientIp 直接取连接 IP，忽略代理头
+    /// </summary>
+    public static volatile bool IsFirstServer = false;
+
+    /// <summary>
     /// IP 通用数据字典
     /// Key: IP地址
     /// Value: 任意对象数据

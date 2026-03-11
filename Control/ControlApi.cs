@@ -5915,6 +5915,56 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // =============== 参数配置 API ===============
+
+        app.MapGet("/api/param", (HttpContext ctx) =>
+        {
+            return Results.Json(new
+            {
+                success = true,
+                isFirstServer = SharedData.IsFirstServer,
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapPost("/api/param", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var body = await ctx.Request.ReadFromJsonAsync<Dictionary<string, System.Text.Json.JsonElement>>();
+                if (body == null)
+                    return Results.Json(new { success = false, message = "无效的请求体" }, statusCode: 400);
+
+                if (body.TryGetValue("isFirstServer", out var val))
+                {
+                    SharedData.IsFirstServer = val.GetBoolean();
+                }
+
+                return Results.Json(new
+                {
+                    success = true,
+                    isFirstServer = SharedData.IsFirstServer,
+                    message = "参数配置已更新"
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"更新失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapGet("/api/param/env", (HttpContext ctx) =>
+        {
+            var envVars = Environment.GetEnvironmentVariables();
+            var list = new List<object>();
+            foreach (System.Collections.DictionaryEntry entry in envVars)
+            {
+                list.Add(new { key = entry.Key?.ToString(), value = entry.Value?.ToString() });
+            }
+            list.Sort((a, b) => string.Compare(
+                ((dynamic)a).key, ((dynamic)b).key, StringComparison.OrdinalIgnoreCase));
+            return Results.Json(new { success = true, items = list, total = list.Count });
+        }).RequireHost($"*:{controlPort}");
+
         return app;
     }
 

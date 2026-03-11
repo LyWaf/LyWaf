@@ -161,25 +161,47 @@ public class StatisticRecoveryService : IHostedService
             var conn = _db.GetConnection();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = @"SELECT ip, event_type, hit_count, last_attack_time
-                FROM security_attack_sources ORDER BY hit_count DESC LIMIT 1000";
+                FROM security_attack_sources ORDER BY hit_count DESC LIMIT 5000";
             using var reader = cmd.ExecuteReader();
 
-            var sources = new List<AttackSourceStat>();
+            var typedSources = new List<(SecurityEventType EventType, string Ip, long Count)>();
+            var attackSources = new Dictionary<string, AttackSourceStat>();
+
             while (reader.Read())
             {
-                sources.Add(new AttackSourceStat
+                var ip = reader.GetString(0);
+                var eventType = (SecurityEventType)reader.GetInt32(1);
+                var count = reader.GetInt64(2);
+                var lastTime = reader.GetDateTime(3);
+
+                // 收集分类攻击源数据
+                typedSources.Add((eventType, ip, count));
+
+                // 聚合到总攻击源统计（同一IP多种类型的计数累加）
+                if (!attackSources.TryGetValue(ip, out var stat))
                 {
-                    Ip = reader.GetString(0),
-                    LastEventType = (SecurityEventType)reader.GetInt32(1),
-                    Count = reader.GetInt64(2),
-                    LastAttackTime = reader.GetDateTime(3),
-                });
+                    stat = new AttackSourceStat
+                    {
+                        Ip = ip,
+                        LastEventType = eventType,
+                        Count = 0,
+                        LastAttackTime = lastTime,
+                    };
+                    attackSources[ip] = stat;
+                }
+                stat.Count += count;
+                if (lastTime > stat.LastAttackTime)
+                {
+                    stat.LastAttackTime = lastTime;
+                    stat.LastEventType = eventType;
+                }
             }
 
-            if (sources.Count > 0)
+            if (typedSources.Count > 0)
             {
-                SharedData.Security.RestoreAttackSources(sources);
-                _logger.Info("攻击源统计已恢复: {} 个IP", sources.Count);
+                SharedData.Security.RestoreTypedAttackSources(typedSources);
+                SharedData.Security.RestoreAttackSources(attackSources.Values.ToList());
+                _logger.Info("攻击源统计已恢复: {} 个IP, {} 条分类记录", attackSources.Count, typedSources.Count);
             }
         }
         catch (Exception ex)

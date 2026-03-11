@@ -158,11 +158,11 @@ onUnmounted(() => {
     <div class="card">
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-medium text-gray-100">CC 防护规则</h2>
-        <button @click="openAddDialog" class="btn btn-sm btn-secondary flex items-center gap-1">
-          添加规则
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <button @click="openAddDialog" class="btn btn-sm btn-primary flex items-center gap-1.5">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
           </svg>
+          添加规则
         </button>
       </div>
 

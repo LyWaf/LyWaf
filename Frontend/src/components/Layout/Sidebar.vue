@@ -30,6 +30,7 @@ const menuItems: MenuItem[] = [
       { path: '/simpleres-config', name: '简单响应' },
       { path: '/waf-rules', name: 'WAF 规则' },
       { path: '/stats-config', name: '统计配置' },
+      { path: '/param-config', name: '参数配置' },
       { path: '/plugin-management', name: '插件管理' },
       { path: '/error-templates', name: '错误模板' },
     ]

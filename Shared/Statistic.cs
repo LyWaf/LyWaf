@@ -743,12 +743,31 @@ public class SecurityStatistic
         {
             if (!_typedAttackSources.TryGetValue(eventType, out var sources))
                 return new List<(string, long)>();
-            
+
             return sources
                 .OrderByDescending(x => x.Value)
                 .Take(topN)
                 .Select(x => (x.Key, x.Value))
                 .ToList();
+        }
+    }
+
+    /// <summary>
+    /// 获取所有分类攻击源数据（用于持久化刷写）
+    /// </summary>
+    public List<(SecurityEventType EventType, string Ip, long Count)> GetAllTypedAttackSources(int maxPerType = 200)
+    {
+        lock (_lock)
+        {
+            var result = new List<(SecurityEventType, string, long)>();
+            foreach (var (eventType, sources) in _typedAttackSources)
+            {
+                foreach (var (ip, count) in sources.OrderByDescending(x => x.Value).Take(maxPerType))
+                {
+                    result.Add((eventType, ip, count));
+                }
+            }
+            return result;
         }
     }
     
@@ -849,6 +868,27 @@ public class SecurityStatistic
             foreach (var source in sources)
             {
                 _attackSources[source.Ip] = source;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 从 DuckDB 恢复分类攻击源统计（启动时调用）
+    /// </summary>
+    public void RestoreTypedAttackSources(List<(SecurityEventType EventType, string Ip, long Count)> typedSources)
+    {
+        lock (_lock)
+        {
+            foreach (var dict in _typedAttackSources.Values)
+            {
+                dict.Clear();
+            }
+            foreach (var (eventType, ip, count) in typedSources)
+            {
+                if (_typedAttackSources.TryGetValue(eventType, out var sources))
+                {
+                    sources[ip] = count;
+                }
             }
         }
     }
