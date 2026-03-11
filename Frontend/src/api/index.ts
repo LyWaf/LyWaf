@@ -1077,17 +1077,20 @@ export interface InterceptLogEntry {
   duration?: string
   clientIp?: string
   scheme?: string
+  reason?: string
   raw: string
 }
 
 export const interceptLogApi = {
   listFiles: () => api.get<{ success: boolean; files: InterceptLogFile[] }>('/intercept-logs/files'),
-  getEntries: (params: { file: string; offset?: number; limit?: number; search?: string }) => {
+  getEntries: (params: { file: string; offset?: number; limit?: number; search?: string; startTime?: string; endTime?: string }) => {
     const query = new URLSearchParams()
     query.set('file', params.file)
     if (params.offset !== undefined) query.set('offset', params.offset.toString())
     if (params.limit !== undefined) query.set('limit', params.limit.toString())
     if (params.search) query.set('search', params.search)
+    if (params.startTime) query.set('startTime', params.startTime)
+    if (params.endTime) query.set('endTime', params.endTime)
     return api.get<{ success: boolean; entries: InterceptLogEntry[]; total: number; offset: number; limit: number; fileName: string }>(`/intercept-logs/entries?${query.toString()}`)
   },
 }

@@ -19,6 +19,12 @@ const filterMethod = ref('')
 const filterBackend = ref('')
 const sortField = ref<keyof ApiTimingStat>('requestCount')
 const sortOrder = ref<'asc' | 'desc'>('desc')
+const filterRequestOp = ref<'>' | '<'>('>')
+const filterRequestVal = ref('')
+const filterAvgTimeOp = ref<'>' | '<'>('>')
+const filterAvgTimeVal = ref('')
+const toggleRequestOp = () => { filterRequestOp.value = filterRequestOp.value === '>' ? '<' : '>' }
+const toggleAvgTimeOp = () => { filterAvgTimeOp.value = filterAvgTimeOp.value === '>' ? '<' : '>' }
 
 // 方法列表
 const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD']
@@ -43,7 +49,25 @@ const filteredItems = computed(() => {
   if (filterBackend.value) {
     result = result.filter(item => item.backend === filterBackend.value)
   }
-  
+
+  if (filterRequestVal.value) {
+    const val = parseFloat(filterRequestVal.value)
+    if (!isNaN(val)) {
+      result = result.filter(item =>
+        filterRequestOp.value === '>' ? item.requestCount > val : item.requestCount < val
+      )
+    }
+  }
+
+  if (filterAvgTimeVal.value) {
+    const val = parseFloat(filterAvgTimeVal.value)
+    if (!isNaN(val)) {
+      result = result.filter(item =>
+        filterAvgTimeOp.value === '>' ? item.avgTotalTime > val : item.avgTotalTime < val
+      )
+    }
+  }
+
   // 排序
   result.sort((a, b) => {
     const aVal = a[sortField.value] as number
@@ -245,6 +269,16 @@ onUnmounted(() => {
           {{ formatBackend(backend) }}
         </option>
       </select>
+      <div class="flex items-center gap-1.5">
+        <span class="text-xs text-gray-500 whitespace-nowrap">请求数</span>
+        <button @click="toggleRequestOp" class="btn btn-sm btn-secondary w-8 text-center !px-0 font-mono">{{ filterRequestOp }}</button>
+        <input v-model="filterRequestVal" type="text" inputmode="numeric" class="input w-[72px] text-center" placeholder="数量" />
+      </div>
+      <div class="flex items-center gap-1.5">
+        <span class="text-xs text-gray-500 whitespace-nowrap">耗时ms</span>
+        <button @click="toggleAvgTimeOp" class="btn btn-sm btn-secondary w-8 text-center !px-0 font-mono">{{ filterAvgTimeOp }}</button>
+        <input v-model="filterAvgTimeVal" type="text" inputmode="numeric" class="input w-[72px] text-center" placeholder="毫秒" />
+      </div>
       <div class="flex-1"></div>
       <button @click="loadData" class="btn btn-sm btn-secondary" :disabled="loading">
         {{ loading ? '加载中...' : '刷新' }}

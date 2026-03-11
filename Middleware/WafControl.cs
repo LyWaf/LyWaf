@@ -62,9 +62,27 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             FilePrefix = "intercept",
             LogQueryString = true,
             LogRequestBody = true,
-            LogHeaders = false,
+            LogHeaders = true,
             LogResponseBody = false,
             LogDuration = false,
+        };
+        context.Items["RequestLogger.Reason"] = reason;
+    }
+
+    /// <summary>
+    /// 设置观察日志标记（记录 ResponseBody），让 RequestLoggerPlugin 在 RequestCompletedEvent 中记录
+    /// </summary>
+    private static void SetObserveLogMark(HttpContext context, string reason)
+    {
+        context.Items["RequestLogger.InterceptRule"] = new MatchRule
+        {
+            Host = "*",
+            FilePrefix = "intercept",
+            LogQueryString = true,
+            LogRequestBody = true,
+            LogHeaders = true,
+            LogResponseBody = true,
+            LogDuration = true,
         };
         context.Items["RequestLogger.Reason"] = reason;
     }
@@ -136,15 +154,16 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             var ruleResult = _wafRuleService.CheckRequest(context, clientIp);
             if (ruleResult.IsTriggered)
             {
+                var wafReason = $"WAF规则: {ruleResult.TriggeredRule?.Name}";
+                RecordWafHit(context, clientIp, wafReason);
                 if (ruleResult.Action != WafRuleAction.Observe)
                 {
-                    var wafReason = $"WAF规则: {ruleResult.TriggeredRule?.Name}";
-                    RecordWafHit(context, clientIp, wafReason);
                     SetInterceptLogMark(context, wafReason);
                     await _wafRuleService.ExecuteAction(context, ruleResult, clientIp);
                     return;
                 }
-                // Observe：仅记录，继续管道
+                // Observe：记录日志（含 ResponseBody），继续管道
+                SetObserveLogMark(context, wafReason);
                 await _wafRuleService.ExecuteAction(context, ruleResult, clientIp);
             }
 

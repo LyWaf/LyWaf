@@ -87,7 +87,8 @@ public static partial class LogUtil
     /// 分页读取日志条目（倒序：最新在前，支持关键字搜索）
     /// </summary>
     public static async Task<(List<LogEntry> entries, int total)> ParseLogFileAsync(
-        string filePath, int offset = 0, int limit = 20, string? search = null)
+        string filePath, int offset = 0, int limit = 20, string? search = null,
+        DateTime? startTime = null, DateTime? endTime = null)
     {
         if (!File.Exists(filePath))
             return ([], 0);
@@ -111,6 +112,16 @@ public static partial class LogUtil
             // 搜索过滤
             if (!string.IsNullOrEmpty(search) && !block.Contains(search, StringComparison.OrdinalIgnoreCase))
                 continue;
+
+            // 时间过滤
+            if (startTime.HasValue || endTime.HasValue)
+            {
+                if (DateTime.TryParse(time, out var entryTime))
+                {
+                    if (startTime.HasValue && entryTime < startTime.Value) continue;
+                    if (endTime.HasValue && entryTime > endTime.Value) continue;
+                }
+            }
 
             allEntries.Add((i, time, block));
         }
@@ -180,6 +191,10 @@ public static partial class LogUtil
             else if (trimmed.StartsWith("Scheme:", StringComparison.OrdinalIgnoreCase))
             {
                 entry.Scheme = trimmed["Scheme:".Length..].Trim();
+            }
+            else if (trimmed.StartsWith("Reason:", StringComparison.OrdinalIgnoreCase))
+            {
+                entry.Reason = trimmed["Reason:".Length..].Trim();
             }
             else if (trimmed.StartsWith("Status:", StringComparison.OrdinalIgnoreCase))
             {
@@ -335,6 +350,8 @@ public class LogEntry
     public string? ClientIp { get; set; }
     /// <summary>请求协议（http/https）</summary>
     public string? Scheme { get; set; }
+    /// <summary>拦截原因</summary>
+    public string? Reason { get; set; }
     public string Raw { get; set; } = "";
 }
 

@@ -701,8 +701,10 @@ public static class ControlApi
             _ = int.TryParse(ctx.Request.Query["offset"].FirstOrDefault() ?? "0", out var offset);
             _ = int.TryParse(ctx.Request.Query["limit"].FirstOrDefault() ?? "20", out var limit);
             var search = ctx.Request.Query["search"].FirstOrDefault();
+            DateTime? startTime = DateTime.TryParse(ctx.Request.Query["startTime"].FirstOrDefault(), out var st2) ? st2 : null;
+            DateTime? endTime = DateTime.TryParse(ctx.Request.Query["endTime"].FirstOrDefault(), out var et2) ? et2 : null;
 
-            var (entries, total) = await LogUtil.ParseLogFileAsync(filePath, offset, Math.Clamp(limit, 1, 100), search);
+            var (entries, total) = await LogUtil.ParseLogFileAsync(filePath, offset, Math.Clamp(limit, 1, 100), search, startTime, endTime);
             return Results.Json(new
             {
                 success = true,
@@ -5930,13 +5932,13 @@ public static class ControlApi
         {
             try
             {
-                var body = await ctx.Request.ReadFromJsonAsync<Dictionary<string, System.Text.Json.JsonElement>>();
+                var body = await ctx.Request.ReadFromJsonAsync<ParamUpdateRequest>();
                 if (body == null)
                     return Results.Json(new { success = false, message = "无效的请求体" }, statusCode: 400);
 
-                if (body.TryGetValue("isFirstServer", out var val))
+                if (body.IsFirstServer.HasValue)
                 {
-                    SharedData.IsFirstServer = val.GetBoolean();
+                    SharedData.IsFirstServer = body.IsFirstServer.Value;
                 }
 
                 return Results.Json(new
@@ -7180,6 +7182,12 @@ public class SaveConfigRequest
 public class ConvertConfigRequest
 {
     public string Content { get; set; } = "";
+}
+
+public class ParamUpdateRequest
+{
+    [System.Text.Json.Serialization.JsonPropertyName("isFirstServer")]
+    public bool? IsFirstServer { get; set; }
 }
 
 // =============== IP 请求日志请求模型 ===============
