@@ -84,6 +84,7 @@ public class StatisticFlushService : BackgroundService
     private void FlushAll()
     {
         FlushTrafficSnapshot();
+        FlushQpsSnapshot();
         FlushSecurityCounters();
         FlushSecurityTimeSlots();
         FlushSecurityAttackSources();
@@ -121,6 +122,26 @@ public class StatisticFlushService : BackgroundService
         catch (Exception ex)
         {
             _logger.Error(ex, "刷写 traffic_snapshots 失败");
+        }
+    }
+
+    // ===================== QPS =====================
+
+    private void FlushQpsSnapshot()
+    {
+        try
+        {
+            var count = SharedData.Qps.FlushCount();
+            var conn = _db.GetConnection();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"INSERT INTO qps_snapshots (snapshot_time, request_count) VALUES ($1, $2)";
+            cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(DateTime.UtcNow));
+            cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(count));
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "刷写 qps_snapshots 失败");
         }
     }
 

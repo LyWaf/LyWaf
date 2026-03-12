@@ -17,6 +17,7 @@ public interface IDuckDbQueryService
     (List<InterceptEventRow> Items, int Total) GetInterceptEventsPaged(string? ipFilter, string? domainFilter, DateTime? start, DateTime? end, int offset, int limit);
     (List<AuditLogRow> Items, int Total) GetAuditLogsPaged(int offset, int limit);
     List<EndpointStatRow> GetEndpointStatsHistory(string statType, DateTime from, DateTime to, int topN = 50);
+    List<QpsSnapshotRow> GetQpsHistory(DateTime from, DateTime to, string granularity = "1min");
 }
 
 public class TrafficSnapshotRow
@@ -81,6 +82,12 @@ public class EndpointStatRow
     public long TotalTime { get; set; }
     public double AvgTime { get; set; }
     public long LastAccessTime { get; set; }
+}
+
+public class QpsSnapshotRow
+{
+    public DateTime SnapshotTime { get; set; }
+    public long RequestCount { get; set; }
 }
 
 public class DuckDbQueryService : IDuckDbQueryService
@@ -430,6 +437,48 @@ public class DuckDbQueryService : IDuckDbQueryService
         catch (Exception ex)
         {
             _logger.Error(ex, "查询端点统计历史失败");
+        }
+        return result;
+    }
+
+    public List<QpsSnapshotRow> GetQpsHistory(DateTime from, DateTime to, string granularity = "1min")
+    {
+        var result = new List<QpsSnapshotRow>();
+        if (!_db.IsEnabled) return result;
+
+        try
+        {
+            var truncUnit = granularity switch
+            {
+                "5s" => "5 seconds",
+                "1min" => "1 minute",
+                "5min" => "5 minutes",
+                "1hour" => "1 hour",
+                _ => "1 minute"
+            };
+            var conn = _db.GetConnection();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $@"SELECT time_bucket(INTERVAL '{truncUnit}', snapshot_time) as t,
+                SUM(request_count) as total
+                FROM qps_snapshots
+                WHERE snapshot_time >= $1 AND snapshot_time <= $2
+                GROUP BY t ORDER BY t ASC";
+            cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(from));
+            cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(to));
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new QpsSnapshotRow
+                {
+                    SnapshotTime = reader.GetDateTime(0),
+                    RequestCount = reader.GetInt64(1),
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "查询 QPS 历史失败");
         }
         return result;
     }

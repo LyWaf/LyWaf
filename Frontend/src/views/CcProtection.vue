@@ -1,11 +1,40 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { advancedCcApi } from '@/api'
+import { advancedCcApi, pluginApi } from '@/api'
 import CcRuleEditor from '@/components/cc/CcRuleEditor.vue'
 import { useToast } from '@/composables/useToast'
 import type { AdvancedCcRule, CcRuleType } from '@/types'
 
 const { showSuccess, showError } = useToast()
+
+// CC 分析插件开关
+const analysisEnabled = ref(true)
+const analysisToggling = ref(false)
+
+const loadAnalysisState = async () => {
+  try {
+    const res = await pluginApi.getPlugins()
+    if (res.success) {
+      const plugin = res.plugins.find((p: any) => p.id === 'analysis')
+      if (plugin) analysisEnabled.value = plugin.isEnabled
+    }
+  } catch {}
+}
+
+const toggleAnalysis = async () => {
+  analysisToggling.value = true
+  try {
+    const res = await pluginApi.togglePlugin('analysis')
+    if (res.success) {
+      analysisEnabled.value = res.isEnabled
+      showSuccess(res.isEnabled ? '已开启 CC 分析' : '已关闭 CC 分析')
+    }
+  } catch {
+    showError('操作失败')
+  } finally {
+    analysisToggling.value = false
+  }
+}
 
 // 枚举翻译
 const ruleTypeLabels: Record<CcRuleType, string> = {
@@ -145,6 +174,7 @@ let refreshTimer: number | null = null
 
 onMounted(() => {
   loadData()
+  loadAnalysisState()
   refreshTimer = window.setInterval(loadData, 60000)
 })
 
@@ -155,6 +185,31 @@ onUnmounted(() => {
 
 <template>
   <div class="space-y-6">
+    <!-- CC 分析开关 -->
+    <div class="card">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-medium text-gray-100">CC 流量分析</h2>
+          <p class="text-sm text-gray-500 mt-1">开启后将在后台持续分析流量，自动检测 CC 攻击行为</p>
+        </div>
+        <button
+          @click="toggleAnalysis"
+          :disabled="analysisToggling"
+          :class="[
+            'relative w-12 h-6 rounded-full transition-colors flex-shrink-0',
+            analysisEnabled ? 'bg-primary-500' : 'bg-gray-600'
+          ]"
+        >
+          <span
+            :class="[
+              'absolute top-1 w-4 h-4 rounded-full bg-white transition-transform',
+              analysisEnabled ? 'left-7' : 'left-1'
+            ]"
+          />
+        </button>
+      </div>
+    </div>
+
     <div class="card">
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-medium text-gray-100">CC 防护规则</h2>

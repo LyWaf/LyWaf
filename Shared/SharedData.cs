@@ -206,6 +206,12 @@ public static class SharedData
     public static readonly GeoTrafficStatistic GeoTraffic = new();
 
     /// <summary>
+    /// QPS 追踪器
+    /// 用途: 记录每秒请求数，支持按5秒/1分钟/1小时粒度查询
+    /// </summary>
+    public static readonly QpsTracker Qps = new();
+
+    /// <summary>
     /// IP 请求日志监控目标
     /// Key: 客户端IP地址
     /// Value: 添加时间

@@ -1118,6 +1118,51 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // QPS 历史数据（实时用内存，历史用 DuckDB）
+        app.MapGet("/api/qps/history", (HttpContext ctx, LyWaf.Services.DuckDb.IDuckDbQueryService queryService) =>
+        {
+            try
+            {
+                var granularity = ctx.Request.Query["granularity"].FirstOrDefault() ?? "5s";
+                var fromStr = ctx.Request.Query["from"].FirstOrDefault();
+                var toStr = ctx.Request.Query["to"].FirstOrDefault();
+
+                // 如果指定了 from/to，从 DuckDB 查历史
+                if (fromStr != null || toStr != null)
+                {
+                    if (!queryService.IsEnabled)
+                        return Results.Json(new { success = false, message = "DuckDB 未启用" });
+
+                    var from = DateTime.TryParse(fromStr, out var f) ? f.ToUniversalTime() : DateTime.UtcNow.AddHours(-24);
+                    var to = DateTime.TryParse(toStr, out var t) ? t.ToUniversalTime() : DateTime.UtcNow;
+                    var dbGranularity = granularity switch
+                    {
+                        "5s" => "1min",
+                        "1min" => "1min",
+                        "1hour" => "5min",
+                        _ => "1min"
+                    };
+                    var rows = queryService.GetQpsHistory(from, to, dbGranularity);
+                    var stepSeconds = dbGranularity == "5min" ? 300.0 : 60.0;
+                    var data = rows.Select(r => new
+                    {
+                        time = r.SnapshotTime.ToLocalTime().ToString("HH:mm:ss"),
+                        qps = Math.Round(r.RequestCount / stepSeconds, 2),
+                        requestCount = r.RequestCount
+                    });
+                    return Results.Json(new { success = true, data, granularity, source = "duckdb" });
+                }
+
+                // 否则从内存取实时数据
+                var memData = SharedData.Qps.GetHistory(granularity);
+                return Results.Json(new { success = true, data = memData, granularity, source = "memory" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         // 重置安全态势统计数据
         app.MapPost("/api/security/reset", (HttpContext ctx) =>
         {

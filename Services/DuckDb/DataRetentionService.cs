@@ -61,6 +61,7 @@ public class DataRetentionService : BackgroundService
 
         // 清理详细数据（保留 DetailRetentionDays）
         ExecuteDelete(conn, "DELETE FROM traffic_snapshots WHERE snapshot_time < $1", detailCutoff, "traffic_snapshots");
+        ExecuteDelete(conn, "DELETE FROM qps_snapshots WHERE snapshot_time < $1", detailCutoff, "qps_snapshots");
         ExecuteDelete(conn, "DELETE FROM api_timing_snapshots WHERE snapshot_time < $1", detailCutoff, "api_timing_snapshots");
         ExecuteDelete(conn, "DELETE FROM endpoint_stats_snapshots WHERE snapshot_time < $1", detailCutoff, "endpoint_stats_snapshots");
 

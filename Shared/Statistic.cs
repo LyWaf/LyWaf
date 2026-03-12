@@ -1015,3 +1015,132 @@ public class GeoTrafficSnapshot
     public Dictionary<string, long> RegionVisits { get; init; } = new();
     public Dictionary<string, long> RegionIntercepts { get; init; } = new();
 }
+
+/// <summary>
+/// QPS 统计追踪器
+/// 使用环形缓冲区记录每秒请求数，支持按不同粒度（5秒/1分钟/1小时）查询
+/// </summary>
+public class QpsTracker
+{
+    // 每秒一个槽位，保留最近 3700 秒（略超1小时，便于对齐）
+    private const int BucketCount = 3700;
+    private readonly long[] _buckets = new long[BucketCount];
+    private readonly object _lock = new();
+    private long _currentSecond;
+    private long _totalSinceLastFlush;
+
+    public QpsTracker()
+    {
+        _currentSecond = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    }
+
+    /// <summary>
+    /// 获取自上次调用以来的请求总数（用于 DuckDB flush）
+    /// </summary>
+    public long FlushCount()
+    {
+        lock (_lock)
+        {
+            var count = _totalSinceLastFlush;
+            _totalSinceLastFlush = 0;
+            return count;
+        }
+    }
+
+    /// <summary>
+    /// 记录一次请求（在请求处理时调用）
+    /// </summary>
+    public void Record()
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        lock (_lock)
+        {
+            Advance(now);
+            _buckets[now % BucketCount]++;
+            _totalSinceLastFlush++;
+        }
+    }
+
+    /// <summary>
+    /// 获取历史 QPS 数据
+    /// </summary>
+    /// <param name="granularity">粒度：5s / 1min / 1hour</param>
+    public List<QpsDataPoint> GetHistory(string granularity)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        lock (_lock)
+        {
+            Advance(now);
+        }
+
+        int stepSeconds, totalPoints;
+        switch (granularity)
+        {
+            case "5s":
+                stepSeconds = 5;
+                totalPoints = 120; // 10 分钟
+                break;
+            case "1min":
+                stepSeconds = 60;
+                totalPoints = 60; // 1 小时
+                break;
+            case "1hour":
+                stepSeconds = 300; // 5 分钟一个点
+                totalPoints = 12;  // 最近 1 小时
+                break;
+            default:
+                stepSeconds = 5;
+                totalPoints = 120;
+                break;
+        }
+
+        var result = new List<QpsDataPoint>(totalPoints);
+        // 从最近的完整 step 开始往前推
+        var endSecond = now - (now % stepSeconds);
+        var startSecond = endSecond - (long)(totalPoints - 1) * stepSeconds;
+
+        lock (_lock)
+        {
+            for (int i = 0; i < totalPoints; i++)
+            {
+                var bucketStart = startSecond + (long)i * stepSeconds;
+                long sum = 0;
+                for (int s = 0; s < stepSeconds && s < BucketCount; s++)
+                {
+                    var sec = bucketStart + s;
+                    if (sec >= now - BucketCount + 1 && sec <= now)
+                        sum += _buckets[sec % BucketCount];
+                }
+                var qps = (double)sum / stepSeconds;
+                var time = DateTimeOffset.FromUnixTimeSeconds(bucketStart).ToLocalTime();
+                result.Add(new QpsDataPoint
+                {
+                    Time = time.ToString("HH:mm:ss"),
+                    Qps = Math.Round(qps, 2),
+                    RequestCount = sum
+                });
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 推进到当前秒，清零中间跳过的槽位
+    /// </summary>
+    private void Advance(long nowSecond)
+    {
+        if (nowSecond <= _currentSecond) return;
+        var gap = Math.Min(nowSecond - _currentSecond, BucketCount);
+        for (long s = _currentSecond + 1; s <= _currentSecond + gap; s++)
+            _buckets[s % BucketCount] = 0;
+        _currentSecond = nowSecond;
+    }
+}
+
+public class QpsDataPoint
+{
+    public string Time { get; set; } = "";
+    public double Qps { get; set; }
+    public long RequestCount { get; set; }
+}

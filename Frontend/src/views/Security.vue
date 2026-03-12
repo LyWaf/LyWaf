@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
+import { ref, shallowRef, onMounted, onUnmounted, computed, nextTick, markRaw } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import StatCard from '@/components/common/StatCard.vue'
 import { securityApi } from '@/api'
@@ -10,11 +10,131 @@ Chart.register(...registerables)
 
 const { showSuccess, showError } = useToast()
 
+// ==================== QPS 统计 ====================
+type QpsGranularity = '5s' | '1min' | '1hour'
+const qpsGranularity = ref<QpsGranularity>('5s')
+const qpsChart = shallowRef<Chart | null>(null)
+const qpsLoading = ref(false)
+let qpsCountData: number[] = []
+let qpsQpsData: number[] = []
+
+const qpsGranularities: { label: string; value: QpsGranularity }[] = [
+  { label: '每5秒', value: '5s' },
+  { label: '每分钟', value: '1min' },
+  { label: '每5分钟', value: '1hour' },
+]
+
+const loadQps = async () => {
+  qpsLoading.value = true
+  try {
+    let from: string | undefined
+    let to: string | undefined
+    // 选了 6h / 24h 时查 DuckDB 历史
+    if (selectedHours.value > 1) {
+      const now = new Date()
+      to = now.toISOString()
+      from = new Date(now.getTime() - selectedHours.value * 3600_000).toISOString()
+    }
+    const res = await securityApi.getQpsHistory(qpsGranularity.value, from, to)
+    const arr = res?.success ? (res.data ?? []) : []
+    await nextTick()
+    updateQpsChart(arr)
+  } catch (e) {
+    console.warn('加载 QPS 数据请求失败', e)
+  } finally {
+    qpsLoading.value = false
+  }
+}
+
+const updateQpsChart = (data: Array<{ time: string; qps: number; requestCount: number }>) => {
+  try {
+    const labels = data.map(d => d.time)
+    qpsQpsData = data.map(d => d.qps)
+    qpsCountData = data.map(d => d.requestCount)
+
+    // 已有图表实例则只更新数据
+    if (qpsChart.value) {
+      qpsChart.value.data.labels = labels
+      qpsChart.value.data.datasets[0].data = qpsQpsData
+      qpsChart.value.update()
+      return
+    }
+
+    // 首次创建
+    const canvas = document.getElementById('qps-chart') as HTMLCanvasElement
+    if (!canvas || !canvas.getContext('2d')) return
+
+    qpsChart.value = markRaw(new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'QPS',
+        data: qpsQpsData,
+        borderColor: '#3b82f6',
+        backgroundColor: 'rgba(59, 130, 246, 0.15)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 1,
+        pointHoverRadius: 5,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: {
+        mode: 'index',
+        intersect: false,
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          enabled: true,
+          mode: 'index',
+          intersect: false,
+          callbacks: {
+            label: (item: any) => {
+              const idx = item.dataIndex
+              const qps = qpsQpsData[idx] ?? 0
+              const count = qpsCountData[idx] ?? 0
+              return `QPS: ${qps}  请求数: ${count}`
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(255,255,255,0.1)' },
+          ticks: { color: '#94a3b8', maxRotation: 0, maxTicksLimit: 10 },
+        },
+        y: {
+          grid: { color: 'rgba(255,255,255,0.1)' },
+          ticks: { color: '#94a3b8' },
+          beginAtZero: true,
+        },
+      },
+    },
+  }))
+  } catch (e) {
+    console.warn('QPS 图表渲染异常', e)
+  }
+}
+
+const changeQpsGranularity = (g: QpsGranularity) => {
+  qpsGranularity.value = g
+  if (qpsChart.value) {
+    qpsChart.value.destroy()
+    qpsChart.value = null
+  }
+  loadQps()
+}
+
 // 数据
 const stats = ref<SecurityStats | null>(null)
 const loading = ref(false)
 const selectedHours = ref(24)
-const charts = ref<Record<string, Chart | null>>({})
+const charts: Record<string, Chart | null> = {}
 
 // 时间范围选项
 const timeRanges = [
@@ -64,22 +184,26 @@ const loadData = async () => {
 // 更新图表
 const updateCharts = () => {
   if (!stats.value) return
-  
+
   eventTypes.forEach(eventType => {
+    const history = stats.value?.history?.[eventType.key] || []
+    const labels = history.map(h => h.time)
+    const data = history.map(h => h.count)
+
+    // 已有实例则复用
+    const existing = charts[eventType.key]
+    if (existing) {
+      existing.data.labels = labels
+      existing.data.datasets[0].data = data
+      existing.update()
+      return
+    }
+
     const canvasId = `chart-${eventType.key}`
     const canvas = document.getElementById(canvasId) as HTMLCanvasElement
     if (!canvas || !canvas.getContext('2d')) return
 
-    // 销毁旧图表
-    if (charts.value[eventType.key]) {
-      charts.value[eventType.key]?.destroy()
-    }
-    
-    const history = stats.value?.history?.[eventType.key] || []
-    const labels = history.map(h => h.time)
-    const data = history.map(h => h.count)
-    
-    charts.value[eventType.key] = new Chart(canvas, {
+    charts[eventType.key] = markRaw(new Chart(canvas, {
       type: 'line',
       data: {
         labels,
@@ -97,8 +221,18 @@ const updateCharts = () => {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: false,
+        interaction: {
+          mode: 'index',
+          intersect: false,
+        },
         plugins: {
           legend: { display: false },
+          tooltip: {
+            enabled: true,
+            mode: 'index',
+            intersect: false,
+          },
         },
         scales: {
           x: {
@@ -112,7 +246,7 @@ const updateCharts = () => {
           },
         },
       },
-    })
+    }))
   })
 }
 
@@ -129,10 +263,32 @@ const resetStats = async () => {
   }
 }
 
+// 根据时间范围自动选择合适的 QPS 粒度
+const autoQpsGranularity = (hours: number): QpsGranularity => {
+  if (hours <= 1) return '5s'
+  if (hours <= 6) return '1min'
+  return '1hour'
+}
+
 // 切换时间范围
 const changeTimeRange = (hours: number) => {
   selectedHours.value = hours
+  // 时间范围变了，销毁所有图表实例让其重建
+  Object.keys(charts).forEach(k => {
+    charts[k]?.destroy()
+    charts[k] = null
+  })
+  // 自动调整 QPS 粒度
+  const newG = autoQpsGranularity(hours)
+  if (qpsGranularity.value !== newG) {
+    qpsGranularity.value = newG
+  }
+  if (qpsChart.value) {
+    qpsChart.value.destroy()
+    qpsChart.value = null
+  }
   loadData()
+  loadQps()
 }
 
 // 格式化攻击源列表
@@ -142,16 +298,21 @@ const getTopAttackSources = (key: SecurityEventType): AttackSourceStat[] => {
 
 // 自动刷新
 let refreshTimer: number | null = null
+let qpsTimer: number | null = null
 
 onMounted(() => {
   loadData()
+  loadQps()
   refreshTimer = window.setInterval(loadData, 60000)
+  qpsTimer = window.setInterval(loadQps, 5000)
 })
 
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
+  if (qpsTimer) clearInterval(qpsTimer)
   // 销毁所有图表
-  Object.values(charts.value).forEach(chart => chart?.destroy())
+  Object.values(charts).forEach(chart => chart?.destroy())
+  qpsChart.value?.destroy()
 })
 </script>
 
@@ -189,6 +350,31 @@ onUnmounted(() => {
       />
     </div>
     
+    <!-- QPS 统计 -->
+    <div class="card">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-medium text-gray-200">QPS 统计</h3>
+        <div class="flex gap-1.5">
+          <button
+            v-for="g in qpsGranularities"
+            :key="g.value"
+            @click="changeQpsGranularity(g.value)"
+            :class="[
+              'px-2.5 py-1 text-xs rounded transition-colors',
+              qpsGranularity === g.value
+                ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                : 'text-gray-500 hover:text-gray-300'
+            ]"
+          >
+            {{ g.label }}
+          </button>
+        </div>
+      </div>
+      <div class="h-[220px]">
+        <canvas id="qps-chart"></canvas>
+      </div>
+    </div>
+
     <!-- 图表网格 -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div 

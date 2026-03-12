@@ -107,6 +107,12 @@ public static class DuckDbSchema
             PRIMARY KEY (source_ip, application)
         )",
 
+        // QPS 快照（每次 flush 写一行，记录该周期内的请求数）
+        @"CREATE TABLE IF NOT EXISTS qps_snapshots (
+            snapshot_time TIMESTAMP NOT NULL PRIMARY KEY,
+            request_count BIGINT NOT NULL DEFAULT 0
+        )",
+
         // 审计日志
         @"CREATE SEQUENCE IF NOT EXISTS audit_log_seq START 1",
         @"CREATE TABLE IF NOT EXISTS audit_log (
@@ -146,6 +152,7 @@ public static class DuckDbSchema
         "CREATE INDEX IF NOT EXISTS idx_api_timing_time ON api_timing_snapshots(snapshot_time)",
         "CREATE INDEX IF NOT EXISTS idx_endpoint_time ON endpoint_stats_snapshots(snapshot_time)",
         "CREATE INDEX IF NOT EXISTS idx_intercept_time ON intercept_events(last_hit_time)",
+        "CREATE INDEX IF NOT EXISTS idx_qps_time ON qps_snapshots(snapshot_time)",
         "CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(log_time)",
         "CREATE INDEX IF NOT EXISTS idx_runtime_start ON runtime_logs(start_time)",
     ];

@@ -53,6 +53,7 @@ public class StatisticUtil
         var isPageView = IsPageView(context.Request.Path);
         var visitorId = GetVisitorId(context);
         SharedData.Traffic.RecordRequest(client_ip, statusCode, isPageView, visitorId);
+        SharedData.Qps.Record();
 
         // 记录地理位置流量统计
         try

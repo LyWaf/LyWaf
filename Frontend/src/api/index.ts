@@ -394,6 +394,13 @@ export const securityApi = {
 
   reset: () =>
     api.post<ApiResponse>('/security/reset'),
+
+  getQpsHistory: (granularity: string = '5s', from?: string, to?: string) => {
+    const params: Record<string, string> = { granularity }
+    if (from) params.from = from
+    if (to) params.to = to
+    return api.get<{ success: boolean; data: Array<{ time: string; qps: number; requestCount: number }>; granularity: string }>('/qps/history', { params })
+  },
 }
 
 // ==================== 地理位置流量 API ====================
