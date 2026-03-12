@@ -401,6 +401,13 @@ export const securityApi = {
     if (to) params.to = to
     return api.get<{ success: boolean; data: Array<{ time: string; qps: number; requestCount: number }>; granularity: string }>('/qps/history', { params })
   },
+
+  getBandwidthHistory: (granularity: string = '5s', from?: string, to?: string) => {
+    const params: Record<string, string> = { granularity }
+    if (from) params.from = from
+    if (to) params.to = to
+    return api.get<{ success: boolean; data: Array<{ time: string; inboundBytes: number; outboundBytes: number; inboundRate: number; outboundRate: number }> }>('/bandwidth/history', { params })
+  },
 }
 
 // ==================== 地理位置流量 API ====================
@@ -505,6 +512,37 @@ export const abTestApi = {
     
   getStats: (id: string) =>
     api.get<ApiResponse>(`/abtest/stats/${id}`),
+}
+
+// ==================== 带宽限速 API ====================
+
+export const throttleApi = {
+  getConfig: () =>
+    api.get<{ success: boolean; enabled: boolean; global: number; pathLimits: Record<string, number>; ipLimits: Record<string, number> }>('/throttle/config'),
+
+  toggle: () =>
+    api.post<ApiResponse & { enabled: boolean }>('/throttle/toggle'),
+
+  setGlobal: (limitKbps: number) =>
+    api.post<ApiResponse>('/throttle/global', { limitKbps }),
+
+  addIpThrottle: (ip: string, limitKbps: number) =>
+    api.post<ApiResponse>('/throttle/ip/add', { ip, limitKbps }),
+
+  removeIpThrottle: (ip: string) =>
+    api.post<ApiResponse>('/throttle/ip/remove', { ip }),
+
+  addPathThrottle: (path: string, limitKbps: number) =>
+    api.post<ApiResponse>('/throttle/path/add', { path, limitKbps }),
+
+  removePathThrottle: (path: string) =>
+    api.post<ApiResponse>('/throttle/path/remove', { path }),
+
+  savePatch: () =>
+    api.post<ApiResponse>('/throttle/patch/save'),
+
+  removePatch: () =>
+    api.post<ApiResponse>('/throttle/patch/remove'),
 }
 
 // ==================== 配置文件 API ====================

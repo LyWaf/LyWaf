@@ -39,6 +39,11 @@ public interface ISpeedLimitService
     /// 移除路径带宽限速
     /// </summary>
     bool RemovePathThrottle(string path);
+
+    /// <summary>
+    /// 设置全局带宽限速
+    /// </summary>
+    void SetGlobalThrottle(int limitKbps);
 }
 
 /// <summary>
@@ -314,5 +319,14 @@ public class SpeedLimitService : ISpeedLimitService
             }
         }
         return null;
+    }
+
+    /// <summary>
+    /// 设置全局带宽限速（直接修改运行时选项）
+    /// </summary>
+    public void SetGlobalThrottle(int limitKbps)
+    {
+        _options.Throttled.Global = limitKbps;
+        _logger.Info("已设置全局带宽限速: {Limit} KB/s", limitKbps);
     }
 }

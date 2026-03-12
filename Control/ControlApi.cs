@@ -1163,6 +1163,51 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // 带宽历史
+        app.MapGet("/api/bandwidth/history", (HttpContext ctx, LyWaf.Services.DuckDb.IDuckDbQueryService queryService) =>
+        {
+            try
+            {
+                var granularity = ctx.Request.Query["granularity"].FirstOrDefault() ?? "5s";
+                var fromStr = ctx.Request.Query["from"].FirstOrDefault();
+                var toStr = ctx.Request.Query["to"].FirstOrDefault();
+
+                if (fromStr != null || toStr != null)
+                {
+                    if (!queryService.IsEnabled)
+                        return Results.Json(new { success = false, message = "DuckDB 未启用" });
+
+                    var from = DateTime.TryParse(fromStr, out var f) ? f.ToUniversalTime() : DateTime.UtcNow.AddHours(-24);
+                    var to = DateTime.TryParse(toStr, out var t) ? t.ToUniversalTime() : DateTime.UtcNow;
+                    var dbGranularity = granularity switch
+                    {
+                        "5s" => "1min",
+                        "1min" => "1min",
+                        "1hour" => "5min",
+                        _ => "1min"
+                    };
+                    var stepSeconds = dbGranularity == "5min" ? 300.0 : 60.0;
+                    var rows = queryService.GetBandwidthHistory(from, to, dbGranularity);
+                    var data = rows.Select(r => new
+                    {
+                        time = r.SnapshotTime.ToLocalTime().ToString("HH:mm:ss"),
+                        inboundBytes = r.InboundBytes,
+                        outboundBytes = r.OutboundBytes,
+                        inboundRate = Math.Round(r.InboundBytes / stepSeconds, 2),
+                        outboundRate = Math.Round(r.OutboundBytes / stepSeconds, 2),
+                    });
+                    return Results.Json(new { success = true, data, granularity, source = "duckdb" });
+                }
+
+                var memData = SharedData.Bandwidth.GetHistory(granularity);
+                return Results.Json(new { success = true, data = memData, granularity, source = "memory" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         // 重置安全态势统计数据
         app.MapPost("/api/security/reset", (HttpContext ctx) =>
         {
@@ -3525,19 +3570,59 @@ public static class ControlApi
         }).RequireHost($"*:{controlPort}");
 
         // =============== 带宽限速管理 API ===============
-        
+
         // 获取带宽限速配置
         app.MapGet("/api/throttle/config", (HttpContext ctx, ISpeedLimitService speedLimitService) =>
         {
             var config = speedLimitService.GetThrottleConfig();
+            var options = speedLimitService.GetOptions();
             return Results.Json(new
             {
                 success = true,
+                enabled = options.Throttled.Enabled,
                 global = config.Global,
                 pathLimits = config.PathLimits,
                 ipLimits = config.IpLimits,
                 timestamp = DateTime.Now
             });
+        }).RequireHost($"*:{controlPort}");
+
+        // 切换带宽限速启用状态
+        app.MapPost("/api/throttle/toggle", (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        {
+            var options = speedLimitService.GetOptions();
+            options.Throttled.Enabled = !options.Throttled.Enabled;
+            return Results.Json(new
+            {
+                success = true,
+                enabled = options.Throttled.Enabled,
+                message = options.Throttled.Enabled ? "带宽限速已启用" : "带宽限速已禁用"
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 设置全局带宽限速
+        app.MapPost("/api/throttle/global", async (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<SetGlobalThrottleRequest>();
+                if (request == null)
+                    return Results.Json(new { success = false, message = "请求无效" }, statusCode: 400);
+
+                speedLimitService.SetGlobalThrottle(request.LimitKbps);
+                return Results.Json(new
+                {
+                    success = true,
+                    message = request.LimitKbps > 0
+                        ? $"已设置全局带宽限速: {request.LimitKbps} KB/s"
+                        : "已关闭全局带宽限速",
+                    global = request.LimitKbps
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"设置失败: {ex.Message}" }, statusCode: 500);
+            }
         }).RequireHost($"*:{controlPort}");
 
         // 设置 IP 带宽限速
@@ -3668,8 +3753,71 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        // 保存当前限速配置到补丁
+        app.MapPost("/api/throttle/patch/save", async (HttpContext ctx, ISpeedLimitService speedLimitService, IConfiguration config) =>
+        {
+            try
+            {
+                var throttleConfig = speedLimitService.GetThrottleConfig();
+                var options = speedLimitService.GetOptions();
+                await _lbPatchLock.WaitAsync();
+                try
+                {
+                    var patch = await ReadPatchFile();
+                    var speedLimit = EnsurePatchSection(patch, "SpeedLimit");
+                    var throttled = new Dictionary<string, object>
+                    {
+                        ["Enabled"] = options.Throttled.Enabled,
+                        ["Global"] = throttleConfig.Global,
+                        ["Everys"] = throttleConfig.PathLimits.ToDictionary(k => k.Key, k => (object)k.Value),
+                        ["IpEverys"] = throttleConfig.IpLimits.ToDictionary(k => k.Key, k => (object)k.Value)
+                    };
+                    speedLimit["Throttled"] = throttled;
+                    UpdatePatchSourceTracking(patch);
+                    await SavePatchAndReload(patch, config);
+                    return Results.Json(new { success = true, message = "限速配置已保存到补丁" });
+                }
+                finally
+                {
+                    _lbPatchLock.Release();
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"保存失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 删除补丁中的限速配置（恢复为原始配置）
+        app.MapPost("/api/throttle/patch/remove", async (HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                await _lbPatchLock.WaitAsync();
+                try
+                {
+                    var patch = await ReadPatchFile();
+                    if (patch.Remove("SpeedLimit"))
+                    {
+                        UpdatePatchSourceTracking(patch);
+                        await SavePatchAndReload(patch, config);
+                        return Results.Json(new { success = true, message = "已删除补丁中的限速配置，恢复为原始配置" });
+                    }
+                    return Results.Json(new { success = false, message = "补丁中没有限速配置" }, statusCode: 404);
+                }
+                finally
+                {
+                    _lbPatchLock.Release();
+                }
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"删除失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         // =============== A/B 测试管理 API ===============
-        
+
         // 获取所有 A/B 测试配置
         app.MapGet("/api/abtest/configs", (HttpContext ctx, IABTestService abTestService) =>
         {
@@ -7192,6 +7340,11 @@ public class AddPathThrottleRequest
 public class RemovePathThrottleRequest
 {
     public string Path { get; set; } = "";
+}
+
+public class SetGlobalThrottleRequest
+{
+    public int LimitKbps { get; set; }
 }
 
 public class CreateABTestRequest

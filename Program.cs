@@ -1269,6 +1269,8 @@ public class Program
         
         app.MapReverseProxy(proxyApp =>
         {
+            // 精确统计入站/出站字节（必须放在最外层）
+            proxyApp.UseMiddleware<BandwidthCountingMiddleware>();
             // 启用响应压缩（必须放在其他中间件之前）
             proxyApp.UseMiddleware<ResponseCompressMiddleware>();
             

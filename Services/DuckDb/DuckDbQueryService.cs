@@ -18,6 +18,7 @@ public interface IDuckDbQueryService
     (List<AuditLogRow> Items, int Total) GetAuditLogsPaged(int offset, int limit);
     List<EndpointStatRow> GetEndpointStatsHistory(string statType, DateTime from, DateTime to, int topN = 50);
     List<QpsSnapshotRow> GetQpsHistory(DateTime from, DateTime to, string granularity = "1min");
+    List<BandwidthSnapshotRow> GetBandwidthHistory(DateTime from, DateTime to, string granularity = "1min");
 }
 
 public class TrafficSnapshotRow
@@ -88,6 +89,13 @@ public class QpsSnapshotRow
 {
     public DateTime SnapshotTime { get; set; }
     public long RequestCount { get; set; }
+}
+
+public class BandwidthSnapshotRow
+{
+    public DateTime SnapshotTime { get; set; }
+    public long InboundBytes { get; set; }
+    public long OutboundBytes { get; set; }
 }
 
 public class DuckDbQueryService : IDuckDbQueryService
@@ -479,6 +487,50 @@ public class DuckDbQueryService : IDuckDbQueryService
         catch (Exception ex)
         {
             _logger.Error(ex, "查询 QPS 历史失败");
+        }
+        return result;
+    }
+
+    public List<BandwidthSnapshotRow> GetBandwidthHistory(DateTime from, DateTime to, string granularity = "1min")
+    {
+        var result = new List<BandwidthSnapshotRow>();
+        if (!_db.IsEnabled) return result;
+
+        try
+        {
+            var truncUnit = granularity switch
+            {
+                "5s" => "5 seconds",
+                "1min" => "1 minute",
+                "5min" => "5 minutes",
+                "1hour" => "1 hour",
+                _ => "1 minute"
+            };
+            var conn = _db.GetConnection();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $@"SELECT time_bucket(INTERVAL '{truncUnit}', snapshot_time) as t,
+                SUM(inbound_bytes) as total_in,
+                SUM(outbound_bytes) as total_out
+                FROM bandwidth_snapshots
+                WHERE snapshot_time >= $1 AND snapshot_time <= $2
+                GROUP BY t ORDER BY t ASC";
+            cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(from));
+            cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(to));
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new BandwidthSnapshotRow
+                {
+                    SnapshotTime = reader.GetDateTime(0),
+                    InboundBytes = reader.GetInt64(1),
+                    OutboundBytes = reader.GetInt64(2),
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "查询带宽历史失败");
         }
         return result;
     }

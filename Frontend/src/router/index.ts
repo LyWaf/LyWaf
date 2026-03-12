@@ -111,6 +111,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '错误模板', icon: '🚫' }
   },
   {
+    path: '/speed-limit',
+    name: 'SpeedLimit',
+    component: () => import('@/views/SpeedLimit.vue'),
+    meta: { title: '速度限制', icon: '🚀' }
+  },
+  {
     path: '/general-settings',
     name: 'GeneralSettings',
     component: () => import('@/views/GeneralSettings.vue'),

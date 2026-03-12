@@ -28,6 +28,7 @@ public class SpeedLimitPolicyOptions
 
 public class ThrottledOptions
 {
+    public bool Enabled { get; set; } = true;
     public int Global { get; set; } = 0;
     public Dictionary<string, int> Everys { get; set; } = [];
 

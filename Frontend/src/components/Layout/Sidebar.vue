@@ -33,6 +33,7 @@ const menuItems: MenuItem[] = [
       { path: '/param-config', name: '参数配置' },
       { path: '/plugin-management', name: '插件管理' },
       { path: '/error-templates', name: '错误模板' },
+      { path: '/speed-limit', name: '速度限制' },
     ]
   },
   { path: '/general-settings', name: '通用设置', icon: '⚙️' },

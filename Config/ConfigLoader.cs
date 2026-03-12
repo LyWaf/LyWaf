@@ -556,6 +556,12 @@ public class LbPatchProvider : ConfigurationProvider
                 }
             }
 
+            // 加载 SpeedLimit 补丁（带宽限速配置）
+            if (root.TryGetProperty("SpeedLimit", out var speedLimitEl))
+            {
+                FlattenJsonElement("SpeedLimit", speedLimitEl);
+            }
+
             // 加载 PluginConfigs 补丁（插件配置）
             if (root.TryGetProperty("PluginConfigs", out var pluginConfigsEl))
             {

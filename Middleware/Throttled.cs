@@ -5,6 +5,7 @@ using LyWaf.Shared;
 using LyWaf.Utils;
 using NLog;
 namespace LyWaf.Middleware;
+
 public class ThrottledMiddleware(RequestDelegate next, ISpeedLimitService speedService, IStatisticService statisticService)
 {
     private readonly RequestDelegate _next = next;
@@ -14,23 +15,30 @@ public class ThrottledMiddleware(RequestDelegate next, ISpeedLimitService speedS
     public async Task Invoke(HttpContext context)
     {
         var option = speedService.GetOptions();
+        if (!option.Throttled.Enabled)
+        {
+            await _next(context);
+            return;
+        }
+        // 使用合并后的配置（静态配置 + 动态规则）
+        var config = speedService.GetThrottleConfig();
         var clientIp = RequestUtil.GetClientIp(context.Request);
         var path = await statisticService.GetMatchPath(context.Request.Path);
         var body = context.Response.Body;
 
-        if (option.Throttled.Everys.TryGetValue(path, out var val))
+        if (config.PathLimits.TryGetValue(path, out var val))
         {
             body = new UrlThrottledStream(body, val * 1024);
         }
-        else if (option.Throttled.Global != 0)
-        {
-            body = new UrlThrottledStream(body, option.Throttled.Global * 1024);
-        }
-
-        if (option.Throttled.IpEverys.TryGetValue(clientIp, out val))
+        else if (config.IpLimits.TryGetValue(clientIp, out val))
         {
             body = new IpThrottledStream(body, clientIp, val * 1024);
         }
+        else if (config.Global != 0)
+        {
+            body = new UrlThrottledStream(body, config.Global * 1024);
+        }
+
         context.Response.Body = body;
         await _next(context);
 

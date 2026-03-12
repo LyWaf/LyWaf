@@ -212,6 +212,12 @@ public static class SharedData
     public static readonly QpsTracker Qps = new();
 
     /// <summary>
+    /// 带宽追踪器
+    /// 用途: 记录每秒入站/出站字节数，支持按5秒/1分钟/1小时粒度查询
+    /// </summary>
+    public static readonly BandwidthTracker Bandwidth = new();
+
+    /// <summary>
     /// IP 请求日志监控目标
     /// Key: 客户端IP地址
     /// Value: 添加时间

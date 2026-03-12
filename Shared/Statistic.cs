@@ -1144,3 +1144,140 @@ public class QpsDataPoint
     public double Qps { get; set; }
     public long RequestCount { get; set; }
 }
+
+/// <summary>
+/// 带宽追踪器：环形缓冲区记录每秒入站/出站字节
+/// </summary>
+public class BandwidthTracker
+{
+    private const int BucketCount = 3700;
+    private readonly long[] _inbound = new long[BucketCount];
+    private readonly long[] _outbound = new long[BucketCount];
+    private readonly object _lock = new();
+    private long _currentSecond;
+    private long _inboundSinceLastFlush;
+    private long _outboundSinceLastFlush;
+
+    public BandwidthTracker()
+    {
+        _currentSecond = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    }
+
+    /// <summary>
+    /// 记录一次请求的入站/出站字节
+    /// </summary>
+    public void Record(long inboundBytes, long outboundBytes)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        lock (_lock)
+        {
+            Advance(now);
+            _inbound[now % BucketCount] += inboundBytes;
+            _outbound[now % BucketCount] += outboundBytes;
+            _inboundSinceLastFlush += inboundBytes;
+            _outboundSinceLastFlush += outboundBytes;
+        }
+    }
+
+    /// <summary>
+    /// 获取并重置自上次刷写以来的累计字节（用于 DuckDB flush）
+    /// </summary>
+    public (long Inbound, long Outbound) FlushCount()
+    {
+        lock (_lock)
+        {
+            var inb = _inboundSinceLastFlush;
+            var outb = _outboundSinceLastFlush;
+            _inboundSinceLastFlush = 0;
+            _outboundSinceLastFlush = 0;
+            return (inb, outb);
+        }
+    }
+
+    /// <summary>
+    /// 获取历史带宽数据
+    /// </summary>
+    public List<BandwidthDataPoint> GetHistory(string granularity)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        lock (_lock)
+        {
+            Advance(now);
+        }
+
+        int stepSeconds, totalPoints;
+        switch (granularity)
+        {
+            case "5s":
+                stepSeconds = 5; totalPoints = 120;
+                break;
+            case "1min":
+                stepSeconds = 60; totalPoints = 60;
+                break;
+            case "1hour":
+                stepSeconds = 300; totalPoints = 12;
+                break;
+            default:
+                stepSeconds = 5; totalPoints = 120;
+                break;
+        }
+
+        var result = new List<BandwidthDataPoint>(totalPoints);
+        var endSecond = now - (now % stepSeconds);
+        var startSecond = endSecond - (long)(totalPoints - 1) * stepSeconds;
+
+        lock (_lock)
+        {
+            for (int i = 0; i < totalPoints; i++)
+            {
+                var bucketStart = startSecond + (long)i * stepSeconds;
+                long inSum = 0, outSum = 0;
+                for (int s = 0; s < stepSeconds && s < BucketCount; s++)
+                {
+                    var sec = bucketStart + s;
+                    if (sec >= now - BucketCount + 1 && sec <= now)
+                    {
+                        inSum += _inbound[sec % BucketCount];
+                        outSum += _outbound[sec % BucketCount];
+                    }
+                }
+                var time = DateTimeOffset.FromUnixTimeSeconds(bucketStart).ToLocalTime();
+                result.Add(new BandwidthDataPoint
+                {
+                    Time = time.ToString("HH:mm:ss"),
+                    InboundBytes = inSum,
+                    OutboundBytes = outSum,
+                    InboundRate = Math.Round((double)inSum / stepSeconds, 2),
+                    OutboundRate = Math.Round((double)outSum / stepSeconds, 2),
+                });
+            }
+        }
+
+        return result;
+    }
+
+    private void Advance(long nowSecond)
+    {
+        if (nowSecond <= _currentSecond) return;
+        var gap = Math.Min(nowSecond - _currentSecond, BucketCount);
+        for (long s = _currentSecond + 1; s <= _currentSecond + gap; s++)
+        {
+            _inbound[s % BucketCount] = 0;
+            _outbound[s % BucketCount] = 0;
+        }
+        _currentSecond = nowSecond;
+    }
+}
+
+public class BandwidthDataPoint
+{
+    public string Time { get; set; } = "";
+    /// <summary>入站总字节</summary>
+    public long InboundBytes { get; set; }
+    /// <summary>出站总字节</summary>
+    public long OutboundBytes { get; set; }
+    /// <summary>入站速率 bytes/s</summary>
+    public double InboundRate { get; set; }
+    /// <summary>出站速率 bytes/s</summary>
+    public double OutboundRate { get; set; }
+}
