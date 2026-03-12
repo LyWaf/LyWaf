@@ -250,15 +250,16 @@ public class SpeedLimitService : ISpeedLimitService
     /// </summary>
     public bool RemoveIpThrottle(string ip)
     {
+        var trimmed = ip.Trim();
+        var removed = false;
         lock (_throttleLock)
         {
-            if (_dynamicIpThrottle.Remove(ip.Trim()))
-            {
-                _logger.Info("已移除 IP {Ip} 的带宽限速", ip);
-                return true;
-            }
+            removed |= _dynamicIpThrottle.Remove(trimmed);
+            removed |= _options.Throttled.IpEverys.Remove(trimmed);
         }
-        return false;
+        if (removed)
+            _logger.Info("已移除 IP {Ip} 的带宽限速", ip);
+        return removed;
     }
 
     /// <summary>
@@ -278,15 +279,16 @@ public class SpeedLimitService : ISpeedLimitService
     /// </summary>
     public bool RemovePathThrottle(string path)
     {
+        var trimmed = path.Trim();
+        var removed = false;
         lock (_throttleLock)
         {
-            if (_dynamicPathThrottle.Remove(path.Trim()))
-            {
-                _logger.Info("已移除路径 {Path} 的带宽限速", path);
-                return true;
-            }
+            removed |= _dynamicPathThrottle.Remove(trimmed);
+            removed |= _options.Throttled.Everys.Remove(trimmed);
         }
-        return false;
+        if (removed)
+            _logger.Info("已移除路径 {Path} 的带宽限速", path);
+        return removed;
     }
 
     /// <summary>

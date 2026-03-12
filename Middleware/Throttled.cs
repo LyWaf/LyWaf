@@ -24,27 +24,38 @@ public class ThrottledMiddleware(RequestDelegate next, ISpeedLimitService speedS
         var config = speedService.GetThrottleConfig();
         var clientIp = RequestUtil.GetClientIp(context.Request);
         var path = await statisticService.GetMatchPath(context.Request.Path);
-        var body = context.Response.Body;
+        var originalBody = context.Response.Body;
+        Stream? wrappedBody = null;
 
         if (config.PathLimits.TryGetValue(path, out var val))
         {
-            body = new UrlThrottledStream(body, val * 1024);
+            wrappedBody = new UrlThrottledStream(originalBody, val * 1024);
         }
         else if (config.IpLimits.TryGetValue(clientIp, out val))
         {
-            body = new IpThrottledStream(body, clientIp, val * 1024);
+            wrappedBody = new IpThrottledStream(originalBody, clientIp, val * 1024);
         }
         else if (config.Global != 0)
         {
-            body = new UrlThrottledStream(body, config.Global * 1024);
+            wrappedBody = new UrlThrottledStream(originalBody, config.Global * 1024);
         }
 
-        context.Response.Body = body;
-        await _next(context);
-
-        if (body is UrlThrottledStream || body is IpThrottledStream)
+        if (wrappedBody != null)
         {
-            await body.DisposeAsync();
+            context.Response.Body = wrappedBody;
+        }
+
+        try
+        {
+            await _next(context);
+        }
+        finally
+        {
+            // 还原原始 Body，确保 ASP.NET 能正常管理生命周期
+            if (wrappedBody != null)
+            {
+                context.Response.Body = originalBody;
+            }
         }
     }
 }
@@ -57,37 +68,53 @@ public class UrlThrottledStream(Stream inner, int bytesPerSecond) : Stream
     public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
     {
         var totalLength = buffer.Length;
+        if (totalLength == 0) return;
+
         var totalChunks = (int)Math.Ceiling(totalLength / (double)bytesPerSecond);
 
         var stopwatch = Stopwatch.StartNew();
         var totalSent = 0L;
 
-        for (int i = 0; i < totalChunks; i++)
+        try
         {
-            if (cancellationToken.IsCancellationRequested)
-                break;
-
-            int nowOffset = i * bytesPerSecond;
-            int length = Math.Min(bytesPerSecond, buffer.Length - nowOffset);
-
-            // 计算应该发送的时间
-            var targetTime = TimeSpan.FromSeconds((double)totalSent / bytesPerSecond);
-            var actualTime = stopwatch.Elapsed;
-
-            if (targetTime > actualTime)
+            for (int i = 0; i < totalChunks; i++)
             {
-                var delay = targetTime - actualTime;
-                await Task.Delay(delay, cancellationToken);
+                if (cancellationToken.IsCancellationRequested)
+                    break;
+
+                int nowOffset = i * bytesPerSecond;
+                int length = Math.Min(bytesPerSecond, buffer.Length - nowOffset);
+
+                // 计算应该发送的时间
+                var targetTime = TimeSpan.FromSeconds((double)totalSent / bytesPerSecond);
+                var actualTime = stopwatch.Elapsed;
+
+                if (targetTime > actualTime)
+                {
+                    var delay = targetTime - actualTime;
+                    await Task.Delay(delay, cancellationToken);
+                }
+
+                await _inner.WriteAsync(buffer.Slice(nowOffset, length), cancellationToken);
+                totalSent += length;
+
+                _logger.Trace("Sent url {TotalSent}/{TotalLength} bytes ({Percentage:F1}%)", totalSent, totalLength, (double)totalSent / totalLength * 100);
             }
-
-            await _inner.WriteAsync(buffer.Slice(nowOffset, length), cancellationToken);
-            totalSent += length;
-
-            _logger.Info("Sent url {TotalSent}/{TotalLength} bytes ({Percentage:F1}%)", totalSent, totalLength, (double)totalSent / totalLength * 100);
         }
+        catch (TaskCanceledException) { }
+        catch (OperationCanceledException) { }
     }
 
-    // ... 其他必要的 Stream 成员，通常直接委托给 _inner
+    public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    {
+        return WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+    }
+
+    public override void Write(byte[] buffer, int offset, int count)
+    {
+        _inner.Write(buffer, offset, count);
+    }
+
     public override bool CanRead => _inner.CanRead;
     public override bool CanSeek => _inner.CanSeek;
     public override bool CanWrite => _inner.CanWrite;
@@ -97,12 +124,23 @@ public class UrlThrottledStream(Stream inner, int bytesPerSecond) : Stream
         get => _inner.Position;
         set => _inner.Position = value;
     }
-    public override void Flush() { }
+    public override void Flush() => _inner.Flush();
+    public override Task FlushAsync(CancellationToken cancellationToken) => _inner.FlushAsync(cancellationToken);
 
     public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
     public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
     public override void SetLength(long value) => _inner.SetLength(value);
-    public override void Write(byte[] buffer, int offset, int count) => WriteAsync(buffer, offset, count).GetAwaiter().GetResult();
+
+    protected override void Dispose(bool disposing)
+    {
+        // 不要 dispose inner stream，由 ASP.NET 管理
+    }
+
+    public override ValueTask DisposeAsync()
+    {
+        // 不要 dispose inner stream，由 ASP.NET 管理
+        return ValueTask.CompletedTask;
+    }
 }
 
 public class IpThrottledStream(Stream inner, string clientIp, int bytesPerSecond) : Stream
@@ -114,36 +152,52 @@ public class IpThrottledStream(Stream inner, string clientIp, int bytesPerSecond
     {
         var offset = 0;
         var left = buffer.Length;
-        while (left > 0)
-        {
-            if (cancellationToken.IsCancellationRequested)
-                break;
-            var nowAlloc = 0;
-            SharedData.ClientThrottled.DoLockKeyFunc(clientIp, (_) => new ClientThrottledLimit
-            {
-                EveryCapacity = bytesPerSecond,
-                LeftToken = bytesPerSecond,
-            }, (val) =>
-        {
-            nowAlloc = val.AllocToken(left);
-            return true;
-        });
+        if (left == 0) return;
 
-            if (nowAlloc == 0)
+        try
+        {
+            while (left > 0)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
-                continue;
+                if (cancellationToken.IsCancellationRequested)
+                    break;
+                var nowAlloc = 0;
+                SharedData.ClientThrottled.DoLockKeyFunc(clientIp, (_) => new ClientThrottledLimit
+                {
+                    EveryCapacity = bytesPerSecond,
+                    LeftToken = bytesPerSecond,
+                }, (val) =>
+                {
+                    nowAlloc = val.AllocToken(left);
+                    return true;
+                });
+
+                if (nowAlloc == 0)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
+                    continue;
+                }
+
+                await _inner.WriteAsync(buffer.Slice(offset, nowAlloc), cancellationToken);
+                offset += nowAlloc;
+                left -= nowAlloc;
+
+                _logger.Trace("Sent {ClientIp} {Offset}/{BufferLength} bytes ({Percentage:F1}%)", clientIp, offset, buffer.Length, (double)offset / buffer.Length * 100);
             }
-
-            await _inner.WriteAsync(buffer.Slice(offset, nowAlloc), cancellationToken);
-            offset += nowAlloc;
-            left -= nowAlloc;
-
-            _logger.Info("Sent {ClientIp} {Offset}/{BufferLength} bytes ({Percentage:F1}%)", clientIp, offset, buffer.Length, (double)offset / buffer.Length * 100);
         }
+        catch (TaskCanceledException) { }
+        catch (OperationCanceledException) { }
     }
 
-    // ... 其他必要的 Stream 成员，通常直接委托给 _inner
+    public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    {
+        return WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+    }
+
+    public override void Write(byte[] buffer, int offset, int count)
+    {
+        _inner.Write(buffer, offset, count);
+    }
+
     public override bool CanRead => _inner.CanRead;
     public override bool CanSeek => _inner.CanSeek;
     public override bool CanWrite => _inner.CanWrite;
@@ -153,9 +207,21 @@ public class IpThrottledStream(Stream inner, string clientIp, int bytesPerSecond
         get => _inner.Position;
         set => _inner.Position = value;
     }
-    public override void Flush() { }
+    public override void Flush() => _inner.Flush();
+    public override Task FlushAsync(CancellationToken cancellationToken) => _inner.FlushAsync(cancellationToken);
+
     public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
     public override long Seek(long offset, SeekOrigin origin) => _inner.Seek(offset, origin);
     public override void SetLength(long value) => _inner.SetLength(value);
-    public override void Write(byte[] buffer, int offset, int count) => WriteAsync(buffer, offset, count).GetAwaiter().GetResult();
+
+    protected override void Dispose(bool disposing)
+    {
+        // 不要 dispose inner stream，由 ASP.NET 管理
+    }
+
+    public override ValueTask DisposeAsync()
+    {
+        // 不要 dispose inner stream，由 ASP.NET 管理
+        return ValueTask.CompletedTask;
+    }
 }
