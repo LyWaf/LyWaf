@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { advancedCcApi, pluginApi } from '@/api'
+import { advancedCcApi, pluginApi, statisticApi } from '@/api'
 import CcRuleEditor from '@/components/cc/CcRuleEditor.vue'
 import { useToast } from '@/composables/useToast'
 import type { AdvancedCcRule, CcRuleType } from '@/types'
@@ -33,6 +33,98 @@ const toggleAnalysis = async () => {
     showError('操作失败')
   } finally {
     analysisToggling.value = false
+  }
+}
+
+// ===== 白名单路径 =====
+const whitePaths = ref<string[]>([])
+const newWhitePath = ref('')
+const whitePathLoading = ref(false)
+
+// ===== 路径统计规则 =====
+const pathStas = ref<string[]>([])
+const newPathSta = ref('')
+const pathStaLoading = ref(false)
+
+const loadStatsConfig = async () => {
+  try {
+    const res = await statisticApi.getConfig()
+    if (res.success) {
+      whitePaths.value = res.whitePaths || []
+      pathStas.value = res.pathStas || []
+    }
+  } catch (e) {
+    console.error('加载统计配置失败:', e)
+  }
+}
+
+// 白名单操作
+const addWhitePath = async () => {
+  const path = newWhitePath.value.trim()
+  if (!path) return
+  whitePathLoading.value = true
+  try {
+    const res = await statisticApi.addWhitePath(path)
+    if (res.success) {
+      newWhitePath.value = ''
+      await loadStatsConfig()
+      showSuccess('白名单路径已添加')
+    } else {
+      showError(res.message || '添加失败')
+    }
+  } catch (e) {
+    showError('添加失败')
+  } finally {
+    whitePathLoading.value = false
+  }
+}
+
+const removeWhitePath = async (path: string) => {
+  try {
+    const res = await statisticApi.removeWhitePath(path)
+    if (res.success) {
+      await loadStatsConfig()
+      showSuccess('已移除')
+    } else {
+      showError(res.message || '移除失败')
+    }
+  } catch (e) {
+    showError('移除失败')
+  }
+}
+
+// PathStas 操作
+const addPathSta = async () => {
+  const path = newPathSta.value.trim()
+  if (!path) return
+  pathStaLoading.value = true
+  try {
+    const res = await statisticApi.addPathSta(path)
+    if (res.success) {
+      newPathSta.value = ''
+      await loadStatsConfig()
+      showSuccess('路径统计规则已添加')
+    } else {
+      showError(res.message || '添加失败')
+    }
+  } catch (e) {
+    showError('添加失败')
+  } finally {
+    pathStaLoading.value = false
+  }
+}
+
+const removePathSta = async (path: string) => {
+  try {
+    const res = await statisticApi.removePathSta(path)
+    if (res.success) {
+      await loadStatsConfig()
+      showSuccess('已移除')
+    } else {
+      showError(res.message || '移除失败')
+    }
+  } catch (e) {
+    showError('移除失败')
   }
 }
 
@@ -114,7 +206,7 @@ const toggleRule = async (rule: AdvancedCcRule) => {
 // 删除规则
 const deleteRule = async (rule: AdvancedCcRule) => {
   if (!confirm(`确定要删除规则"${rule.name}"吗？`)) return
-  
+
   try {
     const response = await advancedCcApi.removeRule(rule.id)
     if (response.success) {
@@ -175,7 +267,11 @@ let refreshTimer: number | null = null
 onMounted(() => {
   loadData()
   loadAnalysisState()
-  refreshTimer = window.setInterval(loadData, 60000)
+  loadStatsConfig()
+  refreshTimer = window.setInterval(() => {
+    loadData()
+    loadStatsConfig()
+  }, 60000)
 })
 
 onUnmounted(() => {
@@ -210,6 +306,7 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <!-- CC 防护规则 -->
     <div class="card">
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-medium text-gray-100">CC 防护规则</h2>
@@ -279,6 +376,100 @@ onUnmounted(() => {
         >
           暂无 CC 防护规则
         </div>
+      </div>
+    </div>
+
+    <!-- 白名单路径 -->
+    <div class="card">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <h2 class="text-lg font-medium text-gray-100">白名单路径</h2>
+          <p class="text-sm text-gray-500 mt-1">白名单路径将跳过 WAF 和 CC 检测</p>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap gap-2 mb-4" v-if="whitePaths.length > 0">
+        <span
+          v-for="path in whitePaths"
+          :key="path"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary-500/10 text-primary-400 text-sm border border-primary-500/20"
+        >
+          <code class="font-mono">{{ path }}</code>
+          <button
+            @click="removeWhitePath(path)"
+            class="ml-0.5 text-primary-400/60 hover:text-red-400 transition-colors"
+            title="移除"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </span>
+      </div>
+      <div v-else class="text-gray-500 text-sm mb-4">暂无白名单路径</div>
+
+      <div class="flex gap-2">
+        <input
+          v-model="newWhitePath"
+          @keyup.enter="addWhitePath"
+          type="text"
+          placeholder="输入路径，例如 /health"
+          class="flex-1 bg-dark-card-hover border border-dark-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-primary-500"
+        />
+        <button
+          @click="addWhitePath"
+          :disabled="!newWhitePath.trim() || whitePathLoading"
+          class="btn btn-sm btn-primary"
+        >
+          添加
+        </button>
+      </div>
+    </div>
+
+    <!-- 路径统计规则 -->
+    <div class="card">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <h2 class="text-lg font-medium text-gray-100">路径统计规则</h2>
+          <p class="text-sm text-gray-500 mt-1">用于流量分析的路径匹配规则，支持 {'{**match}'} 通配符</p>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap gap-2 mb-4" v-if="pathStas.length > 0">
+        <span
+          v-for="path in pathStas"
+          :key="path"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-500/10 text-blue-400 text-sm border border-blue-500/20"
+        >
+          <code class="font-mono">{{ path }}</code>
+          <button
+            @click="removePathSta(path)"
+            class="ml-0.5 text-blue-400/60 hover:text-red-400 transition-colors"
+            title="移除"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </span>
+      </div>
+      <div v-else class="text-gray-500 text-sm mb-4">暂无路径统计规则</div>
+
+      <div class="flex gap-2">
+        <input
+          v-model="newPathSta"
+          @keyup.enter="addPathSta"
+          type="text"
+          placeholder="输入路径，例如 /api/{**match}"
+          class="flex-1 bg-dark-card-hover border border-dark-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-primary-500"
+        />
+        <button
+          @click="addPathSta"
+          :disabled="!newPathSta.trim() || pathStaLoading"
+          class="btn btn-sm btn-primary"
+        >
+          添加
+        </button>
       </div>
     </div>
 

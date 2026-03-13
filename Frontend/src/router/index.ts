@@ -93,12 +93,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'WAF 规则', icon: '🛡️' }
   },
   {
-    path: '/stats-config',
-    name: 'StatsConfig',
-    component: () => import('@/views/StatsConfig.vue'),
-    meta: { title: '统计配置', icon: '📈' }
-  },
-  {
     path: '/param-config',
     name: 'ParamConfig',
     component: () => import('@/views/ParamConfig.vue'),

@@ -374,13 +374,10 @@ onMounted(loadConfig)
                   <button @click="saveEditIp(item)" class="btn btn-sm btn-primary">保存</button>
                   <button @click="cancelEditIp(item)" class="btn btn-sm btn-secondary">取消</button>
                 </template>
-                <button
-                  v-else
-                  @click="removeIpThrottle(item.ip)"
-                  class="btn btn-sm btn-danger"
-                >
-                  移除
-                </button>
+                <template v-else>
+                  <button @click="startEditIp(item)" class="btn btn-sm btn-primary">编辑</button>
+                  <button @click="removeIpThrottle(item.ip)" class="btn btn-sm btn-danger">移除</button>
+                </template>
               </div>
             </td>
           </tr>
@@ -454,13 +451,10 @@ onMounted(loadConfig)
                   <button @click="saveEditPath(item)" class="btn btn-sm btn-primary">保存</button>
                   <button @click="cancelEditPath(item)" class="btn btn-sm btn-secondary">取消</button>
                 </template>
-                <button
-                  v-else
-                  @click="removePathThrottle(item.path)"
-                  class="btn btn-sm btn-danger"
-                >
-                  移除
-                </button>
+                <template v-else>
+                  <button @click="startEditPath(item)" class="btn btn-sm btn-primary">编辑</button>
+                  <button @click="removePathThrottle(item.path)" class="btn btn-sm btn-danger">移除</button>
+                </template>
               </div>
             </td>
           </tr>
