@@ -269,12 +269,21 @@ const copyCurl = async (entry: InterceptLogEntry, format: CurlFormat) => {
 
 const totalPages = () => Math.ceil(logTotal.value / logLimit) || 1
 const currentPage = () => Math.floor(logOffset.value / logLimit) + 1
+const jumpPageInput = ref('')
 
 const goPage = (page: number) => {
   const maxPage = totalPages()
   if (page < 1 || page > maxPage) return
   logOffset.value = (page - 1) * logLimit
   loadLogEntries()
+}
+
+const handleJumpPage = () => {
+  const page = parseInt(jumpPageInput.value)
+  if (!isNaN(page)) {
+    goPage(page)
+    jumpPageInput.value = ''
+  }
 }
 
 // Tab 切换时加载数据
@@ -567,6 +576,14 @@ const formatNum = (n: number): string => {
             :disabled="currentPage() >= totalPages()"
             class="btn btn-sm btn-secondary text-xs"
           >下一页</button>
+          <input
+            v-model="jumpPageInput"
+            @keyup.enter="handleJumpPage"
+            type="text" inputmode="numeric"
+            placeholder="页码"
+            class="w-16 text-center text-xs bg-dark-card-hover border border-dark-border rounded px-1.5 py-1 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-primary-500"
+          />
+          <button @click="handleJumpPage" class="btn btn-sm btn-secondary text-xs">跳转</button>
         </div>
       </template>
     </template>

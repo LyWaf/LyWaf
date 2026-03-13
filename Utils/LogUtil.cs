@@ -73,18 +73,19 @@ public static partial class LogUtil
     public static partial Regex EntrySeparatorRegex();
 
     /// <summary>
-    /// 统计日志文件中的条目总数
+    /// 统计日志文件中的条目总数（流式扫描，不加载整个文件）
     /// </summary>
     public static async Task<int> CountEntriesAsync(string filePath)
     {
         if (!File.Exists(filePath)) return 0;
 
-        var content = await File.ReadAllTextAsync(filePath, Encoding.UTF8);
-        return EntrySeparatorRegex().Matches(content).Count;
+        using var scanner = new ReverseLogScanner(filePath);
+        return await scanner.CountEntriesAsync();
     }
 
     /// <summary>
     /// 分页读取日志条目（倒序：最新在前，支持关键字搜索）
+    /// 使用流式索引扫描，避免将整个文件加载到内存。
     /// </summary>
     public static async Task<(List<LogEntry> entries, int total)> ParseLogFileAsync(
         string filePath, int offset = 0, int limit = 20, string? search = null,
@@ -93,49 +94,8 @@ public static partial class LogUtil
         if (!File.Exists(filePath))
             return ([], 0);
 
-        var content = await File.ReadAllTextAsync(filePath, Encoding.UTF8);
-        var regex = EntrySeparatorRegex();
-        var matches = regex.Matches(content);
-
-        if (matches.Count == 0)
-            return ([], 0);
-
-        // 收集所有条目（倒序：最新在前）
-        var allEntries = new List<(int origIndex, string time, string block)>();
-        for (int i = matches.Count - 1; i >= 0; i--)
-        {
-            var startIdx = matches[i].Index;
-            var endIdx = (i + 1 < matches.Count) ? matches[i + 1].Index : content.Length;
-            var block = content[startIdx..endIdx].TrimEnd();
-            var time = matches[i].Groups[1].Value.Trim();
-
-            // 搜索过滤
-            if (!string.IsNullOrEmpty(search) && !block.Contains(search, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            // 时间过滤
-            if (startTime.HasValue || endTime.HasValue)
-            {
-                if (DateTime.TryParse(time, out var entryTime))
-                {
-                    if (startTime.HasValue && entryTime < startTime.Value) continue;
-                    if (endTime.HasValue && entryTime > endTime.Value) continue;
-                }
-            }
-
-            allEntries.Add((i, time, block));
-        }
-
-        var total = allEntries.Count;
-        var paged = allEntries.Skip(offset).Take(limit);
-
-        var entries = new List<LogEntry>();
-        foreach (var (origIndex, time, block) in paged)
-        {
-            entries.Add(ParseLogEntry(block, origIndex, time));
-        }
-
-        return (entries, total);
+        using var scanner = new ReverseLogScanner(filePath);
+        return await scanner.QueryAsync(offset, limit, search, startTime, endTime);
     }
 
     /// <summary>
@@ -307,23 +267,14 @@ public static partial class LogUtil
     }
 
     /// <summary>
-    /// 删除日志文件中的指定条目（按原始索引）
+    /// 删除日志文件中的指定条目（按原始索引，流式处理避免大内存分配）
     /// </summary>
     public static async Task<bool> DeleteLogEntryAsync(string filePath, int entryIndex)
     {
         if (!File.Exists(filePath)) return false;
 
-        var content = await File.ReadAllTextAsync(filePath, Encoding.UTF8);
-        var matches = EntrySeparatorRegex().Matches(content);
-
-        if (entryIndex < 0 || entryIndex >= matches.Count) return false;
-
-        var startIdx = matches[entryIndex].Index;
-        var endIdx = (entryIndex + 1 < matches.Count) ? matches[entryIndex + 1].Index : content.Length;
-
-        var newContent = string.Concat(content.AsSpan(0, startIdx), content.AsSpan(endIdx));
-        await File.WriteAllTextAsync(filePath, newContent, Encoding.UTF8);
-        return true;
+        using var scanner = new ReverseLogScanner(filePath);
+        return await scanner.DeleteEntryAsync(filePath, entryIndex);
     }
 
     #endregion
