@@ -19,6 +19,7 @@ const menuItems: MenuItem[] = [
   { path: '/feature-status', name: '防护应用', icon: '⚙️' },
   { path: '/cc-protection', name: 'CC 防护', icon: '⚡' },
   { path: '/waf-rules', name: 'WAF 规则', icon: '🛡️' },
+  { path: '/speed-limit', name: '速度限制', icon: '🚀' },
   { path: '/intercept-events', name: '拦截事件', icon: '📋' },
   { path: '/api-timing', name: 'API 耗时', icon: '⏱️' },
   {
@@ -32,7 +33,6 @@ const menuItems: MenuItem[] = [
       { path: '/param-config', name: '参数配置' },
       { path: '/plugin-management', name: '插件管理' },
       { path: '/error-templates', name: '错误模板' },
-      { path: '/speed-limit', name: '速度限制' },
     ]
   },
   { path: '/general-settings', name: '通用设置', icon: '⚙️' },

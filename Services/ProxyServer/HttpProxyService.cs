@@ -18,9 +18,6 @@ public class HttpProxyService : BackgroundService
     private ProxyServerOptions _options;
     private readonly List<(TcpListener listener, string key, IPAddress host, int port)> _listeners = [];
 
-    // SOCKS5 版本号
-    private const byte SOCKS5_VERSION = 0x05;
-
     public HttpProxyService(IOptionsMonitor<ProxyServerOptions> optionsMonitor)
     {
         _options = optionsMonitor.CurrentValue;
@@ -162,40 +159,8 @@ public class HttpProxyService : BackgroundService
             try
             {
                 var portConfig = GetPortConfig(_options, host.ToString(), port, configKey);
-                var socket = client.Client;
-
-                // 嗅探首字节以判断协议类型
-                var peekBuffer = new byte[1];
-                var received = await socket.ReceiveAsync(peekBuffer, SocketFlags.Peek, stoppingToken);
-                
-                if (received == 0)
-                {
-                    // 连接已关闭
-                    return;
-                }
-
-                var firstByte = peekBuffer[0];
-
-                // 判断协议类型
-                // SOCKS5 以 0x05 开头
-                // HTTP 以 ASCII 字母开头 (GET, POST, CONNECT, PUT, DELETE, HEAD, OPTIONS, TRACE, PATCH)
-                if (firstByte == SOCKS5_VERSION && portConfig.EnableSocks5)
-                {
-                    // SOCKS5 协议
-                    var handler = new Socks5Handler(_options, portConfig);
-                    await handler.HandleAsync(socket, stoppingToken);
-                }
-                else if (IsHttpMethod(firstByte) && (portConfig.EnableHttp || portConfig.EnableHttps))
-                {
-                    // HTTP/HTTPS 代理协议
-                    var handler = new HttpProxyHandler(_options, portConfig);
-                    await handler.HandleAsync(socket, stoppingToken);
-                }
-                else
-                {
-                    // 未知协议或协议未启用
-                    _logger.Debug("未知或未启用的协议，首字节: 0x{FirstByte:X2}", firstByte);
-                }
+                var handler = new ProxyHandler(_options, portConfig);
+                await handler.HandleAsync(client.Client, stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -206,26 +171,6 @@ public class HttpProxyService : BackgroundService
                 _logger.Error(ex, "代理处理连接失败");
             }
         }
-    }
-
-    /// <summary>
-    /// 检查首字节是否可能是 HTTP 方法的开头
-    /// HTTP 方法: GET, POST, PUT, DELETE, HEAD, OPTIONS, TRACE, PATCH, CONNECT
-    /// </summary>
-    private static bool IsHttpMethod(byte firstByte)
-    {
-        // HTTP 方法的首字母: G(ET), P(OST/UT/ATCH), D(ELETE), H(EAD), O(PTIONS), T(RACE), C(ONNECT)
-        return firstByte switch
-        {
-            (byte)'G' => true,  // GET
-            (byte)'P' => true,  // POST, PUT, PATCH
-            (byte)'D' => true,  // DELETE
-            (byte)'H' => true,  // HEAD
-            (byte)'O' => true,  // OPTIONS
-            (byte)'T' => true,  // TRACE
-            (byte)'C' => true,  // CONNECT
-            _ => false
-        };
     }
 
     /// <summary>
