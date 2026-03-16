@@ -20,19 +20,25 @@
 .PARAMETER NoArchive
     跳过压缩打包
 
+.PARAMETER CopyDirs
+    额外需要拷贝到输出目录的目录列表（相对于项目根目录）
+
 .EXAMPLE
     .\build.ps1                     # 编译当前平台
     .\build.ps1 -Target linux-x64   # 编译 Linux x64
     .\build.ps1 -Target all         # 编译所有平台
     .\build.ps1 -Target win-x64 -SkipFrontend  # 跳过前端，仅编译后端
     .\build.ps1 -Target win-x64 -Trim         # 启用裁剪，减小体积
+    .\build.ps1 -Target win-x64 -CopyDirs plugins,certs  # 额外拷贝 plugins 和 certs 目录
+    .\build.ps1 -Target win-x64,osx-arm64              # 同时编译多个平台
 #>
 
 param(
-    [string]$Target = "",
+    [string[]]$Target = @(),
     [switch]$SkipFrontend,
     [switch]$Trim,
-    [switch]$NoArchive
+    [switch]$NoArchive,
+    [string[]]$CopyDirs = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -207,6 +213,19 @@ function Publish-Target {
         Get-ChildItem -Path $OutputDir -Filter $pattern -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     }
 
+    # 拷贝用户指定的额外目录（在清理之后，避免被清理逻辑删除）
+    foreach ($dir in $CopyDirs) {
+        $dirSource = Join-Path $ProjectDir $dir
+        $dirDest = Join-Path $OutputDir $dir
+        if (Test-Path $dirSource) {
+            New-Item -ItemType Directory -Path $dirDest -Force | Out-Null
+            Copy-Item -Path "$dirSource\*" -Destination $dirDest -Recurse -Force
+            Write-Info "已拷贝额外目录: $dir"
+        } else {
+            Write-Warn "指定的额外目录不存在: $dir"
+        }
+    }
+
     Write-Ok "编译完成: $RID -> $OutputDir"
 
     # 压缩打包
@@ -227,9 +246,21 @@ function Publish-Target {
             $tarCmd = Get-Command tar -ErrorAction SilentlyContinue
             if ($tarCmd) {
                 Push-Location $OutputBase
-                & tar -czf "$ArchiveName.tar.gz" "$ArchiveName/"
-                Pop-Location
-                Write-Ok "已打包: $ArchiveName.tar.gz"
+                try {
+                    & tar -czf "$ArchiveName.tar.gz" "$ArchiveName"
+                    if ($LASTEXITCODE -ne 0) { throw "tar exit code: $LASTEXITCODE" }
+                    Write-Ok "已打包: $ArchiveName.tar.gz"
+                }
+                catch {
+                    Write-Warn "tar 压缩失败，回退到 zip: $_"
+                    $ZipPath = Join-Path $OutputBase "$ArchiveName.zip"
+                    if (Test-Path $ZipPath) { Remove-Item -Force $ZipPath }
+                    Compress-Archive -Path "$OutputDir\*" -DestinationPath $ZipPath
+                    Write-Ok "已打包: $ArchiveName.zip (tar 失败，使用 zip 代替)"
+                }
+                finally {
+                    Pop-Location
+                }
             }
             else {
                 # 回退到 zip
@@ -254,43 +285,51 @@ Write-Host ""
 Test-Dependencies
 
 # 自动检测平台
-if ([string]::IsNullOrEmpty($Target)) {
+if ($Target.Count -eq 0 -or ($Target.Count -eq 1 -and [string]::IsNullOrEmpty($Target[0]))) {
     if ($IsLinux) {
         $arch = & uname -m
         if ($arch -eq "aarch64" -or $arch -eq "arm64") {
-            $Target = "linux-arm64"
+            $Target = @("linux-arm64")
         } else {
-            $Target = "linux-x64"
+            $Target = @("linux-x64")
         }
     }
     elseif ($IsMacOS) {
         $arch = & uname -m
         if ($arch -eq "arm64") {
-            $Target = "osx-arm64"
+            $Target = @("osx-arm64")
         } else {
-            $Target = "osx-x64"
+            $Target = @("osx-x64")
         }
     }
     else {
         # Windows
         if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
-            $Target = "win-arm64"
+            $Target = @("win-arm64")
         } else {
-            $Target = "win-x64"
+            $Target = @("win-x64")
         }
     }
-    Write-Info "自动检测平台: $Target"
+    Write-Info "自动检测平台: $($Target[0])"
 }
 
 # 构建前端
 Build-Frontend
 
+# 解析目标平台列表（支持 -Target win-x64,osx-arm64 逗号分隔或数组形式）
+if ($Target.Count -eq 1 -and $Target[0] -eq "all") {
+    $TargetRIDs = $AllRIDs
+} else {
+    # 支持数组形式（PowerShell 逗号自动拆分）和字符串内逗号两种写法
+    $TargetRIDs = $Target | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+}
+
 # 编译
-if ($Target -eq "all") {
-    Write-Info "编译所有平台..."
+if ($TargetRIDs.Count -gt 1) {
+    Write-Info "编译 $($TargetRIDs.Count) 个平台: $($TargetRIDs -join ', ')"
     $failedRIDs = @()
 
-    foreach ($rid in $AllRIDs) {
+    foreach ($rid in $TargetRIDs) {
         $result = Publish-Target -RID $rid
         if (-not $result) {
             $failedRIDs += $rid
@@ -312,11 +351,12 @@ if ($Target -eq "all") {
     Write-Host ""
 
     # 列出产物
-    Get-ChildItem -Path $OutputBase -Include "*.tar.gz", "*.zip" -Recurse | 
+    Get-ChildItem -Path $OutputBase -Include "*.tar.gz", "*.zip" -Recurse |
         ForEach-Object { Write-Host "  $($_.Name)  ($([math]::Round($_.Length / 1MB, 2)) MB)" }
 }
 else {
-    $result = Publish-Target -RID $Target
+    $singleTarget = $TargetRIDs[0]
+    $result = Publish-Target -RID $singleTarget
 
     if ($result) {
         Write-Host ""
@@ -324,12 +364,12 @@ else {
         Write-Ok "编译完成!"
         Write-Host "=====================================" -ForegroundColor White
 
-        $outputDir = Join-Path $OutputBase "$ProjectName-$Target"
+        $outputDir = Join-Path $OutputBase "$ProjectName-$singleTarget"
         Write-Info "输出目录: $outputDir"
 
         # 显示可执行文件信息
         if (Test-Path $outputDir) {
-            if ($Target -like "win-*") {
+            if ($singleTarget -like "win-*") {
                 $exeFile = Get-ChildItem -Path $outputDir -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
             }
             else {

@@ -9,7 +9,7 @@ public class DuckDbOptions
     public bool Enabled { get; set; } = true;
 
     /// <summary>数据库文件路径（相对于工作目录）</summary>
-    public string DatabasePath { get; set; } = "datas/lywaf_stats.duckdb";
+    public string DatabasePath { get; set; } = "bin/lywaf_stats.duckdb";
 
     /// <summary>刷写间隔（秒）</summary>
     public int FlushIntervalSeconds { get; set; } = 60;

@@ -63,7 +63,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             LogQueryString = true,
             LogRequestBody = true,
             LogHeaders = true,
-            LogResponseBody = false,
+            LogResponseBody = true,
             LogDuration = false,
         };
         context.Items["RequestLogger.Reason"] = reason;
@@ -85,6 +85,26 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             LogDuration = true,
         };
         context.Items["RequestLogger.Reason"] = reason;
+    }
+
+    /// <summary>
+    /// 启用请求体和响应体捕获（透传流），用于拦截路径的日志记录
+    /// </summary>
+    private static void EnableCapture(HttpContext context)
+    {
+        if (!context.Items.ContainsKey(LyWafCache.ResponseCaptureStream))
+        {
+            var capture = new CaptureStream(context.Response.Body);
+            context.Response.Body = capture;
+            context.Items[LyWafCache.ResponseCaptureStream] = capture;
+        }
+        if (!context.Items.ContainsKey(LyWafCache.RequestCaptureStream))
+        {
+            context.Request.EnableBuffering();
+            var capture = new CaptureStream(context.Request.Body);
+            context.Request.Body = capture;
+            context.Items[LyWafCache.RequestCaptureStream] = capture;
+        }
     }
 
     /// <summary>
@@ -120,6 +140,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             {
                 // 被封禁的 IP 访问，记录为黑名单拦截
                 RecordWafHit(context, clientIp, $"封禁IP: {reason}");
+                EnableCapture(context);
                 await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason },
                     isAttack: false, eventType: SecurityEventType.BlacklistBlock);
                 return;
@@ -135,6 +156,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
                 _ccRuleChecker.RecordAttackEvent(clientIp); // 记录攻击事件用于 CC 高频攻击检测
                 RecordWafHit(context, clientIp, reason);
                 SetInterceptLogMark(context, reason);
+                EnableCapture(context);
                 await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason },
                     isAttack: true, eventType: SecurityEventType.WafIntercept);
                 return;
@@ -145,6 +167,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
                 _ccRuleChecker.RecordAttackEvent(clientIp); // 记录攻击事件用于 CC 高频攻击检测
                 RecordWafHit(context, clientIp, reason);
                 SetInterceptLogMark(context, reason);
+                EnableCapture(context);
                 await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason },
                     isAttack: true, eventType: SecurityEventType.WafIntercept);
                 return;
@@ -159,11 +182,13 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
                 if (ruleResult.Action != WafRuleAction.Observe)
                 {
                     SetInterceptLogMark(context, wafReason);
+                    EnableCapture(context);
                     await _wafRuleService.ExecuteAction(context, ruleResult, clientIp);
                     return;
                 }
                 // Observe：记录日志（含 ResponseBody），继续管道
                 SetObserveLogMark(context, wafReason);
+                EnableCapture(context);
                 await _wafRuleService.ExecuteAction(context, ruleResult, clientIp);
             }
 

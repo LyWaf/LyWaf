@@ -11,4 +11,10 @@ public static class LyWafCache
 
     /// <summary>已捕获的响应体字符串</summary>
     public const string ResponseBody = "LyWafCache.ResponseBody";
+
+    /// <summary>响应体 CaptureStream 实例引用</summary>
+    public const string ResponseCaptureStream = "LyWafCache.ResponseCaptureStream";
+
+    /// <summary>请求体 CaptureStream 实例引用</summary>
+    public const string RequestCaptureStream = "LyWafCache.RequestCaptureStream";
 }

@@ -16,6 +16,8 @@ setlocal enabledelayedexpansion
 ::   build.bat osx-arm64           交叉编译 macOS ARM64
 ::   build.bat all                 编译所有平台
 ::   build.bat --trim win-x64      启用裁剪 (可减小体积，可能有兼容性问题)
+::   build.bat --copy-dirs plugins,certs win-x64  额外拷贝 plugins 和 certs 目录
+::   build.bat win-x64,osx-arm64                  同时编译多个平台
 :: ============================================================================
 
 set "SCRIPT_DIR=%~dp0"
@@ -25,6 +27,7 @@ set "OUTPUT_BASE=%PROJECT_DIR%\publish"
 set "FRONTEND_DIR=%PROJECT_DIR%\Frontend"
 set "CONFIGURATION=Release"
 set "ENABLE_TRIM=0"
+set "COPY_DIRS="
 
 echo =====================================
 echo   LyWaf 打包工具
@@ -49,6 +52,12 @@ if "%~1"=="--trim" (
     shift
     goto :parse_args
 )
+if "%~1"=="--copy-dirs" (
+    set "COPY_DIRS=%~2"
+    shift
+    shift
+    goto :parse_args
+)
 set "TARGET=%~1"
 shift
 goto :parse_args
@@ -67,7 +76,7 @@ if "%TARGET%"=="" (
 :: ---- 构建前端 ----
 call :build_frontend
 
-:: ---- 编译 ----
+:: ---- 编译（支持逗号分隔多目标，如 win-x64,osx-arm64） ----
 if "%TARGET%"=="all" (
     echo [INFO] 编译所有平台...
     for %%r in (linux-x64 linux-arm64 linux-musl-x64 linux-musl-arm64 osx-x64 osx-arm64 win-x64 win-arm64) do (
@@ -82,16 +91,18 @@ if "%TARGET%"=="all" (
     echo =====================================
     echo [INFO] 输出目录: %OUTPUT_BASE%
 ) else (
-    call :publish_rid %TARGET%
-    if errorlevel 1 (
-        echo [ERROR] 编译失败
-        exit /b 1
+    :: 支持逗号分隔的多目标
+    for %%r in (!TARGET:,= !) do (
+        call :publish_rid %%r
+        if errorlevel 1 (
+            echo [ERROR] 编译 %%r 失败
+        )
     )
     echo.
     echo =====================================
     echo [OK] 编译完成!
     echo =====================================
-    echo [INFO] 输出目录: %OUTPUT_BASE%\%PROJECT_NAME%-%TARGET%
+    echo [INFO] 输出目录: %OUTPUT_BASE%
 )
 
 exit /b 0
@@ -212,6 +223,19 @@ del /q "%OUTPUT_DIR%\*.deps.json" >nul 2>&1
 del /q "%OUTPUT_DIR%\*.runtimeconfig.json" >nul 2>&1
 del /q "%OUTPUT_DIR%\*.staticwebassets.runtime.json" >nul 2>&1
 del /q "%OUTPUT_DIR%\appsettings.yaml" >nul 2>&1
+
+:: 拷贝用户指定的额外目录（在清理之后，避免被清理逻辑删除）
+if not "%COPY_DIRS%"=="" (
+    for %%d in (%COPY_DIRS:,= %) do (
+        if exist "%PROJECT_DIR%\%%d" (
+            if not exist "%OUTPUT_DIR%\%%d" mkdir "%OUTPUT_DIR%\%%d"
+            xcopy /s /e /y /q "%PROJECT_DIR%\%%d\*" "%OUTPUT_DIR%\%%d\" >nul 2>&1
+            echo [INFO] 已拷贝额外目录: %%d
+        ) else (
+            echo [WARN] 指定的额外目录不存在: %%d
+        )
+    )
+)
 
 echo [OK] 编译完成: %RID% -^> %OUTPUT_DIR%
 

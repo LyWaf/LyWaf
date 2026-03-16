@@ -22,6 +22,15 @@ public static class HttpUtil
         if (context.Items.TryGetValue(LyWafCache.RequestBody, out var cached) && cached is string s && s.Length > 0)
             return s;
 
+        // 检查 CaptureStream（WAF 拦截路径使用的透传捕获流）
+        if (context.Items.TryGetValue(LyWafCache.RequestCaptureStream, out var cs) && cs is CaptureStream capture)
+        {
+            var body = capture.GetCapturedBody(maxBytes);
+            if (!string.IsNullOrEmpty(body))
+                context.Items[LyWafCache.RequestBody] = body;
+            return body;
+        }
+
         var request = context.Request;
         if (request.ContentLength <= 0 && request.ContentType == null)
             return null;
@@ -57,10 +66,20 @@ public static class HttpUtil
             return s;
         }
 
-        // 无 next：直接从当前 Response.Body（调用方已包装的 MemoryStream）读取
         if (next == null)
         {
+            // 检查 CaptureStream（WAF 拦截路径使用的透传捕获流）
+            if (context.Items.TryGetValue(LyWafCache.ResponseCaptureStream, out var cs) && cs is CaptureStream capture)
+            {
+                var body = capture.GetCapturedBody(maxBytes);
+                if (!string.IsNullOrEmpty(body))
+                    context.Items[LyWafCache.ResponseBody] = body;
+                return body;
+            }
+
             var stream = context.Response.Body;
+
+            // 回退：从可 Seek 的流读取
             if (stream is not { CanSeek: true, Length: > 0 })
                 return null;
             try

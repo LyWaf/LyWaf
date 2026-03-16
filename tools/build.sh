@@ -12,6 +12,8 @@
 #   ./build.sh win-x64            # 交叉编译 Windows x64
 #   ./build.sh all                # 编译所有平台
 #   ./build.sh --trim linux-x64   # 启用裁剪 (可减小体积，可能有兼容性问题)
+#   ./build.sh --copy-dirs plugins,certs linux-x64  # 额外拷贝 plugins 和 certs 目录
+#   ./build.sh win-x64,osx-arm64                   # 同时编译多个平台
 # ============================================================================
 
 set -e
@@ -152,6 +154,20 @@ publish_rid() {
           "$OUTPUT_DIR"/*.staticwebassets.runtime.json \
           "$OUTPUT_DIR"/appsettings.yaml
 
+    # 拷贝用户指定的额外目录（在清理之后，避免被清理逻辑删除）
+    if [ -n "$COPY_DIRS" ]; then
+        IFS=',' read -ra DIRS <<< "$COPY_DIRS"
+        for dir in "${DIRS[@]}"; do
+            if [ -d "$PROJECT_DIR/$dir" ]; then
+                mkdir -p "$OUTPUT_DIR/$dir"
+                cp -r "$PROJECT_DIR/$dir/"* "$OUTPUT_DIR/$dir/"
+                info "已拷贝额外目录: $dir"
+            else
+                warn "指定的额外目录不存在: $dir"
+            fi
+        done
+    fi
+
     success "编译完成: $RID -> $OUTPUT_DIR"
 
     # 打包为 tar.gz (Linux/macOS) 或 zip (Windows)
@@ -183,10 +199,18 @@ main() {
 
     # 解析参数
     ENABLE_TRIM=0
+    COPY_DIRS=""
     local TARGET=""
+    local NEXT_IS_COPYDIRS=0
     for arg in "$@"; do
+        if [ "$NEXT_IS_COPYDIRS" = "1" ]; then
+            COPY_DIRS="$arg"
+            NEXT_IS_COPYDIRS=0
+            continue
+        fi
         case "$arg" in
             --trim) ENABLE_TRIM=1 ;;
+            --copy-dirs) NEXT_IS_COPYDIRS=1 ;;
             *)      TARGET="$arg" ;;
         esac
     done
@@ -224,10 +248,17 @@ main() {
     # 构建前端
     build_frontend
 
-    # 编译
+    # 解析目标平台列表（支持逗号分隔，如 win-x64,osx-arm64）
     if [ "$TARGET" = "all" ]; then
-        info "编译所有平台..."
-        for RID in "${ALL_RIDS[@]}"; do
+        TARGET_RIDS=("${ALL_RIDS[@]}")
+    else
+        IFS=',' read -ra TARGET_RIDS <<< "$TARGET"
+    fi
+
+    # 编译
+    if [ "${#TARGET_RIDS[@]}" -gt 1 ]; then
+        info "编译 ${#TARGET_RIDS[@]} 个平台: ${TARGET_RIDS[*]}"
+        for RID in "${TARGET_RIDS[@]}"; do
             publish_rid "$RID"
         done
 
@@ -239,13 +270,13 @@ main() {
         echo ""
         ls -lh "$OUTPUT_BASE"/*.{tar.gz,zip} 2>/dev/null || true
     else
-        publish_rid "$TARGET"
+        publish_rid "${TARGET_RIDS[0]}"
 
         echo ""
         info "====================================="
         success "编译完成!"
         info "====================================="
-        info "输出目录: $OUTPUT_BASE/$PROJECT_NAME-$TARGET"
+        info "输出目录: $OUTPUT_BASE/$PROJECT_NAME-${TARGET_RIDS[0]}"
     fi
 }
 

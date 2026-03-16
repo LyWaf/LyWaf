@@ -1,6 +1,6 @@
 DuckDb:
   Enabled: true
-  DatabasePath: "datas/lywaf_stats.duckdb"
+  DatabasePath: "bin/lywaf_stats.duckdb"
   FlushIntervalSeconds: 60
   DetailRetentionDays: 30
   AggregateRetentionDays: 365
