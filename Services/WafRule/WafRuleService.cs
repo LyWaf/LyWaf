@@ -205,33 +205,20 @@ public class WafRuleService : IWafRuleService
 
         foreach (var rule in enabledRules)
         {
-            if (rule.ConditionGroups.Count == 0) continue;
+            if (rule.Conditions == null || rule.Conditions.Count == 0) continue;
 
-            // OR: 任一条件组匹配即触发
-            var anyGroupMatch = false;
-            foreach (var group in rule.ConditionGroups)
+            // AND: 所有条件都要满足
+            var allMatch = true;
+            foreach (var condition in rule.Conditions)
             {
-                if (group.Conditions.Count == 0) continue;
-
-                // AND: 组内所有条件都要满足
-                var allMatch = true;
-                foreach (var condition in group.Conditions)
+                if (!MatchCondition(context, condition, clientIp))
                 {
-                    if (!MatchCondition(context, condition, clientIp))
-                    {
-                        allMatch = false;
-                        break;
-                    }
-                }
-
-                if (allMatch)
-                {
-                    anyGroupMatch = true;
-                    break; // 已有一组匹配，无需检查其他组
+                    allMatch = false;
+                    break;
                 }
             }
 
-            if (anyGroupMatch)
+            if (allMatch)
             {
                 result.IsTriggered = true;
                 result.TriggeredRule = rule;
@@ -398,20 +385,37 @@ public class WafRuleService : IWafRuleService
                 var json = File.ReadAllText(RulesFilePath);
                 _userRules = JsonSerializer.Deserialize<List<WafCustomRule>>(json, _jsonOptions) ?? [];
 
-                // 向后兼容：旧版 Conditions(平铺 AND) → ConditionGroups(OR of AND)
-                var migrated = false;
-                foreach (var rule in _userRules)
+                // 向后兼容：旧 JSON 可能含 conditionGroups，需手动迁移
+                var needsSave = false;
+                using var doc = JsonDocument.Parse(json);
+                var rulesArr = doc.RootElement;
+                for (int i = 0; i < _userRules.Count && i < rulesArr.GetArrayLength(); i++)
                 {
+                    var rule = _userRules[i];
                     rule.Source = WafRuleSource.User;
-                    if (rule.Conditions is { Count: > 0 } && rule.ConditionGroups.Count == 0)
+
+                    if ((rule.Conditions == null || rule.Conditions.Count == 0)
+                        && rulesArr[i].TryGetProperty("conditionGroups", out var groups))
                     {
-                        rule.MigrateFromLegacy();
-                        migrated = true;
+                        // 将所有组的条件合并为扁平列表
+                        rule.Conditions = [];
+                        foreach (var group in groups.EnumerateArray())
+                        {
+                            if (group.TryGetProperty("conditions", out var conds))
+                            {
+                                foreach (var c in conds.EnumerateArray())
+                                {
+                                    var condition = JsonSerializer.Deserialize<WafCondition>(c.GetRawText(), _jsonOptions);
+                                    if (condition != null) rule.Conditions.Add(condition);
+                                }
+                            }
+                        }
+                        needsSave = true;
                     }
                 }
-                if (migrated)
+                if (needsSave)
                 {
-                    _logger.Info("已自动迁移旧版 WAF 规则到条件组格式");
+                    _logger.Info("已自动迁移旧版 WAF 规则（conditionGroups → Conditions）");
                     SaveUserRules();
                 }
             }
@@ -483,11 +487,10 @@ public class WafRuleService : IWafRuleService
                 var item = new WafRuleConfigItem();
                 child.Bind(item);
 
-                // 跳过无效规则：三种条件来源都为空
-                var hasConditionGroups = item.ConditionGroups is { Count: > 0 };
+                // 跳过无效规则：两种条件来源都为空
                 var hasConditions = item.Conditions is { Count: > 0 };
                 var hasSingleField = !string.IsNullOrWhiteSpace(item.Field);
-                if (!hasConditionGroups && !hasConditions && !hasSingleField)
+                if (!hasConditions && !hasSingleField)
                     continue;
 
                 var rule = item.ToRule(child.Key);

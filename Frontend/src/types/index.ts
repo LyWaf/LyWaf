@@ -363,10 +363,6 @@ export interface WafCondition {
   ignoreCase: boolean
 }
 
-export interface WafConditionGroup {
-  conditions: WafCondition[]
-}
-
 export interface WafCustomRule {
   id: string
   name: string
@@ -374,7 +370,7 @@ export interface WafCustomRule {
   enabled: boolean
   priority: number
   source?: WafRuleSource
-  conditionGroups: WafConditionGroup[]
+  conditions: WafCondition[]
   action: WafRuleAction
   actionSeconds: number
   responseCode: number

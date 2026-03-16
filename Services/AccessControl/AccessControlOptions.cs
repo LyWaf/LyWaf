@@ -67,7 +67,7 @@ public class ConnectionLimitConfig
     /// <summary>
     /// 超过连接限制时返回的 HTTP 状态码
     /// </summary>
-    public int RejectStatusCode { get; set; } = 503;
+    public int RejectStatusCode { get; set; } = 429;
 }
 
 /// <summary>

@@ -18,7 +18,7 @@ namespace LyWaf.Services.WafRule;
 /// 默认：Operator = Contains, Action = Reject, IgnoreCase = true
 /// </para>
 /// <para>
-/// ■ 多条件 AND（Conditions 数组，组内全部满足才触发）：
+/// ■ 多条件 AND（Conditions 数组，全部满足才触发）：
 /// <code>
 /// Protect {
 ///     WafRules {
@@ -28,26 +28,6 @@ namespace LyWaf.Services.WafRule;
 ///             Conditions = [
 ///                 { Field = UriPath;  Operator = StartsWith; Value = "/admin" },
 ///                 { Field = Method;   Operator = Equal;      Value = "POST"   },
-///             ]
-///         }
-///     }
-/// }
-/// </code>
-/// </para>
-/// <para>
-/// ■ 多条件组 OR（ConditionGroups 数组，任一组匹配即触发）：
-/// <code>
-/// Protect {
-///     WafRules {
-///         block-multi {
-///             Name = "组合规则"
-///             Action = Reject
-///             ConditionGroups = [
-///                 { Conditions = [{ Field = UriPath; Operator = Contains; Value = "/wp-admin" }] },
-///                 { Conditions = [
-///                     { Field = UserAgent; Operator = Contains; Value = "curl" },
-///                     { Field = Method;    Operator = Equal;    Value = "DELETE" },
-///                 ]},
 ///             ]
 ///         }
 ///     }
@@ -94,12 +74,6 @@ public class WafRuleConfigItem
     /// </summary>
     public List<WafConditionConfigItem>? Conditions { get; set; }
 
-    /// <summary>
-    /// 多条件组列表（OR 关系，优先于 Conditions）
-    /// <para>config.ly: ConditionGroups = [{ Conditions = [...] }, { Conditions = [...] }]</para>
-    /// </summary>
-    public List<WafConditionGroupConfigItem>? ConditionGroups { get; set; }
-
     // ── 动作 ──
 
     /// <summary>触发动作：Observe / Block / Reject / Captcha（默认 Reject）</summary>
@@ -129,48 +103,24 @@ public class WafRuleConfigItem
             ResponseCode = ResponseCode,
         };
 
-        // 优先级：ConditionGroups > Conditions > 单条件简写
-        if (ConditionGroups is { Count: > 0 })
+        if (Conditions is { Count: > 0 })
         {
-            // OR 多组
-            foreach (var group in ConditionGroups)
-            {
-                var g = new WafConditionGroup();
-                if (group.Conditions != null)
-                {
-                    foreach (var c in group.Conditions)
-                        g.Conditions.Add(c.ToCondition());
-                }
-                if (g.Conditions.Count > 0)
-                    rule.ConditionGroups.Add(g);
-            }
-        }
-        else if (Conditions is { Count: > 0 })
-        {
-            // AND 单组
-            var group = new WafConditionGroup();
+            // 多条件 AND
             foreach (var c in Conditions)
-                group.Conditions.Add(c.ToCondition());
-            rule.ConditionGroups.Add(group);
+                rule.Conditions.Add(c.ToCondition());
         }
         else if (!string.IsNullOrWhiteSpace(Field))
         {
             // 单条件简写
             Enum.TryParse<WafMatchField>(Field, true, out var field);
             Enum.TryParse<WafMatchOperator>(Operator, true, out var op);
-            rule.ConditionGroups.Add(new WafConditionGroup
+            rule.Conditions.Add(new WafCondition
             {
-                Conditions =
-                [
-                    new WafCondition
-                    {
-                        Field = field,
-                        FieldName = FieldName,
-                        Operator = op,
-                        Value = Value ?? "",
-                        IgnoreCase = IgnoreCase,
-                    }
-                ]
+                Field = field,
+                FieldName = FieldName,
+                Operator = op,
+                Value = Value ?? "",
+                IgnoreCase = IgnoreCase,
             });
         }
 
@@ -202,12 +152,4 @@ public class WafConditionConfigItem
             IgnoreCase = IgnoreCase,
         };
     }
-}
-
-/// <summary>
-/// 配置条件组（用于 ConditionGroups 列表中的单个 OR 组）
-/// </summary>
-public class WafConditionGroupConfigItem
-{
-    public List<WafConditionConfigItem>? Conditions { get; set; }
 }

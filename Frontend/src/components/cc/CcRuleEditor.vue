@@ -14,11 +14,11 @@ const emit = defineEmits<{
   saved: [rule: AdvancedCcRule]
 }>()
 
-// 枚举翻译
+// 枚举翻译 —— 与 WAF 规则保持一致风格
 const targetLabels: Record<CcMatchTarget, string> = {
   UrlPath: 'URL 路径',
   FullUrl: '完整 URL',
-  Method: '请求方法',
+  Method: 'HTTP 方法',
   ContentType: 'Content-Type',
   UserAgent: 'User-Agent',
   Referer: 'Referer',
@@ -61,12 +61,24 @@ const actionLabels: Record<CcAction, string> = {
   LogOnly: '仅记录',
 }
 
+// 需要 fieldName 的目标（Header/QueryParam/Cookie 第一个 value 作为 key）
+const needsFieldName = (target: CcMatchTarget) =>
+  ['Header', 'QueryParam', 'Cookie'].includes(target)
+
+// 不需要匹配值的操作符
+const noValueOperators: CcMatchOperator[] = ['Exists', 'NotExists']
+
 // 表单数据
 const form = ref({
   name: '',
   enabled: true,
   type: 'FrequentAccess' as CcRuleType,
-  conditions: [] as CcCondition[],
+  conditions: [] as Array<{
+    target: CcMatchTarget
+    operator: CcMatchOperator
+    value: string
+    fieldName: string
+  }>,
   period: 10,
   threshold: 100,
   action: 'Captcha' as CcAction,
@@ -82,9 +94,60 @@ const actions = Object.keys(actionLabels) as CcAction[]
 
 // 是否为编辑模式
 const isEditMode = computed(() => !!props.editRule)
-
-// 标题
 const dialogTitle = computed(() => isEditMode.value ? '编辑规则' : '添加规则')
+
+// 占位提示
+const getTargetPlaceholder = (target: CcMatchTarget): string => {
+  const map: Record<CcMatchTarget, string> = {
+    UrlPath: '/api/users',
+    FullUrl: 'https://example.com/page',
+    Method: 'GET',
+    ContentType: 'application/json',
+    UserAgent: 'curl, python-requests',
+    Referer: 'https://evil.com',
+    Header: 'X-Custom: value',
+    QueryParam: 'id=123',
+    Cookie: 'session=abc',
+    ClientIp: '192.168.1.0/24',
+    StatusCode: '404',
+  }
+  return map[target] || ''
+}
+
+const getFieldNamePlaceholder = (target: CcMatchTarget): string => {
+  const map: Partial<Record<CcMatchTarget, string>> = {
+    Cookie: 'session_id',
+    Header: 'X-Forwarded-For',
+    QueryParam: 'id',
+  }
+  return map[target] || '字段名'
+}
+
+// 将后端 CcCondition（target, operator, values[]）转为表单格式
+const conditionsToForm = (conditions: CcCondition[]) => {
+  return conditions.map(c => {
+    const isKeyed = needsFieldName(c.target)
+    return {
+      target: c.target,
+      operator: c.operator,
+      fieldName: isKeyed && c.values.length > 0 ? c.values[0] : '',
+      value: isKeyed ? (c.values.length > 1 ? c.values.slice(1).join(', ') : '') : c.values.join(', '),
+    }
+  })
+}
+
+// 将表单格式转回后端 CcCondition
+const formToConditions = (): CcCondition[] => {
+  return form.value.conditions.map(c => {
+    const isKeyed = needsFieldName(c.target)
+    const rawValues = c.value.split(',').map(v => v.trim()).filter(Boolean)
+    return {
+      target: c.target,
+      operator: c.operator,
+      values: isKeyed ? [c.fieldName.trim(), ...rawValues] : rawValues,
+    }
+  })
+}
 
 // 重置表单
 const resetForm = () => {
@@ -108,7 +171,7 @@ watch(() => props.editRule, (rule) => {
       name: rule.name,
       enabled: rule.enabled,
       type: rule.type,
-      conditions: JSON.parse(JSON.stringify(rule.conditions)),
+      conditions: conditionsToForm(JSON.parse(JSON.stringify(rule.conditions))),
       period: rule.period,
       threshold: rule.threshold,
       action: rule.action,
@@ -120,55 +183,26 @@ watch(() => props.editRule, (rule) => {
   }
 }, { immediate: true })
 
-// 监听显示状态
 watch(() => props.show, (show) => {
-  if (!show) {
-    resetForm()
-  }
+  if (!show) resetForm()
+})
+
+// 创建默认条件
+const createDefaultCondition = () => ({
+  target: 'UrlPath' as CcMatchTarget,
+  operator: 'Contains' as CcMatchOperator,
+  value: '',
+  fieldName: '',
 })
 
 // 添加条件
 const addCondition = () => {
-  form.value.conditions.push({
-    target: 'UrlPath',
-    operator: 'Equal',
-    values: [],
-  })
+  form.value.conditions.push(createDefaultCondition())
 }
 
 // 删除条件
 const removeCondition = (index: number) => {
   form.value.conditions.splice(index, 1)
-}
-
-// 添加条件值
-const addConditionValue = (condition: CcCondition, value: string) => {
-  if (value && !condition.values.includes(value)) {
-    condition.values.push(value)
-  }
-}
-
-// 删除条件值
-const removeConditionValue = (condition: CcCondition, index: number) => {
-  condition.values.splice(index, 1)
-}
-
-// 获取目标的占位符提示
-const getTargetPlaceholder = (target: CcMatchTarget): string => {
-  const placeholders: Record<CcMatchTarget, string> = {
-    UrlPath: 'e.g: /index.html',
-    FullUrl: 'e.g: https://example.com/page',
-    Method: 'e.g: GET, POST',
-    ContentType: 'e.g: text/html, application/json',
-    UserAgent: 'e.g: Mozilla, curl',
-    Referer: 'e.g: https://google.com',
-    Header: 'e.g: X-Custom-Header: value',
-    QueryParam: 'e.g: id=123',
-    Cookie: 'e.g: session=abc',
-    ClientIp: 'e.g: 192.168.1.0/24',
-    StatusCode: 'e.g: 404, 500',
-  }
-  return placeholders[target] || ''
 }
 
 // 提交保存
@@ -181,6 +215,18 @@ const handleSubmit = async () => {
     return
   }
 
+  // 检查条件值
+  for (const c of form.value.conditions) {
+    if (!noValueOperators.includes(c.operator) && !c.value.trim()) {
+      saveError.value = '请填写所有条件的匹配值'
+      return
+    }
+    if (needsFieldName(c.target) && !c.fieldName.trim()) {
+      saveError.value = '请填写指定字段的名称'
+      return
+    }
+  }
+
   saving.value = true
   saveError.value = ''
 
@@ -189,11 +235,7 @@ const handleSubmit = async () => {
       name: form.value.name,
       enabled: form.value.enabled,
       type: form.value.type,
-      conditions: form.value.conditions.map(c => ({
-        target: c.target,
-        operator: c.operator,
-        values: c.values,
-      })),
+      conditions: formToConditions(),
       period: form.value.period,
       threshold: form.value.threshold,
       action: form.value.action,
@@ -216,173 +258,172 @@ const handleSubmit = async () => {
   }
 }
 
-// 关闭对话框
 const handleClose = () => {
   emit('close')
 }
 </script>
 
 <template>
-  <div v-if="show" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-    <div class="bg-dark-card rounded-lg w-full max-w-3xl max-h-[90vh] overflow-hidden">
-      <!-- 标题栏 -->
-      <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
-        <h2 class="text-lg font-medium text-gray-100">{{ dialogTitle }}</h2>
-        <button @click="handleClose" class="text-gray-400 hover:text-gray-200">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-
-      <!-- 表单内容 -->
-      <div class="px-6 py-4 overflow-y-auto max-h-[calc(90vh-140px)]">
-        <!-- 基本信息 -->
-        <div class="space-y-4">
-          <!-- 规则名称 -->
-          <div>
-            <label class="block text-sm text-gray-400 mb-1">名称 <span class="text-red-400">*</span></label>
-            <input
-              v-model="form.name"
-              type="text"
-              class="input w-full"
-              placeholder="输入规则名称"
-            />
-          </div>
-
-          <!-- 规则类型 -->
-          <div>
-            <label class="block text-sm text-gray-400 mb-1">规则类型</label>
-            <select v-model="form.type" class="input w-full">
-              <option v-for="type in ruleTypes" :key="type" :value="type">
-                {{ ruleTypeLabels[type] }}
-              </option>
-            </select>
-            <p class="text-xs text-gray-500 mt-1">{{ ruleTypeDescriptions[form.type] }}</p>
-          </div>
+  <Teleport to="body">
+    <div v-if="show" class="fixed inset-0 z-50 flex items-center justify-center">
+      <div class="absolute inset-0 bg-black/60" @click="handleClose"></div>
+      <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden">
+        <!-- 标题栏 -->
+        <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
+          <h2 class="text-lg font-semibold text-gray-100">{{ dialogTitle }}</h2>
+          <button @click="handleClose" class="text-gray-400 hover:text-gray-200 transition-colors">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
 
-        <!-- 匹配条件 -->
-        <div class="mt-6">
-          <h3 class="text-sm font-medium text-gray-300 mb-3">触发下列条件认为是 CC 攻击</h3>
-          <div class="bg-dark-card-hover rounded-lg p-4 space-y-4">
-            <!-- 条件列表 -->
-            <div v-for="(condition, index) in form.conditions" :key="index" class="space-y-3">
-              <div v-if="index > 0" class="text-xs text-primary-400 font-medium">AND</div>
-              <div class="flex items-start gap-3">
-                <!-- 匹配目标 -->
-                <div class="flex-shrink-0 w-[150px]">
-                  <label class="block text-xs text-gray-500 mb-1">匹配目标</label>
-                  <select v-model="condition.target" class="input w-full text-sm">
-                    <option v-for="target in matchTargets" :key="target" :value="target">
-                      {{ targetLabels[target] }}
-                    </option>
-                  </select>
-                </div>
+        <!-- 表单内容 -->
+        <div class="px-6 py-4 overflow-y-auto max-h-[calc(90vh-140px)] space-y-5">
+          <!-- 基本信息 -->
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm text-gray-400 mb-1">规则名称 <span class="text-red-400">*</span></label>
+              <input v-model="form.name" type="text" class="input w-full" placeholder="输入规则名称" />
+            </div>
+            <div>
+              <label class="block text-sm text-gray-400 mb-1">规则类型</label>
+              <select v-model="form.type" class="input w-full">
+                <option v-for="type in ruleTypes" :key="type" :value="type">
+                  {{ ruleTypeLabels[type] }}
+                </option>
+              </select>
+              <p class="text-xs text-gray-600 mt-1">{{ ruleTypeDescriptions[form.type] }}</p>
+            </div>
+          </div>
 
-                <!-- 匹配方式 -->
-                <div class="flex-shrink-0 w-[130px]">
-                  <label class="block text-xs text-gray-500 mb-1">匹配方式 <span class="text-red-400">*</span></label>
-                  <select v-model="condition.operator" class="input w-full text-sm">
-                    <option v-for="op in matchOperators" :key="op" :value="op">
-                      {{ operatorLabels[op] }}
-                    </option>
-                  </select>
-                </div>
+          <!-- 匹配条件（WAF 风格） -->
+          <div>
+            <h3 class="text-sm font-medium text-gray-300 mb-3">
+              匹配条件
+              <span class="text-xs text-gray-500 ml-1">满足全部条件时触发（AND 关系）</span>
+            </h3>
 
-                <!-- 匹配内容 -->
-                <div class="flex-1">
-                  <label class="block text-xs text-gray-500 mb-1">匹配内容 <span class="text-red-400">*</span></label>
-                  <div class="space-y-2">
-                    <!-- 已添加的值 -->
-                    <div v-if="condition.values.length > 0" class="flex flex-wrap gap-1">
-                      <span
-                        v-for="(val, vIndex) in condition.values"
-                        :key="vIndex"
-                        class="inline-flex items-center gap-1 px-2 py-0.5 bg-primary-500/20 text-primary-400 text-xs rounded"
-                      >
-                        {{ val }}
-                        <button @click="removeConditionValue(condition, vIndex)" class="hover:text-red-400">×</button>
-                      </span>
-                    </div>
-                    <!-- 输入框 -->
-                    <input
-                      type="text"
-                      class="input w-full text-sm"
-                      :placeholder="getTargetPlaceholder(condition.target)"
-                      @keydown.enter.prevent="(e) => { addConditionValue(condition, (e.target as HTMLInputElement).value); (e.target as HTMLInputElement).value = '' }"
-                    />
+            <div class="bg-dark-card-hover rounded-lg border border-dark-border p-4 space-y-3">
+              <!-- 列标题 -->
+              <div v-if="form.conditions.length > 0" class="flex items-center gap-2 text-xs text-gray-500 pl-10">
+                <div class="w-[130px]">匹配字段</div>
+                <div class="w-[110px]">匹配方式</div>
+                <div class="flex-1">匹配值</div>
+              </div>
+
+              <!-- 条件列表 -->
+              <div v-for="(condition, idx) in form.conditions" :key="idx" class="space-y-2">
+                <!-- AND 分隔 -->
+                <div v-if="idx > 0" class="text-xs text-primary-400 font-medium py-0.5 pl-10">AND</div>
+
+                <div class="flex items-center gap-2">
+                  <!-- 删除按钮（红色减号） -->
+                  <button type="button" @click="removeCondition(idx)"
+                    class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/20 hover:border-red-400 transition-colors"
+                    title="删除此条件">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" d="M5 12h14" />
+                    </svg>
+                  </button>
+
+                  <!-- 匹配字段 -->
+                  <div class="flex-shrink-0 w-[130px]">
+                    <select v-model="condition.target" class="input w-full text-sm">
+                      <option v-for="t in matchTargets" :key="t" :value="t">{{ targetLabels[t] }}</option>
+                    </select>
+                  </div>
+
+                  <!-- 字段名（仅 Cookie/Header/QueryParam） -->
+                  <div v-if="needsFieldName(condition.target)" class="flex-shrink-0 w-[100px]">
+                    <input v-model="condition.fieldName" type="text" class="input w-full text-sm"
+                      :placeholder="getFieldNamePlaceholder(condition.target)" />
+                  </div>
+
+                  <!-- 操作符 -->
+                  <div class="flex-shrink-0 w-[110px]">
+                    <select v-model="condition.operator" class="input w-full text-sm">
+                      <option v-for="op in matchOperators" :key="op" :value="op">{{ operatorLabels[op] }}</option>
+                    </select>
+                  </div>
+
+                  <!-- 匹配值 -->
+                  <div class="flex-1" v-if="!noValueOperators.includes(condition.operator)">
+                    <input v-model="condition.value" type="text" class="input w-full text-sm"
+                      :placeholder="getTargetPlaceholder(condition.target)" />
                   </div>
                 </div>
+              </div>
 
-                <!-- 删除按钮 -->
-                <button
-                  @click="removeCondition(index)"
-                  class="flex-shrink-0 mt-5 p-2 text-gray-400 hover:text-red-400"
-                >
-                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
+              <!-- 空状态 -->
+              <div v-if="form.conditions.length === 0"
+                class="text-center py-4 text-gray-600 text-sm">
+                暂无条件，不添加条件将匹配所有请求
+              </div>
+
+              <!-- 添加 AND 条件按钮 -->
+              <button @click="addCondition"
+                class="flex items-center gap-1.5 px-3 py-1.5 text-xs text-primary-400 border border-primary-500/30 rounded hover:bg-primary-500/10 transition-colors">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+                添加 AND 条件
+              </button>
+            </div>
+          </div>
+
+          <!-- 触发条件 -->
+          <div>
+            <h3 class="text-sm font-medium text-gray-300 mb-3">触发阈值</h3>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <label class="block text-sm text-gray-400 mb-1">统计周期 <span class="text-red-400">*</span></label>
+                <div class="flex items-center gap-2">
+                  <input v-model.number="form.period" type="number" min="1" class="input flex-1" />
+                  <span class="text-sm text-gray-500">秒</span>
+                </div>
+              </div>
+              <div>
+                <label class="block text-sm text-gray-400 mb-1">请求次数 <span class="text-red-400">*</span></label>
+                <div class="flex items-center gap-2">
+                  <input v-model.number="form.threshold" type="number" min="1" class="input flex-1" />
+                  <span class="text-sm text-gray-500">次</span>
+                </div>
+              </div>
+              <div>
+                <label class="block text-sm text-gray-400 mb-1">执行动作</label>
+                <select v-model="form.action" class="input w-full">
+                  <option v-for="action in actions" :key="action" :value="action">
+                    {{ actionLabels[action] }}
+                  </option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm text-gray-400 mb-1">持续时间 <span class="text-red-400">*</span></label>
+                <div class="flex items-center gap-2">
+                  <input v-model.number="form.actionSeconds" type="number" min="1" class="input flex-1" />
+                  <span class="text-sm text-gray-500">秒</span>
+                </div>
               </div>
             </div>
+          </div>
 
-            <!-- 添加条件按钮 -->
-            <button
-              @click="addCondition"
-              class="flex items-center gap-2 px-4 py-2 text-sm text-primary-400 border border-primary-500/50 rounded-lg hover:bg-primary-500/10"
-            >
-              添加一个 AND 条件
-            </button>
+          <!-- 错误提示 -->
+          <div v-if="saveError" class="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+            {{ saveError }}
           </div>
         </div>
 
-        <!-- 触发条件 -->
-        <div class="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div>
-            <label class="block text-sm text-gray-400 mb-1">经过时间 <span class="text-red-400">*</span></label>
-            <div class="flex items-center gap-2">
-              <input v-model.number="form.period" type="number" min="1" class="input flex-1" />
-              <span class="text-sm text-gray-500">秒</span>
-            </div>
-          </div>
-          <div>
-            <label class="block text-sm text-gray-400 mb-1">请求次数达到 <span class="text-red-400">*</span></label>
-            <div class="flex items-center gap-2">
-              <input v-model.number="form.threshold" type="number" min="1" class="input flex-1" />
-              <span class="text-sm text-gray-500">次</span>
-            </div>
-          </div>
-          <div>
-            <label class="block text-sm text-gray-400 mb-1">限制结果</label>
-            <select v-model="form.action" class="input w-full">
-              <option v-for="action in actions" :key="action" :value="action">
-                {{ actionLabels[action] }}
-              </option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-sm text-gray-400 mb-1">{{ actionLabels[form.action] }} <span class="text-red-400">*</span></label>
-            <div class="flex items-center gap-2">
-              <input v-model.number="form.actionSeconds" type="number" min="1" class="input flex-1" />
-              <span class="text-sm text-gray-500">秒</span>
-            </div>
-          </div>
+        <!-- 底部按钮 -->
+        <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-border">
+          <button @click="handleClose" class="btn btn-sm btn-secondary">取消</button>
+          <button @click="handleSubmit" :disabled="saving"
+            class="btn btn-sm btn-primary flex items-center gap-1.5">
+            <span v-if="saving" class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
+            <span>{{ saving ? '保存中...' : '保存' }}</span>
+          </button>
         </div>
-
-        <!-- 错误提示 -->
-        <div v-if="saveError" class="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-sm">
-          {{ saveError }}
-        </div>
-      </div>
-
-      <!-- 底部按钮 -->
-      <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-border">
-        <button @click="handleClose" class="btn btn-secondary">取消</button>
-        <button @click="handleSubmit" class="btn btn-primary" :disabled="saving">
-          {{ saving ? '保存中...' : '提交' }}
-        </button>
       </div>
     </div>
-  </div>
+  </Teleport>
 </template>

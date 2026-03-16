@@ -489,16 +489,13 @@ public static class ControlApi
                     enabled = r.Enabled,
                     priority = r.Priority,
                     source = r.Source.ToString(),
-                    conditionGroups = r.ConditionGroups.Select(g => new
+                    conditions = (r.Conditions ?? []).Select(c => new
                     {
-                        conditions = g.Conditions.Select(c => new
-                        {
-                            field = c.Field.ToString(),
-                            fieldName = c.FieldName,
-                            @operator = c.Operator.ToString(),
-                            value = c.Value,
-                            ignoreCase = c.IgnoreCase,
-                        }),
+                        field = c.Field.ToString(),
+                        fieldName = c.FieldName,
+                        @operator = c.Operator.ToString(),
+                        value = c.Value,
+                        ignoreCase = c.IgnoreCase,
                     }),
                     action = r.Action.ToString(),
                     actionSeconds = r.ActionSeconds,
@@ -526,16 +523,13 @@ public static class ControlApi
                     enabled = rule.Enabled,
                     priority = rule.Priority,
                     source = rule.Source.ToString(),
-                    conditionGroups = rule.ConditionGroups.Select(g => new
+                    conditions = (rule.Conditions ?? []).Select(c => new
                     {
-                        conditions = g.Conditions.Select(c => new
-                        {
-                            field = c.Field.ToString(),
-                            fieldName = c.FieldName,
-                            @operator = c.Operator.ToString(),
-                            value = c.Value,
-                            ignoreCase = c.IgnoreCase,
-                        }),
+                        field = c.Field.ToString(),
+                        fieldName = c.FieldName,
+                        @operator = c.Operator.ToString(),
+                        value = c.Value,
+                        ignoreCase = c.IgnoreCase,
                     }),
                     action = rule.Action.ToString(),
                     actionSeconds = rule.ActionSeconds,
@@ -555,10 +549,6 @@ public static class ControlApi
                 if (rule == null || string.IsNullOrWhiteSpace(rule.Name))
                     return Results.Json(new { success = false, message = "规则名称不能为空" }, statusCode: 400);
 
-                // 兼容旧版：如果传了 conditions 但没传 conditionGroups，自动迁移
-                rule.MigrateFromLegacy();
-                // 解析枚举（前端传的是字符串）
-                ParseRuleEnums(ctx, rule);
 
                 if (wafRuleService.AddRule(rule))
                 {
@@ -588,8 +578,6 @@ public static class ControlApi
                 if (rule == null)
                     return Results.Json(new { success = false, message = "无效的规则数据" }, statusCode: 400);
                 rule.Id = id;
-                rule.MigrateFromLegacy();
-                ParseRuleEnums(ctx, rule);
 
                 if (wafRuleService.UpdateRule(rule))
                 {
@@ -7289,16 +7277,6 @@ public static class ControlApi
         _ => source.ToString()
     };
 
-    /// <summary>
-    /// 解析 WAF 规则中的枚举字段（前端传字符串，需要转为枚举）
-    /// ReadFromJsonAsync 会自动处理大部分情况，此方法仅做安全兜底
-    /// </summary>
-    private static void ParseRuleEnums(HttpContext ctx, WafCustomRule rule)
-    {
-        // System.Text.Json 的 JsonStringEnumConverter 未全局注册时做兜底
-        // 此处不做处理，因为 WafCustomRule 使用枚举类型，
-        // ReadFromJsonAsync 的默认 JsonSerializerOptions 支持数字和字符串两种枚举解析
-    }
 }
 
 // =============== 请求模型 ===============

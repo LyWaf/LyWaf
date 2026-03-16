@@ -18,6 +18,7 @@ const menuItems: MenuItem[] = [
   { path: '/security', name: '安全态势', icon: '🛡️' },
   { path: '/feature-status', name: '防护应用', icon: '⚙️' },
   { path: '/cc-protection', name: 'CC 防护', icon: '⚡' },
+  { path: '/waf-rules', name: 'WAF 规则', icon: '🛡️' },
   { path: '/intercept-events', name: '拦截事件', icon: '📋' },
   { path: '/api-timing', name: 'API 耗时', icon: '⏱️' },
   {
@@ -28,7 +29,6 @@ const menuItems: MenuItem[] = [
       { path: '/route-config', name: '配置路由' },
       { path: '/fileserver-config', name: '文件服务' },
       { path: '/simpleres-config', name: '简单响应' },
-      { path: '/waf-rules', name: 'WAF 规则' },
       { path: '/param-config', name: '参数配置' },
       { path: '/plugin-management', name: '插件管理' },
       { path: '/error-templates', name: '错误模板' },

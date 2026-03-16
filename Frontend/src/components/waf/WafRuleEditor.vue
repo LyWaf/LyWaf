@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { wafRuleApi } from '@/api'
-import type { WafCustomRule, WafCondition, WafConditionGroup, WafMatchField, WafMatchOperator, WafRuleAction } from '@/types'
+import type { WafCustomRule, WafCondition, WafMatchField, WafMatchOperator, WafRuleAction } from '@/types'
 
 interface Props {
   show: boolean
@@ -104,13 +104,13 @@ const getFieldNamePlaceholder = (field: WafMatchField): string => {
   return map[field] || '字段名'
 }
 
-// 表单数据
+// 表单数据 — 扁平条件列表（不再有 OR 分组）
 const form = ref({
   name: '',
   description: '',
   enabled: true,
   priority: 100,
-  conditionGroups: [] as WafConditionGroup[],
+  conditions: [] as WafCondition[],
   action: 'Observe' as WafRuleAction,
   actionSeconds: 600,
   responseCode: 403,
@@ -142,14 +142,13 @@ const resetForm = () => {
     description: '',
     enabled: true,
     priority: 100,
-    conditionGroups: [{ conditions: [createDefaultCondition()] }],
+    conditions: [createDefaultCondition()],
     action: 'Observe',
     actionSeconds: 600,
     responseCode: 403,
   }
 }
 
-// 监听编辑规则
 watch(() => props.editRule, (rule) => {
   if (rule) {
     form.value = {
@@ -157,14 +156,12 @@ watch(() => props.editRule, (rule) => {
       description: rule.description,
       enabled: rule.enabled,
       priority: rule.priority,
-      conditionGroups: JSON.parse(JSON.stringify(rule.conditionGroups)),
+      conditions: rule.conditions?.length > 0
+        ? JSON.parse(JSON.stringify(rule.conditions))
+        : [createDefaultCondition()],
       action: rule.action,
       actionSeconds: rule.actionSeconds,
       responseCode: rule.responseCode,
-    }
-    // 确保至少有一个条件组
-    if (form.value.conditionGroups.length === 0) {
-      form.value.conditionGroups.push({ conditions: [createDefaultCondition()] })
     }
   } else {
     resetForm()
@@ -175,35 +172,16 @@ watch(() => props.show, (show) => {
   if (!show) resetForm()
 })
 
-// ========== 条件组操作 ==========
-
-// 添加 OR 条件组
-const addGroup = () => {
-  form.value.conditionGroups.push({ conditions: [createDefaultCondition()] })
+// 条件操作
+const addCondition = () => {
+  form.value.conditions.push(createDefaultCondition())
 }
 
-// 删除条件组
-const removeGroup = (groupIndex: number) => {
-  form.value.conditionGroups.splice(groupIndex, 1)
+const removeCondition = (index: number) => {
+  form.value.conditions.splice(index, 1)
 }
 
-// 在组内添加 AND 条件
-const addConditionToGroup = (groupIndex: number) => {
-  form.value.conditionGroups[groupIndex].conditions.push(createDefaultCondition())
-}
-
-// 删除组内条件
-const removeConditionFromGroup = (groupIndex: number, condIndex: number) => {
-  const group = form.value.conditionGroups[groupIndex]
-  group.conditions.splice(condIndex, 1)
-  // 组内条件清空 → 删除整个组
-  if (group.conditions.length === 0) {
-    form.value.conditionGroups.splice(groupIndex, 1)
-  }
-}
-
-// ========== 提交 ==========
-
+// 提交
 const saving = ref(false)
 const saveError = ref('')
 
@@ -212,22 +190,18 @@ const handleSubmit = async () => {
     saveError.value = '请输入规则名称'
     return
   }
-  if (form.value.conditionGroups.length === 0 ||
-      form.value.conditionGroups.every(g => g.conditions.length === 0)) {
+  if (form.value.conditions.length === 0) {
     saveError.value = '请至少添加一个匹配条件'
     return
   }
-  // 检查条件值
-  for (const group of form.value.conditionGroups) {
-    for (const c of group.conditions) {
-      if (!noValueOperators.includes(c.operator) && !c.value.trim()) {
-        saveError.value = '请填写所有条件的匹配值'
-        return
-      }
-      if (needsFieldName(c.field) && !c.fieldName?.trim()) {
-        saveError.value = '请填写指定字段的名称'
-        return
-      }
+  for (const c of form.value.conditions) {
+    if (!noValueOperators.includes(c.operator) && !c.value.trim()) {
+      saveError.value = '请填写所有条件的匹配值'
+      return
+    }
+    if (needsFieldName(c.field) && !c.fieldName?.trim()) {
+      saveError.value = '请填写指定字段的名称'
+      return
     }
   }
 
@@ -240,7 +214,7 @@ const handleSubmit = async () => {
       description: form.value.description,
       enabled: form.value.enabled,
       priority: form.value.priority,
-      conditionGroups: form.value.conditionGroups,
+      conditions: form.value.conditions,
       action: form.value.action,
       actionSeconds: form.value.actionSeconds,
       responseCode: form.value.responseCode,
@@ -300,116 +274,85 @@ const handleClose = () => {
             </div>
           </div>
 
-          <!-- 匹配条件（分组） -->
+          <!-- 匹配条件（扁平 AND 列表） -->
           <div>
             <h3 class="text-sm font-medium text-gray-300 mb-3">
               匹配条件
-              <span class="text-xs text-gray-500 ml-1">组内 AND（全部满足），组间 OR（任一匹配）</span>
+              <span class="text-xs text-gray-500 ml-1">满足全部条件时触发（AND 关系）</span>
             </h3>
 
-            <div class="space-y-3">
-              <!-- 每个条件组 -->
-              <template v-for="(group, gIdx) in form.conditionGroups" :key="gIdx">
-                <!-- OR 分隔符 -->
-                <div v-if="gIdx > 0" class="flex items-center gap-3 py-1">
-                  <div class="flex-1 border-t border-orange-500/30"></div>
-                  <span class="text-xs font-bold text-orange-400 px-3 py-1 bg-orange-500/10 rounded-full">OR</span>
-                  <div class="flex-1 border-t border-orange-500/30"></div>
-                </div>
+            <div class="bg-dark-card-hover rounded-lg border border-dark-border p-4 space-y-3">
+              <!-- 列标题 -->
+              <div v-if="form.conditions.length > 0" class="flex items-center gap-2 text-xs text-gray-500 pl-10">
+                <div class="w-[130px]">匹配字段</div>
+                <div class="w-[110px]">匹配方式</div>
+                <div class="flex-1">匹配值</div>
+              </div>
 
-                <!-- 条件组卡片 -->
-                <div class="bg-dark-card-hover rounded-lg border border-dark-border p-4 space-y-3">
-                  <!-- 组标题 -->
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs text-gray-500">条件组 {{ gIdx + 1 }}</span>
-                    <button v-if="!readOnly" @click="removeGroup(gIdx)"
-                      class="text-xs text-gray-500 hover:text-red-400 transition-colors">
-                      删除此组
-                    </button>
-                  </div>
+              <!-- 条件列表 -->
+              <div v-for="(condition, cIdx) in form.conditions" :key="cIdx" class="space-y-2">
+                <!-- AND 分隔 -->
+                <div v-if="cIdx > 0" class="text-xs text-primary-400 font-medium py-0.5 pl-10">AND</div>
 
-                  <!-- 组内条件列表 -->
-                  <!-- 列标题（仅一次） -->
-                  <div v-if="group.conditions.length > 0" class="flex items-center gap-2 text-xs text-gray-500 pl-10">
-                    <div class="w-[130px]">匹配字段</div>
-                    <div class="w-[110px]">匹配方式</div>
-                    <div class="flex-1">匹配值</div>
-                  </div>
-
-                  <div v-for="(condition, cIdx) in group.conditions" :key="cIdx" class="space-y-2">
-                    <!-- AND 分隔 -->
-                    <div v-if="cIdx > 0" class="text-xs text-primary-400 font-medium py-0.5 pl-10">AND</div>
-
-                    <div class="flex items-center gap-2">
-                      <!-- 删除条件（红色减号，放在最前面） -->
-                      <button v-if="!readOnly" type="button" @click="removeConditionFromGroup(gIdx, cIdx)"
-                        class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/20 hover:border-red-400 transition-colors relative z-10"
-                        title="删除此条件">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" d="M5 12h14" />
-                        </svg>
-                      </button>
-
-                      <!-- 匹配字段 -->
-                      <div class="flex-shrink-0 w-[130px]">
-                        <select v-model="condition.field" class="input w-full text-sm" :disabled="readOnly">
-                          <option v-for="f in matchFields" :key="f" :value="f">{{ fieldLabels[f] }}</option>
-                        </select>
-                      </div>
-
-                      <!-- 字段名（仅 Cookie/Header/QueryParam） -->
-                      <div v-if="needsFieldName(condition.field)" class="flex-shrink-0 w-[100px]">
-                        <input v-model="condition.fieldName" type="text" class="input w-full text-sm"
-                          :placeholder="getFieldNamePlaceholder(condition.field)" :disabled="readOnly" />
-                      </div>
-
-                      <!-- 操作符 -->
-                      <div class="flex-shrink-0 w-[110px]">
-                        <select v-model="condition.operator" class="input w-full text-sm" :disabled="readOnly">
-                          <option v-for="op in matchOperators" :key="op" :value="op">{{ operatorLabels[op] }}</option>
-                        </select>
-                      </div>
-
-                      <!-- 匹配值 -->
-                      <div class="flex-1" v-if="!noValueOperators.includes(condition.operator)">
-                        <input v-model="condition.value" type="text" class="input w-full text-sm"
-                          :placeholder="getFieldPlaceholder(condition.field)" :disabled="readOnly" />
-                      </div>
-
-                      <!-- 忽略大小写 -->
-                      <label class="flex-shrink-0 flex items-center gap-1 text-xs text-gray-500 whitespace-nowrap"
-                        :class="readOnly ? '' : 'cursor-pointer hover:text-gray-300'">
-                        <input type="checkbox" v-model="condition.ignoreCase"
-                          class="w-3.5 h-3.5 rounded border-gray-600 text-primary-500 focus:ring-primary-500/30" :disabled="readOnly" />
-                        忽略大小写
-                      </label>
-                    </div>
-                  </div>
-
-                  <!-- 添加 AND 条件 -->
-                  <button v-if="!readOnly" @click="addConditionToGroup(gIdx)"
-                    class="flex items-center gap-1.5 px-3 py-1.5 text-xs text-primary-400 border border-primary-500/30 rounded hover:bg-primary-500/10 transition-colors">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                <div class="flex items-center gap-2">
+                  <!-- 删除条件（红色减号） -->
+                  <button v-if="!readOnly" type="button" @click="removeCondition(cIdx)"
+                    class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/20 hover:border-red-400 transition-colors"
+                    title="删除此条件">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" d="M5 12h14" />
                     </svg>
-                    添加 AND 条件
                   </button>
+
+                  <!-- 匹配字段 -->
+                  <div class="flex-shrink-0 w-[130px]">
+                    <select v-model="condition.field" class="input w-full text-sm" :disabled="readOnly">
+                      <option v-for="f in matchFields" :key="f" :value="f">{{ fieldLabels[f] }}</option>
+                    </select>
+                  </div>
+
+                  <!-- 字段名（仅 Cookie/Header/QueryParam） -->
+                  <div v-if="needsFieldName(condition.field)" class="flex-shrink-0 w-[100px]">
+                    <input v-model="condition.fieldName" type="text" class="input w-full text-sm"
+                      :placeholder="getFieldNamePlaceholder(condition.field)" :disabled="readOnly" />
+                  </div>
+
+                  <!-- 操作符 -->
+                  <div class="flex-shrink-0 w-[110px]">
+                    <select v-model="condition.operator" class="input w-full text-sm" :disabled="readOnly">
+                      <option v-for="op in matchOperators" :key="op" :value="op">{{ operatorLabels[op] }}</option>
+                    </select>
+                  </div>
+
+                  <!-- 匹配值 -->
+                  <div class="flex-1" v-if="!noValueOperators.includes(condition.operator)">
+                    <input v-model="condition.value" type="text" class="input w-full text-sm"
+                      :placeholder="getFieldPlaceholder(condition.field)" :disabled="readOnly" />
+                  </div>
+
+                  <!-- 忽略大小写 -->
+                  <label class="flex-shrink-0 flex items-center gap-1 text-xs text-gray-500 whitespace-nowrap"
+                    :class="readOnly ? '' : 'cursor-pointer hover:text-gray-300'">
+                    <input type="checkbox" v-model="condition.ignoreCase"
+                      class="w-3.5 h-3.5 rounded border-gray-600 text-primary-500 focus:ring-primary-500/30" :disabled="readOnly" />
+                    忽略大小写
+                  </label>
                 </div>
-              </template>
+              </div>
 
               <!-- 空状态 -->
-              <div v-if="form.conditionGroups.length === 0"
-                class="text-center py-6 text-gray-600 text-sm bg-dark-card-hover rounded-lg border border-dark-border">
+              <div v-if="form.conditions.length === 0"
+                class="text-center py-6 text-gray-600 text-sm">
                 {{ readOnly ? '无匹配条件' : '暂无条件，点击下方按钮添加' }}
               </div>
 
-              <!-- 添加 OR 条件组 -->
-              <button v-if="!readOnly" @click="addGroup"
-                class="flex items-center gap-2 w-full px-4 py-2.5 text-sm text-orange-400 border border-dashed border-orange-500/40 rounded-lg hover:bg-orange-500/5 transition-colors justify-center">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <!-- 添加 AND 条件 -->
+              <button v-if="!readOnly" @click="addCondition"
+                class="flex items-center gap-1.5 px-3 py-1.5 text-xs text-primary-400 border border-primary-500/30 rounded hover:bg-primary-500/10 transition-colors">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                 </svg>
-                {{ form.conditionGroups.length === 0 ? '添加条件组' : '添加 OR 条件组' }}
+                添加 AND 条件
               </button>
             </div>
           </div>

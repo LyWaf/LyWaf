@@ -152,17 +152,11 @@ const formatSingleCondition = (c: { field: string; fieldName?: string; operator:
   return `${field}${fieldName} ${op}${val}`
 }
 
-// 格式化条件摘要（支持 OR 分组）
+// 格式化条件摘要
 const formatConditions = (rule: WafCustomRule): string => {
-  if (!rule.conditionGroups || rule.conditionGroups.length === 0) return '无条件'
-  const groups = rule.conditionGroups
-    .filter(g => g.conditions && g.conditions.length > 0)
-    .map(g => {
-      const parts = g.conditions.map(formatSingleCondition)
-      return parts.length > 1 ? `(${parts.join(' AND ')})` : parts[0]
-    })
-  if (groups.length === 0) return '无条件'
-  return groups.join(' OR ')
+  if (!rule.conditions || rule.conditions.length === 0) return '无条件'
+  const parts = rule.conditions.map(formatSingleCondition)
+  return parts.join(' AND ')
 }
 
 // 格式化时间

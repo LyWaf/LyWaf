@@ -122,15 +122,6 @@ public class WafCondition
 }
 
 /// <summary>
-/// WAF 条件组（组内 AND 关系）
-/// </summary>
-public class WafConditionGroup
-{
-    /// <summary>组内条件列表（AND 关系，全部满足才算该组匹配）</summary>
-    public List<WafCondition> Conditions { get; set; } = [];
-}
-
-/// <summary>
 /// WAF 自定义规则
 /// </summary>
 public class WafCustomRule
@@ -154,11 +145,8 @@ public class WafCustomRule
     [JsonIgnore]
     public WafRuleSource Source { get; set; } = WafRuleSource.User;
 
-    /// <summary>条件组列表（组间 OR 关系，任一组匹配即触发）</summary>
-    public List<WafConditionGroup> ConditionGroups { get; set; } = [];
-
-    /// <summary>（旧版兼容）平铺条件列表，加载时自动迁移到 ConditionGroups</summary>
-    public List<WafCondition>? Conditions { get; set; }
+    /// <summary>条件列表（AND 关系，全部满足才触发）</summary>
+    public List<WafCondition> Conditions { get; set; } = [];
 
     /// <summary>触发动作</summary>
     public WafRuleAction Action { get; set; } = WafRuleAction.Observe;
@@ -174,18 +162,6 @@ public class WafCustomRule
 
     /// <summary>更新时间</summary>
     public DateTime? UpdatedAt { get; set; }
-
-    /// <summary>
-    /// 迁移旧版 Conditions 到 ConditionGroups（调用后清除旧字段）
-    /// </summary>
-    public void MigrateFromLegacy()
-    {
-        if (Conditions is { Count: > 0 } && ConditionGroups.Count == 0)
-        {
-            ConditionGroups.Add(new WafConditionGroup { Conditions = Conditions });
-        }
-        Conditions = null;
-    }
 }
 
 /// <summary>

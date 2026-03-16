@@ -23,21 +23,15 @@ public static class SystemWafRules
                 Source = WafRuleSource.System,
                 Action = WafRuleAction.Reject,
                 ResponseCode = 403,
-                ConditionGroups =
+                Conditions =
                 [
-                    new WafConditionGroup
+                    new WafCondition
                     {
-                        Conditions =
-                        [
-                            new WafCondition
-                            {
-                                Field = WafMatchField.UserAgent,
-                                Operator = WafMatchOperator.Regex,
-                                Value = @"(?i)(sqlmap|nikto|nessus|acunetix|netsparker|w3af|openvas|masscan|zgrab|nuclei|dirsearch|gobuster|ffuf|wfuzz|hydra|medusa|nmap\s+scripting|havij|webscarab|commix)",
-                                IgnoreCase = true,
-                            }
-                        ]
-                    },
+                        Field = WafMatchField.UserAgent,
+                        Operator = WafMatchOperator.Regex,
+                        Value = @"(?i)(sqlmap|nikto|nessus|acunetix|netsparker|w3af|openvas|masscan|zgrab|nuclei|dirsearch|gobuster|ffuf|wfuzz|hydra|medusa|nmap\s+scripting|havij|webscarab|commix)",
+                        IgnoreCase = true,
+                    }
                 ]
             },
 
@@ -52,36 +46,15 @@ public static class SystemWafRules
                 Source = WafRuleSource.System,
                 Action = WafRuleAction.Reject,
                 ResponseCode = 403,
-                ConditionGroups =
+                Conditions =
                 [
-                    // 版本控制和敏感目录
-                    new WafConditionGroup
+                    new WafCondition
                     {
-                        Conditions =
-                        [
-                            new WafCondition
-                            {
-                                Field = WafMatchField.UriPath,
-                                Operator = WafMatchOperator.Regex,
-                                Value = @"(?i)(/\.git/|/\.svn/|/\.hg/|/\.env|/\.htaccess|/\.htpasswd|/\.DS_Store|/web\.config|/wp-config\.php|/\.aws/|/\.ssh/)",
-                                IgnoreCase = true,
-                            }
-                        ]
-                    },
-                    // 备份文件和敏感扩展名
-                    new WafConditionGroup
-                    {
-                        Conditions =
-                        [
-                            new WafCondition
-                            {
-                                Field = WafMatchField.UriPath,
-                                Operator = WafMatchOperator.Regex,
-                                Value = @"(?i)\.(bak|swp|old|orig|save|dist|config|ini|log|sql|tar|gz|zip|rar|7z|dump)$",
-                                IgnoreCase = true,
-                            }
-                        ]
-                    },
+                        Field = WafMatchField.UriPath,
+                        Operator = WafMatchOperator.Regex,
+                        Value = @"(?i)(/\.git/|/\.svn/|/\.hg/|/\.env|/\.htaccess|/\.htpasswd|/\.DS_Store|/web\.config|/wp-config\.php|/\.aws/|/\.ssh/|\.(bak|swp|old|orig|save|dist|config|ini|log|sql|tar|gz|zip|rar|7z|dump)$)",
+                        IgnoreCase = true,
+                    }
                 ]
             },
 
