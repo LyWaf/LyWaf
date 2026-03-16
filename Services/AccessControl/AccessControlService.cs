@@ -164,6 +164,26 @@ public interface IAccessControlService
     /// 设置地理位置访问控制启用状态
     /// </summary>
     void SetGeoControlEnabled(bool enabled);
+
+    /// <summary>
+    /// 设置连接限制启用状态
+    /// </summary>
+    void SetConnectionLimitEnabled(bool enabled);
+
+    /// <summary>
+    /// 设置连接限制配置
+    /// </summary>
+    void SetConnectionLimitConfig(int? maxPerIp = null, int? maxPerDestination = null, int? maxTotal = null, int? rejectStatusCode = null);
+
+    /// <summary>
+    /// 设置路径连接限制
+    /// </summary>
+    void SetPathConnectionLimit(string path, int maxConnections);
+
+    /// <summary>
+    /// 移除路径连接限制
+    /// </summary>
+    bool RemovePathConnectionLimit(string path);
 }
 
 /// <summary>
@@ -198,11 +218,6 @@ public class AccessCheckResult
     public int RejectStatusCode { get; set; } = 403;
 
     /// <summary>
-    /// 拒绝时返回的消息（为空时使用 WafUtil 的模板）
-    /// </summary>
-    public string? RejectMessage { get; set; }
-
-    /// <summary>
     /// 地理位置信息（如果有）
     /// </summary>
     public GeoInfo? GeoInfo { get; set; }
@@ -217,15 +232,13 @@ public class AccessCheckResult
     /// </summary>
     /// <param name="reason">拒绝原因</param>
     /// <param name="statusCode">HTTP 状态码</param>
-    /// <param name="message">拒绝消息（为空时使用 WafUtil 的模板）</param>
     /// <param name="geoInfo">地理位置信息</param>
-    public static AccessCheckResult Denied(AccessDenyReason reason, int statusCode = 403, string? message = null, GeoInfo? geoInfo = null)
+    public static AccessCheckResult Denied(AccessDenyReason reason, int statusCode = 403, GeoInfo? geoInfo = null)
         => new()
         {
             IsAllowed = false,
             DenyReason = reason,
             RejectStatusCode = statusCode,
-            RejectMessage = message,
             GeoInfo = geoInfo
         };
 }
@@ -466,8 +479,7 @@ public class AccessControlService : IAccessControlService, IDisposable
                     {
                         return AccessCheckResult.Denied(
                             AccessDenyReason.PathIpDenied,
-                            _options.RejectStatusCode,
-                            _options.RejectMessage);
+                            _options.RejectStatusCode);
                     }
 
                     // 如果在白名单中，允许访问
@@ -482,8 +494,7 @@ public class AccessControlService : IAccessControlService, IDisposable
         {
             return AccessCheckResult.Denied(
                 AccessDenyReason.IpDenied,
-                _options.RejectStatusCode,
-                _options.RejectMessage);
+                _options.RejectStatusCode);
         }
 
         return AccessCheckResult.Allowed();
@@ -500,8 +511,6 @@ public class AccessControlService : IAccessControlService, IDisposable
         if (geoInfo == null)
             return AccessCheckResult.Allowed(); // 查询失败时默认允许
 
-        var rejectMessage = geoConfig.RejectMessage ?? _options.RejectMessage;
-
         // 检查路径级别的地理位置规则
         if (!string.IsNullOrEmpty(path))
         {
@@ -515,7 +524,6 @@ public class AccessControlService : IAccessControlService, IDisposable
                         return AccessCheckResult.Denied(
                             AccessDenyReason.PathGeoDenied,
                             _options.RejectStatusCode,
-                            rejectMessage,
                             geoInfo);
                     }
                     // 检查路径规则的白名单
@@ -524,7 +532,6 @@ public class AccessControlService : IAccessControlService, IDisposable
                         return AccessCheckResult.Denied(
                             AccessDenyReason.PathGeoDenied,
                             _options.RejectStatusCode,
-                            rejectMessage,
                             geoInfo);
                     }
                 }
@@ -568,7 +575,6 @@ public class AccessControlService : IAccessControlService, IDisposable
                 return AccessCheckResult.Denied(
                     AccessDenyReason.GeoDenied,
                     _options.RejectStatusCode,
-                    rejectMessage,
                     geoInfo);
             }
         }
@@ -580,7 +586,6 @@ public class AccessControlService : IAccessControlService, IDisposable
             return AccessCheckResult.Denied(
                 AccessDenyReason.GeoDenied,
                 _options.RejectStatusCode,
-                rejectMessage,
                 geoInfo);
         }
 
@@ -591,7 +596,6 @@ public class AccessControlService : IAccessControlService, IDisposable
             return AccessCheckResult.Denied(
                 AccessDenyReason.GeoDenied,
                 _options.RejectStatusCode,
-                rejectMessage,
                 geoInfo);
         }
 
@@ -620,7 +624,6 @@ public class AccessControlService : IAccessControlService, IDisposable
                 return AccessCheckResult.Denied(
                     AccessDenyReason.GeoDenied,
                     _options.RejectStatusCode,
-                    rejectMessage,
                     geoInfo);
             }
         }
@@ -632,7 +635,6 @@ public class AccessControlService : IAccessControlService, IDisposable
                 return AccessCheckResult.Denied(
                     AccessDenyReason.GeoDenied,
                     _options.RejectStatusCode,
-                    rejectMessage,
                     geoInfo);
             }
 
@@ -643,7 +645,6 @@ public class AccessControlService : IAccessControlService, IDisposable
                 return AccessCheckResult.Denied(
                     AccessDenyReason.GeoDenied,
                     _options.RejectStatusCode,
-                    rejectMessage,
                     geoInfo);
             }
         }
@@ -704,6 +705,36 @@ public class AccessControlService : IAccessControlService, IDisposable
     {
         _options.GeoControl.Enabled = enabled;
         _logger.Info("地理位置访问控制已{Status}", enabled ? "启用" : "禁用");
+    }
+
+    public void SetConnectionLimitEnabled(bool enabled)
+    {
+        _options.ConnectionLimit.Enabled = enabled;
+        _logger.Info("连接限制已{Status}", enabled ? "启用" : "禁用");
+    }
+
+    public void SetConnectionLimitConfig(int? maxPerIp = null, int? maxPerDestination = null, int? maxTotal = null, int? rejectStatusCode = null)
+    {
+        var config = _options.ConnectionLimit;
+        if (maxPerIp.HasValue) config.MaxConnectionsPerIp = maxPerIp.Value;
+        if (maxPerDestination.HasValue) config.MaxConnectionsPerDestination = maxPerDestination.Value;
+        if (maxTotal.HasValue) config.MaxTotalConnections = maxTotal.Value;
+        if (rejectStatusCode.HasValue) config.RejectStatusCode = rejectStatusCode.Value;
+        _logger.Info("连接限制配置已更新: PerIp={PerIp}, PerDest={PerDest}, Total={Total}",
+            config.MaxConnectionsPerIp, config.MaxConnectionsPerDestination, config.MaxTotalConnections);
+    }
+
+    public void SetPathConnectionLimit(string path, int maxConnections)
+    {
+        _options.ConnectionLimit.PathLimits[path.Trim()] = maxConnections;
+        _logger.Info("已设置路径 {Path} 连接限制: {Max}", path, maxConnections);
+    }
+
+    public bool RemovePathConnectionLimit(string path)
+    {
+        var removed = _options.ConnectionLimit.PathLimits.Remove(path.Trim());
+        if (removed) _logger.Info("已移除路径 {Path} 连接限制", path);
+        return removed;
     }
 
     /// <summary>

@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { accessControlApi } from '@/api'
 import type { AccessControlData } from '@/api'
 import { useToast } from '@/composables/useToast'
+import { countryNameMap, provinceNameMap } from '@/utils/geoNameMap'
 
 const props = defineProps<{
   mode: 'ip' | 'geo'
@@ -149,9 +150,39 @@ const addTypePlaceholders: Record<string, string> = {
   allowRegion: '如：北京',
 }
 
+// 地理类型预设选项
+const geoSearch = ref('')
+const isGeoType = computed(() => ['denyCountry', 'denyRegion', 'allowCountry', 'allowRegion'].includes(addType.value))
+const isCountryType = computed(() => addType.value === 'denyCountry' || addType.value === 'allowCountry')
+
+const geoOptions = computed(() => {
+  if (isCountryType.value) return Object.keys(countryNameMap)
+  return Object.keys(provinceNameMap)
+})
+
+const existingGeoValues = computed(() => {
+  if (!data.value) return new Set<string>()
+  const map: Record<string, string[]> = {
+    denyCountry: data.value.geoControl.denyCountries,
+    denyRegion: data.value.geoControl.denyRegions,
+    allowCountry: data.value.geoControl.allowCountries,
+    allowRegion: data.value.geoControl.allowRegions,
+  }
+  return new Set(map[addType.value] || [])
+})
+
+const filteredGeoOptions = computed(() => {
+  const search = geoSearch.value.toLowerCase()
+  const existing = existingGeoValues.value
+  return geoOptions.value.filter(name =>
+    !existing.has(name) && name.toLowerCase().includes(search)
+  )
+})
+
 const openAdd = (type: typeof addType.value) => {
   addType.value = type
   addValue.value = ''
+  geoSearch.value = ''
   showAddDialog.value = true
 }
 
@@ -307,7 +338,7 @@ onMounted(() => {
         <table class="w-full text-sm">
           <thead>
             <tr class="border-t border-dark-border text-left text-xs text-gray-500">
-              <th class="px-5 py-2.5 w-24">类型</th>
+              <th class="px-5 py-2.5 w-28">类型</th>
               <th class="px-4 py-2.5">值</th>
               <th class="px-5 py-2.5 w-20">操作</th>
             </tr>
@@ -316,7 +347,7 @@ onMounted(() => {
             <tr v-for="(entry, idx) in entries" :key="idx"
               class="border-t border-dark-border/50 hover:bg-white/[0.03] transition-colors">
               <td class="px-5 py-2.5">
-                <span :class="['px-2 py-0.5 text-[11px] font-medium rounded-full', typeBadgeClass(entry.type)]">
+                <span :class="['px-2 py-0.5 text-[11px] font-medium rounded-full whitespace-nowrap', typeBadgeClass(entry.type)]">
                   {{ entry.label }}
                 </span>
               </td>
@@ -341,20 +372,59 @@ onMounted(() => {
       <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
         <h3 class="text-lg font-semibold text-gray-100 mb-4">添加{{ addTypeLabels[addType] }}</h3>
         <div class="space-y-3">
-          <div>
-            <label class="block text-sm text-gray-400 mb-1">值 <span class="text-red-400">*</span></label>
-            <input v-model="addValue" type="text" class="input w-full"
-              :placeholder="addTypePlaceholders[addType]"
-              @keyup.enter="executeAdd" />
-          </div>
-          <div class="text-xs text-gray-500">
-            <template v-if="addType === 'whitelist' || addType === 'blacklist'">
+          <!-- IP 类型：文本输入 -->
+          <template v-if="!isGeoType">
+            <div>
+              <label class="block text-sm text-gray-400 mb-1">值 <span class="text-red-400">*</span></label>
+              <input v-model="addValue" type="text" class="input w-full"
+                :placeholder="addTypePlaceholders[addType]"
+                @keyup.enter="executeAdd" />
+            </div>
+            <div class="text-xs text-gray-500">
               支持单个 IP 或 CIDR 格式（如 192.168.1.0/24）
-            </template>
-            <template v-else>
-              输入国家或省份名称，需与 IP2Region 数据库中的名称一致
-            </template>
-          </div>
+            </div>
+          </template>
+
+          <!-- 地理类型：搜索 + 下拉列表 -->
+          <template v-else>
+            <input
+              v-model="geoSearch"
+              type="text"
+              class="input w-full"
+              :placeholder="isCountryType ? '搜索国家名称...' : '搜索省份名称...'"
+            />
+            <div class="max-h-[280px] overflow-y-auto space-y-1 border border-dark-border rounded-lg p-2">
+              <div
+                v-for="name in filteredGeoOptions"
+                :key="name"
+                @click="addValue = name"
+                :class="[
+                  'px-3 py-2 rounded-lg cursor-pointer transition-colors text-sm',
+                  addValue === name
+                    ? 'bg-primary-500/20 text-primary-400 border border-primary-500/30'
+                    : 'hover:bg-dark-card-hover text-gray-300'
+                ]"
+              >
+                {{ name }}
+              </div>
+              <div v-if="filteredGeoOptions.length === 0" class="text-gray-500 text-sm text-center py-4">
+                无匹配项
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-gray-500 shrink-0">或手动输入：</span>
+              <input
+                v-model="addValue"
+                type="text"
+                class="input text-sm flex-1"
+                :placeholder="isCountryType ? '国家名称' : '省份名称'"
+                @keyup.enter="executeAdd"
+              />
+            </div>
+            <div v-if="addValue" class="text-sm text-gray-400">
+              当前选择：<span class="text-primary-400 font-medium">{{ addValue }}</span>
+            </div>
+          </template>
         </div>
         <div class="flex justify-end gap-3 mt-5">
           <button @click="showAddDialog = false" class="btn btn-sm btn-secondary">取消</button>

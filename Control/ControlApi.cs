@@ -983,6 +983,7 @@ public static class ControlApi
                     {
                         ipControl = acOptions.IpControl.Enabled,
                         geoControl = acOptions.GeoControl.Enabled,
+                        connectionLimit = acOptions.ConnectionLimit.Enabled,
                         wafArgs = protectOptions.OpenArgsCheck,
                         wafPost = protectOptions.OpenPostCheck,
                         ccProtection = statisticOptions.LimitCc.Count > 0 || statisticService.GetLimitCcRules().Count > 0
@@ -2034,6 +2035,108 @@ public static class ControlApi
             catch (Exception ex)
             {
                 return Results.Json(new { success = false, message = $"切换失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // ==================== 连接限制 API ====================
+
+        // 获取连接限制配置
+        app.MapGet("/api/connection-limit/config", (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            var options = accessControlService.GetOptions();
+            var config = options.ConnectionLimit;
+            var stats = accessControlService.GetConnectionStats();
+            return Results.Json(new
+            {
+                success = true,
+                enabled = config.Enabled,
+                maxConnectionsPerIp = config.MaxConnectionsPerIp,
+                maxConnectionsPerDestination = config.MaxConnectionsPerDestination,
+                maxTotalConnections = config.MaxTotalConnections,
+                rejectStatusCode = config.RejectStatusCode,
+                pathLimits = config.PathLimits,
+                stats = new
+                {
+                    totalConnections = stats.TotalConnections,
+                    connectionsPerIp = stats.ConnectionsPerIp.Count,
+                    connectionsPerDestination = stats.ConnectionsPerDestination.Count
+                }
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 切换连接限制启用状态
+        app.MapPost("/api/connection-limit/toggle", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<ToggleFeatureRequest>();
+                var enabled = request?.Enabled ?? !accessControlService.GetOptions().ConnectionLimit.Enabled;
+                accessControlService.SetConnectionLimitEnabled(enabled);
+                return Results.Json(new
+                {
+                    success = true,
+                    enabled,
+                    message = enabled ? "连接限制已启用" : "连接限制已禁用"
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"操作失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 更新连接限制配置
+        app.MapPost("/api/connection-limit/update", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<UpdateConnectionLimitRequest>();
+                if (request == null) return Results.Json(new { success = false, message = "无效请求" });
+                accessControlService.SetConnectionLimitConfig(
+                    request.MaxConnectionsPerIp,
+                    request.MaxConnectionsPerDestination,
+                    request.MaxTotalConnections,
+                    request.RejectStatusCode);
+                return Results.Json(new { success = true, message = "连接限制配置已更新" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"更新失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 添加路径连接限制
+        app.MapPost("/api/connection-limit/path/add", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<PathConnectionLimitRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Path) || request.MaxConnections <= 0)
+                    return Results.Json(new { success = false, message = "无效参数" });
+                accessControlService.SetPathConnectionLimit(request.Path, request.MaxConnections);
+                return Results.Json(new { success = true, message = $"已设置路径 {request.Path} 最大连接数: {request.MaxConnections}" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 移除路径连接限制
+        app.MapPost("/api/connection-limit/path/remove", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<RemovePathConnectionLimitRequest>();
+                if (request == null || string.IsNullOrWhiteSpace(request.Path))
+                    return Results.Json(new { success = false, message = "无效参数" });
+                if (accessControlService.RemovePathConnectionLimit(request.Path))
+                    return Results.Json(new { success = true, message = $"已移除路径 {request.Path} 连接限制" });
+                return Results.Json(new { success = false, message = "路径不在限制列表中" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
             }
         }).RequireHost($"*:{controlPort}");
 
@@ -7345,6 +7448,25 @@ public class RemovePathThrottleRequest
 public class SetGlobalThrottleRequest
 {
     public int LimitKbps { get; set; }
+}
+
+public class UpdateConnectionLimitRequest
+{
+    public int? MaxConnectionsPerIp { get; set; }
+    public int? MaxConnectionsPerDestination { get; set; }
+    public int? MaxTotalConnections { get; set; }
+    public int? RejectStatusCode { get; set; }
+}
+
+public class PathConnectionLimitRequest
+{
+    public string Path { get; set; } = "";
+    public int MaxConnections { get; set; }
+}
+
+public class RemovePathConnectionLimitRequest
+{
+    public string Path { get; set; } = "";
 }
 
 public class CreateABTestRequest

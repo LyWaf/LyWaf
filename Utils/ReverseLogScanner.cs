@@ -162,7 +162,7 @@ public sealed class ReverseLogScanner : IDisposable
                 searchData = new byte[carryOver.Length + bytesRead];
                 carryOver.CopyTo(searchData, 0);
                 buffer.AsSpan(0, bytesRead).CopyTo(searchData.AsSpan(carryOver.Length));
-                searchOffset = -(carryOver.Length);
+                searchOffset = -carryOver.Length;
             }
             else
             {

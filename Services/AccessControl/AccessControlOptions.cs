@@ -12,12 +12,6 @@ public class AccessControlOptions
     public int RejectStatusCode { get; set; } = 403;
 
     /// <summary>
-    /// 拒绝访问时返回的消息（为空时使用 WafUtil 的模板）
-    /// 支持占位符: {ClientIp}, {Path}, {Method}, {Host}, {Time}, {Country}, {Region}, {City}
-    /// </summary>
-    public string? RejectMessage { get; set; }
-
-    /// <summary>
     /// 全局 IP 白名单，支持 CIDR 格式
     /// 白名单中的 IP 直接放行，不受任何访问控制限制（包括 IpControl、GeoControl）
     /// </summary>
@@ -74,12 +68,6 @@ public class ConnectionLimitConfig
     /// 超过连接限制时返回的 HTTP 状态码
     /// </summary>
     public int RejectStatusCode { get; set; } = 503;
-
-    /// <summary>
-    /// 超过连接限制时返回的消息（为空时使用 WafUtil 的模板）
-    /// 支持占位符: {ClientIp}, {Path}, {Method}, {Host}, {Time}
-    /// </summary>
-    public string? RejectMessage { get; set; }
 }
 
 /// <summary>
@@ -168,11 +156,6 @@ public class GeoAccessControlConfig
     /// </summary>
     public Dictionary<string, GeoPathRule> PathRules { get; set; } = [];
 
-    /// <summary>
-    /// 地理位置拒绝消息（覆盖全局配置）
-    /// 支持占位符: {ClientIp}, {Country}, {Region}, {City}
-    /// </summary>
-    public string? RejectMessage { get; set; }
 }
 
 /// <summary>

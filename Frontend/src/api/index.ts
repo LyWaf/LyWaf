@@ -545,6 +545,25 @@ export const throttleApi = {
     api.post<ApiResponse>('/throttle/patch/remove'),
 }
 
+// ==================== 连接限制 API ====================
+
+export const connectionLimitApi = {
+  getConfig: () =>
+    api.get<any>('/connection-limit/config'),
+
+  toggle: (enabled?: boolean) =>
+    api.post<any>('/connection-limit/toggle', { enabled }),
+
+  update: (config: { maxConnectionsPerIp?: number; maxConnectionsPerDestination?: number; maxTotalConnections?: number; rejectStatusCode?: number }) =>
+    api.post<any>('/connection-limit/update', config),
+
+  addPathLimit: (path: string, maxConnections: number) =>
+    api.post<any>('/connection-limit/path/add', { path, maxConnections }),
+
+  removePathLimit: (path: string) =>
+    api.post<any>('/connection-limit/path/remove', { path }),
+}
+
 // ==================== 配置文件 API ====================
 
 interface ConfigFileResponse {

@@ -1,3 +1,4 @@
+using LyWaf.Plugins.Examples;
 using LyWaf.Services.AccessControl;
 using LyWaf.Shared;
 using LyWaf.Utils;
@@ -43,6 +44,9 @@ public class AccessControlMiddleware(
                 geoInfo?.Region ?? "", geoInfo?.City ?? "",
                 ruleName, "Black");
 
+            // 设置拦截日志标记，让 RequestLoggerPlugin 记录到拦截明细
+            SetInterceptLogMark(context, ruleName);
+
             await WriteRejectResponse(context, checkResult, clientIp);
             return;
         }
@@ -64,19 +68,21 @@ public class AccessControlMiddleware(
                 _logger.Warn("连接数超限: ClientIp={ClientIp}, Destination={Destination}, Path={Path}",
                     clientIp, destination, path);
 
-                // 如果 RejectMessage 为空，使用 WafUtil 的模板
-                if (string.IsNullOrEmpty(options.ConnectionLimit.RejectMessage))
-                {
-                    await WafUtil.WriteErrorOutput(context, options.ConnectionLimit.RejectStatusCode,
-                        new Dictionary<string, string?> { ["reason"] = "连接数超限" });
-                }
-                else
-                {
-                    context.Response.StatusCode = options.ConnectionLimit.RejectStatusCode;
-                    context.Response.ContentType = "text/plain; charset=utf-8";
-                    var message = WafUtil.FormatMessage(options.ConnectionLimit.RejectMessage, context);
-                    await context.Response.WriteAsync(message);
-                }
+                
+                // 记录到检测事件统计
+                var geoInfo = _accessControlService.GetGeoInfo(clientIp);
+                var host = context.Request.Host.Host;
+                SharedData.RecordInterceptEvent(clientIp, host,
+                    geoInfo?.Region ?? "", geoInfo?.City ?? "",
+                    "连接数超限", "Black");
+
+                // 设置拦截日志标记，让 RequestLoggerPlugin 记录到拦截明细
+                SetInterceptLogMark(context, "连接数超限");
+
+                // 统一使用错误模板
+                await WafUtil.WriteErrorOutput(context, options.ConnectionLimit.RejectStatusCode,
+                    new Dictionary<string, string?> { ["reason"] = "连接数超限" },
+                    isIntercept: true, isAttack: false, eventType: SecurityEventType.BlacklistBlock);
                 return;
             }
 
@@ -94,6 +100,24 @@ public class AccessControlMiddleware(
         {
             await _next(context);
         }
+    }
+
+    /// <summary>
+    /// 设置拦截日志标记，让 RequestLoggerPlugin 在 RequestCompletedEvent 中记录到拦截明细
+    /// </summary>
+    private static void SetInterceptLogMark(HttpContext context, string reason)
+    {
+        context.Items["RequestLogger.InterceptRule"] = new MatchRule
+        {
+            Host = "*",
+            FilePrefix = "intercept",
+            LogQueryString = true,
+            LogRequestBody = true,
+            LogHeaders = true,
+            LogResponseBody = false,
+            LogDuration = false,
+        };
+        context.Items["RequestLogger.Reason"] = reason;
     }
 
     /// <summary>
@@ -135,22 +159,11 @@ public class AccessControlMiddleware(
             ["Isp"] = geoInfo?.Isp ?? ""
         };
 
-        // 如果 RejectMessage 为空，使用 WafUtil 的模板
-        if (string.IsNullOrEmpty(checkResult.RejectMessage))
-        {
-            await WafUtil.WriteErrorOutput(context, checkResult.RejectStatusCode, extraValues,
-                isIntercept: true, isAttack: false, eventType: eventType);
-            return;
-        }
-
         // 记录安全事件
         SharedData.Security.RecordEvent(eventType, clientIp);
 
-        // 使用自定义消息
-        context.Response.StatusCode = checkResult.RejectStatusCode;
-        context.Response.ContentType = "text/plain; charset=utf-8";
-
-        var message = WafUtil.FormatMessage(checkResult.RejectMessage, context, extraValues);
-        await context.Response.WriteAsync(message);
+        // 统一使用错误模板
+        await WafUtil.WriteErrorOutput(context, checkResult.RejectStatusCode, extraValues,
+            isIntercept: true, isAttack: false, eventType: eventType);
     }
 }
