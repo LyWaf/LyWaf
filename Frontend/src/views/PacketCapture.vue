@@ -615,15 +615,23 @@ const getMethodClass = (method: string) => {
         <!-- 抓包日志表格 -->
         <div v-else class="card !p-0 overflow-hidden">
           <div class="overflow-x-auto">
-            <table class="w-full text-sm">
+            <table class="w-full text-sm table-fixed">
+              <colgroup>
+                <col style="width: 60px" />
+                <col />
+                <col style="width: 140px" />
+                <col style="width: 110px" />
+                <col style="width: 180px" />
+                <col style="width: 60px" />
+              </colgroup>
               <thead>
                 <tr class="border-b border-dark-border text-left text-xs text-gray-500">
-                  <th class="px-4 py-3 w-16">状态</th>
+                  <th class="px-4 py-3">状态</th>
                   <th class="px-4 py-3">请求地址</th>
-                  <th class="px-4 py-3 w-36">Host</th>
-                  <th class="px-4 py-3 w-28">客户端</th>
-                  <th class="px-4 py-3 w-44">时间</th>
-                  <th class="px-4 py-3 w-16 text-center">详情</th>
+                  <th class="px-4 py-3">Host</th>
+                  <th class="px-4 py-3">客户端</th>
+                  <th class="px-4 py-3">时间</th>
+                  <th class="px-4 py-3 text-center">详情</th>
                 </tr>
               </thead>
               <tbody>
@@ -643,7 +651,7 @@ const getMethodClass = (method: string) => {
                       }"
                     >{{ entry.statusCode || '-' }}</span>
                   </td>
-                  <td class="px-4 py-3">
+                  <td class="px-4 py-3 overflow-hidden">
                     <div class="flex items-center gap-2 min-w-0">
                       <span
                         class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold rounded border flex-shrink-0"
@@ -654,11 +662,11 @@ const getMethodClass = (method: string) => {
                       </span>
                     </div>
                   </td>
-                  <td class="px-4 py-3">
-                    <span class="text-gray-400 text-xs font-mono">{{ entry.host || '-' }}</span>
+                  <td class="px-4 py-3 overflow-hidden">
+                    <span class="text-gray-400 text-xs font-mono truncate block">{{ entry.host || '-' }}</span>
                   </td>
-                  <td class="px-4 py-3">
-                    <span class="text-gray-400 text-xs font-mono">{{ entry.clientIp || '-' }}</span>
+                  <td class="px-4 py-3 overflow-hidden">
+                    <span class="text-gray-400 text-xs font-mono truncate block">{{ entry.clientIp || '-' }}</span>
                   </td>
                   <td class="px-4 py-3 text-gray-400 text-xs font-mono whitespace-nowrap">
                     {{ entry.time }}
