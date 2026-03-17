@@ -60,12 +60,51 @@ public class ProxyHandler
     private readonly ProxyServerOptions _options;
     private readonly ProxyPortConfig _portConfig;
     private readonly PcapCertProvider? _pcapCertProvider;
+    private readonly WafInfo.IWafInfoService? _wafInfoService;
 
-    public ProxyHandler(ProxyServerOptions options, ProxyPortConfig portConfig, PcapCertProvider? pcapCertProvider = null)
+    public ProxyHandler(ProxyServerOptions options, ProxyPortConfig portConfig,
+        PcapCertProvider? pcapCertProvider = null, WafInfo.IWafInfoService? wafInfoService = null)
     {
         _options = options;
         _portConfig = portConfig;
         _pcapCertProvider = pcapCertProvider;
+        _wafInfoService = wafInfoService;
+    }
+
+    /// <summary>
+    /// 尝试获取 WAF 已配置的真实证书（ACME 或静态配置），
+    /// 如果目标域名有真实证书则优先使用，避免使用假证书
+    /// </summary>
+    private X509Certificate2? TryGetRealCert(string hostname)
+    {
+        if (_wafInfoService == null) return null;
+        try
+        {
+            var cert = _wafInfoService.GetCertByName(hostname);
+            // 验证证书确实匹配该域名（GetCertByName 在无匹配时可能返回 fallback）
+            if (cert != null && cert.GetRSAPrivateKey() != null)
+            {
+                var cn = cert.GetNameInfo(X509NameType.SimpleName, false) ?? "";
+                // 检查 CN 或 SAN 是否匹配
+                if (cn.Equals(hostname, StringComparison.OrdinalIgnoreCase)
+                    || cn.StartsWith("*.") && hostname.EndsWith(cn[1..], StringComparison.OrdinalIgnoreCase))
+                {
+                    return cert;
+                }
+                // 检查 SAN 扩展
+                foreach (var ext in cert.Extensions)
+                {
+                    if (ext.Oid?.Value == "2.5.29.17") // Subject Alternative Name
+                    {
+                        var sanStr = ext.Format(false);
+                        if (sanStr.Contains(hostname, StringComparison.OrdinalIgnoreCase))
+                            return cert;
+                    }
+                }
+            }
+        }
+        catch { }
+        return null;
     }
 
     /// <summary>
@@ -288,13 +327,14 @@ public class ProxyHandler
             await clientStream.WriteAsync(established, cancellationToken);
             await clientStream.FlushAsync(cancellationToken);
 
-            // 3. 尝试用伪造证书与客户端建立 TLS（这步可能失败）
+            // 3. 尝试与客户端建立 TLS
+            // 优先使用 WAF 已配置的真实证书，否则使用 Pcap CA 签发的假证书
             SslStream? clientSsl = null;
             try
             {
-                var fakeCert = _pcapCertProvider!.GetCertForHost(targetHost);
+                var cert = TryGetRealCert(targetHost) ?? _pcapCertProvider!.GetCertForHost(targetHost);
                 clientSsl = new SslStream(clientStream, leaveInnerStreamOpen: true);
-                await clientSsl.AuthenticateAsServerAsync(fakeCert, false, false);
+                await clientSsl.AuthenticateAsServerAsync(cert, false, false);
             }
             catch (AuthenticationException ex)
             {
@@ -795,10 +835,10 @@ public class ProxyHandler
                     RemoteCertificateValidationCallback = (_, _, _, _) => true,
                 }, cancellationToken);
 
-                // 用伪造证书与客户端建立 TLS
-                var fakeCert = _pcapCertProvider.GetCertForHost(targetHost);
+                // 优先使用真实证书，否则使用假证书与客户端建立 TLS
+                var cert = TryGetRealCert(targetHost) ?? _pcapCertProvider.GetCertForHost(targetHost);
                 var clientSsl = new SslStream(clientStream, leaveInnerStreamOpen: true);
-                await clientSsl.AuthenticateAsServerAsync(fakeCert, false, false);
+                await clientSsl.AuthenticateAsServerAsync(cert, false, false);
 
                 _logger.Debug("SOCKS5 Pcap 已建立: {Host}:{Port}", targetHost, targetPort);
 

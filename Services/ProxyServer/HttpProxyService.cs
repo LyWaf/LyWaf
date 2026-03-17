@@ -17,12 +17,15 @@ public class HttpProxyService : BackgroundService
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private ProxyServerOptions _options;
     private readonly PcapCertProvider _pcapCertProvider;
+    private readonly WafInfo.IWafInfoService? _wafInfoService;
     private readonly List<(TcpListener listener, string key, IPAddress host, int port)> _listeners = [];
 
-    public HttpProxyService(IOptionsMonitor<ProxyServerOptions> optionsMonitor, PcapCertProvider pcapCertProvider)
+    public HttpProxyService(IOptionsMonitor<ProxyServerOptions> optionsMonitor, PcapCertProvider pcapCertProvider,
+        WafInfo.IWafInfoService? wafInfoService = null)
     {
         _options = optionsMonitor.CurrentValue;
         _pcapCertProvider = pcapCertProvider;
+        _wafInfoService = wafInfoService;
         optionsMonitor.OnChange(newConfig =>
         {
             _options = newConfig;
@@ -167,7 +170,7 @@ public class HttpProxyService : BackgroundService
             try
             {
                 var portConfig = GetPortConfig(_options, host.ToString(), port, configKey);
-                var handler = new ProxyHandler(_options, portConfig, _pcapCertProvider);
+                var handler = new ProxyHandler(_options, portConfig, _pcapCertProvider, _wafInfoService);
                 await handler.HandleAsync(client.Client, stoppingToken);
             }
             catch (OperationCanceledException)
