@@ -1,5 +1,8 @@
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using NLog;
 
@@ -9,6 +12,7 @@ namespace LyWaf.Services.ProxyServer;
 /// 统一代理处理器
 /// 同一端口同时支持 HTTP、HTTPS (CONNECT) 和 SOCKS5 三种协议
 /// 通过首字节嗅探自动判断协议类型
+/// 支持 Pcap 模式解密 HTTPS 流量
 /// </summary>
 public class ProxyHandler
 {
@@ -36,13 +40,27 @@ public class ProxyHandler
     private const byte REP_COMMAND_NOT_SUPPORTED = 0x07;
     private const byte REP_ADDRESS_TYPE_NOT_SUPPORTED = 0x08;
 
+    /// <summary>
+    /// CRL 文件在代理端口上的访问路径
+    /// </summary>
+    internal const string CrlPath = "/lywaf-proxy-ca.crl";
+
+    /// <summary>
+    /// 记录 Pcap TLS 握手失败的 clientIp:host，在过期前直接走隧道模式
+    /// Value 为失败时间，超过过期时间后自动重试 Pcap
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _pcapFallbackCache = new();
+    private static readonly TimeSpan PcapFallbackExpiry = TimeSpan.FromMinutes(2);
+
     private readonly ProxyServerOptions _options;
     private readonly ProxyPortConfig _portConfig;
+    private readonly PcapCertProvider? _pcapCertProvider;
 
-    public ProxyHandler(ProxyServerOptions options, ProxyPortConfig portConfig)
+    public ProxyHandler(ProxyServerOptions options, ProxyPortConfig portConfig, PcapCertProvider? pcapCertProvider = null)
     {
         _options = options;
         _portConfig = portConfig;
+        _pcapCertProvider = pcapCertProvider;
     }
 
     /// <summary>
@@ -51,6 +69,7 @@ public class ProxyHandler
     public async Task HandleAsync(Socket clientSocket, CancellationToken cancellationToken = default)
     {
         using var clientStream = new NetworkStream(clientSocket, ownsSocket: false);
+        var clientIp = (clientSocket.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "unknown";
 
         try
         {
@@ -63,11 +82,11 @@ public class ProxyHandler
 
             if (firstByte == SOCKS_VERSION && _portConfig.EnableSocks5)
             {
-                await HandleSocks5Async(clientSocket, clientStream, cancellationToken);
+                await HandleSocks5Async(clientSocket, clientStream, clientIp, cancellationToken);
             }
             else if (IsHttpMethod(firstByte) && (_portConfig.EnableHttp || _portConfig.EnableHttps))
             {
-                await HandleHttpAsync(clientStream, cancellationToken);
+                await HandleHttpAsync(clientStream, clientIp, cancellationToken);
             }
             else
             {
@@ -85,7 +104,7 @@ public class ProxyHandler
     //  HTTP / HTTPS 协议处理
     // ══════════════════════════════════════════
 
-    private async Task HandleHttpAsync(NetworkStream clientStream, CancellationToken cancellationToken)
+    private async Task HandleHttpAsync(NetworkStream clientStream, string clientIp, CancellationToken cancellationToken)
     {
         var requestLine = await ReadLineAsync(clientStream, cancellationToken);
         if (string.IsNullOrEmpty(requestLine)) return;
@@ -113,9 +132,15 @@ public class ProxyHandler
             }
         }
 
-        if (method == "CONNECT" && _portConfig.EnableHttps)
+        // CRL 分发点请求（直接 HTTP 请求，非代理格式）
+        if (method == "GET" && target.Equals(CrlPath, StringComparison.OrdinalIgnoreCase)
+            && _portConfig.EnablePcap && _pcapCertProvider != null)
         {
-            await HandleHttpConnectAsync(clientStream, target, cancellationToken);
+            await ServeCrlAsync(clientStream, cancellationToken);
+        }
+        else if (method == "CONNECT" && _portConfig.EnableHttps)
+        {
+            await HandleHttpConnectAsync(clientStream, target, clientIp, cancellationToken);
         }
         else if (_portConfig.EnableHttp && (target.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
                                              target.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
@@ -129,9 +154,9 @@ public class ProxyHandler
     }
 
     /// <summary>
-    /// HTTPS CONNECT 隧道
+    /// HTTPS CONNECT 处理（隧道模式或 Pcap 抓包模式）
     /// </summary>
-    private async Task HandleHttpConnectAsync(NetworkStream clientStream, string target, CancellationToken cancellationToken)
+    private async Task HandleHttpConnectAsync(NetworkStream clientStream, string target, string clientIp, CancellationToken cancellationToken)
     {
         var (targetHost, targetPort) = ParseHostPort(target, 443);
         _logger.Debug("代理 CONNECT 请求: {Host}:{Port}", targetHost, targetPort);
@@ -142,6 +167,22 @@ public class ProxyHandler
             return;
         }
 
+        if (_portConfig.EnablePcap && _pcapCertProvider != null
+            && !IsPcapFallback(clientIp, targetHost))
+        {
+            await HandlePcapConnectAsync(clientStream, targetHost, targetPort, clientIp, cancellationToken);
+        }
+        else
+        {
+            await HandleTunnelConnectAsync(clientStream, targetHost, targetPort, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// HTTPS CONNECT 隧道模式（透传，不解密）
+    /// </summary>
+    private async Task HandleTunnelConnectAsync(NetworkStream clientStream, string targetHost, int targetPort, CancellationToken cancellationToken)
+    {
         Socket? targetSocket = null;
         try
         {
@@ -172,6 +213,307 @@ public class ProxyHandler
         finally
         {
             targetSocket?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Pcap HTTPS 抓包模式
+    /// 1. 连接目标建立真实 TLS
+    /// 2. 回复客户端 200
+    /// 3. 用伪造证书与客户端建立 TLS
+    /// 4. 在两个 SslStream 之间中继 HTTP 请求/响应并记录
+    /// </summary>
+    /// <summary>
+    /// 检查 clientIp:host 是否在 Pcap 降级缓存中（未过期）
+    /// </summary>
+    private static bool IsPcapFallback(string clientIp, string host)
+    {
+        var key = $"{clientIp}:{host}";
+        if (_pcapFallbackCache.TryGetValue(key, out var failTime))
+        {
+            if (DateTime.UtcNow - failTime < PcapFallbackExpiry)
+                return true;
+            // 已过期，移除
+            _pcapFallbackCache.TryRemove(key, out _);
+        }
+        return false;
+    }
+
+    private async Task HandlePcapConnectAsync(NetworkStream clientStream, string targetHost, int targetPort, string clientIp, CancellationToken cancellationToken)
+    {
+        Socket? targetSocket = null;
+        try
+        {
+            // 1. 先建立 TCP 连接（不做 TLS）
+            targetSocket = await ConnectTargetAsync(targetHost, targetPort, cancellationToken);
+            using var targetNetStream = new NetworkStream(targetSocket, ownsSocket: false);
+
+            // 2. 先告知客户端隧道已建立
+            var established = "HTTP/1.1 200 Connection Established\r\n\r\n"u8.ToArray();
+            await clientStream.WriteAsync(established, cancellationToken);
+            await clientStream.FlushAsync(cancellationToken);
+
+            // 3. 尝试用伪造证书与客户端建立 TLS（这步可能失败）
+            SslStream? clientSsl = null;
+            try
+            {
+                var fakeCert = _pcapCertProvider!.GetCertForHost(targetHost);
+                clientSsl = new SslStream(clientStream, leaveInnerStreamOpen: true);
+                await clientSsl.AuthenticateAsServerAsync(fakeCert, false, false);
+            }
+            catch (AuthenticationException ex)
+            {
+                // 假证书握手失败 → 降级为隧道透传
+                // 客户端的 TLS ClientHello 已被消费，无法恢复，关闭连接
+                var inner = ex.InnerException?.Message ?? "无详细信息";
+                _logger.Warn("Pcap 假证书握手失败，{Min}分钟内降级为隧道模式: {ClientIp} → {Host}:{Port} ({Inner})",
+                    PcapFallbackExpiry.TotalMinutes, clientIp, targetHost, targetPort, inner);
+                _pcapFallbackCache[$"{clientIp}:{targetHost}"] = DateTime.UtcNow;
+                clientSsl?.Dispose();
+                return;
+            }
+
+            // 4. 与目标建立真实 TLS 连接
+            var targetSsl = new SslStream(targetNetStream, leaveInnerStreamOpen: true);
+            try
+            {
+                await targetSsl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                {
+                    TargetHost = targetHost,
+                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+                    RemoteCertificateValidationCallback = (_, _, _, _) => true,
+                }, cancellationToken);
+            }
+            catch (AuthenticationException ex)
+            {
+                var inner = ex.InnerException?.Message ?? "无详细信息";
+                _logger.Warn("Pcap 目标 TLS 握手失败: {Host}:{Port} ({Inner})", targetHost, targetPort, inner);
+                targetSsl.Dispose();
+                clientSsl.Dispose();
+                return;
+            }
+
+            _logger.Debug("Pcap 已建立: {Host}:{Port}", targetHost, targetPort);
+
+            // 5. 在两个 SslStream 之间中继 HTTP 流量
+            await PcapRelayAsync(clientSsl, targetSsl, targetHost, cancellationToken);
+
+            await clientSsl.ShutdownAsync();
+            await targetSsl.ShutdownAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.Warn("Pcap 连接超时: {Host}:{Port}", targetHost, targetPort);
+        }
+        catch (IOException ex) when (ex.InnerException is SocketException)
+        {
+            _logger.Debug("Pcap 连接中断: {Host}:{Port} - {Message}", targetHost, targetPort, ex.InnerException.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "Pcap 处理失败: {Host}:{Port}", targetHost, targetPort);
+        }
+        finally
+        {
+            targetSocket?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Pcap 中继：从客户端 SslStream 读取 HTTP 请求，转发到目标 SslStream，记录流量
+    /// 支持 keep-alive 多次请求
+    /// </summary>
+    private async Task PcapRelayAsync(SslStream clientSsl, SslStream targetSsl, string targetHost, CancellationToken cancellationToken)
+    {
+        var dataTimeout = TimeSpan.FromSeconds(_options.DataTimeout);
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(dataTimeout);
+
+            // 读取客户端请求行
+            var requestLine = await ReadLineFromSslAsync(clientSsl, timeoutCts.Token);
+            if (string.IsNullOrEmpty(requestLine)) break;
+
+            var parts = requestLine.Split(' ');
+            if (parts.Length < 3) break;
+
+            var method = parts[0];
+            var path = parts[1];
+            var httpVersion = parts[2];
+
+            // 读取请求头
+            var headers = await ReadHeadersFromSslAsync(clientSsl, timeoutCts.Token);
+
+            _logger.Info("Pcap {Method} https://{Host}{Path}", method, targetHost, path);
+
+            // 构建转发请求
+            var sb = new StringBuilder();
+            sb.Append(method).Append(' ').Append(path).Append(' ').Append(httpVersion).Append("\r\n");
+            foreach (var header in headers)
+            {
+                sb.Append(header.Key).Append(": ").Append(header.Value).Append("\r\n");
+            }
+            sb.Append("\r\n");
+
+            // 发送请求头到目标
+            var headerBytes = Encoding.UTF8.GetBytes(sb.ToString());
+            await targetSsl.WriteAsync(headerBytes, timeoutCts.Token);
+            await targetSsl.FlushAsync(timeoutCts.Token);
+
+            // 转发请求体（带捕获）
+            string? requestBody = null;
+            if (headers.TryGetValue("Content-Length", out var clStr) &&
+                int.TryParse(clStr, out var contentLength) && contentLength > 0)
+            {
+                requestBody = await CopyBytesWithCaptureAsync(clientSsl, targetSsl, contentLength, timeoutCts.Token);
+            }
+
+            // 读取响应行
+            var responseLine = await ReadLineFromSslAsync(targetSsl, timeoutCts.Token);
+            if (string.IsNullOrEmpty(responseLine)) break;
+
+            // 解析状态码
+            var statusCode = 0;
+            var respParts = responseLine.Split(' ', 3);
+            if (respParts.Length >= 2) int.TryParse(respParts[1], out statusCode);
+
+            // 读取响应头
+            var responseHeaders = await ReadHeadersFromSslAsync(targetSsl, timeoutCts.Token);
+
+            // 发送响应头到客户端
+            var respSb = new StringBuilder();
+            respSb.Append(responseLine).Append("\r\n");
+            foreach (var header in responseHeaders)
+            {
+                respSb.Append(header.Key).Append(": ").Append(header.Value).Append("\r\n");
+            }
+            respSb.Append("\r\n");
+
+            var respHeaderBytes = Encoding.UTF8.GetBytes(respSb.ToString());
+            await clientSsl.WriteAsync(respHeaderBytes, timeoutCts.Token);
+            await clientSsl.FlushAsync(timeoutCts.Token);
+
+            // 转发响应体（带捕获）
+            string? responseBody = null;
+            if (responseHeaders.TryGetValue("Content-Length", out var respClStr) &&
+                int.TryParse(respClStr, out var respContentLength) && respContentLength > 0)
+            {
+                responseBody = await CopyBytesWithCaptureAsync(targetSsl, clientSsl, respContentLength, timeoutCts.Token);
+            }
+            else if (responseHeaders.TryGetValue("Transfer-Encoding", out var te) &&
+                     te.Contains("chunked", StringComparison.OrdinalIgnoreCase))
+            {
+                await CopyChunkedAsync(targetSsl, clientSsl, timeoutCts.Token);
+            }
+
+            await clientSsl.FlushAsync(timeoutCts.Token);
+
+            // 写入抓包日志
+            _ = Task.Run(() => WritePcapLog(method, path, targetHost, headers, requestBody, statusCode, responseHeaders, responseBody), CancellationToken.None);
+
+            // 检查 Connection: close
+            if (headers.TryGetValue("Connection", out var conn) &&
+                conn.Equals("close", StringComparison.OrdinalIgnoreCase))
+                break;
+            if (responseHeaders.TryGetValue("Connection", out var respConn) &&
+                respConn.Equals("close", StringComparison.OrdinalIgnoreCase))
+                break;
+        }
+    }
+
+    /// <summary>
+    /// 转发字节并捕获内容（最多 64KB）
+    /// </summary>
+    private static async Task<string?> CopyBytesWithCaptureAsync(Stream source, Stream destination, int count, CancellationToken cancellationToken, int maxCapture = 65536)
+    {
+        var buffer = new byte[8192];
+        var remaining = count;
+        var captureBuffer = new MemoryStream(Math.Min(count, maxCapture));
+
+        while (remaining > 0 && !cancellationToken.IsCancellationRequested)
+        {
+            var toRead = Math.Min(buffer.Length, remaining);
+            var read = await source.ReadAsync(buffer.AsMemory(0, toRead), cancellationToken);
+            if (read == 0) break;
+
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+
+            if (captureBuffer.Length < maxCapture)
+            {
+                var toCapture = (int)Math.Min(read, maxCapture - captureBuffer.Length);
+                captureBuffer.Write(buffer, 0, toCapture);
+            }
+
+            remaining -= read;
+        }
+
+        await destination.FlushAsync(cancellationToken);
+
+        if (captureBuffer.Length == 0) return null;
+        return Encoding.UTF8.GetString(captureBuffer.GetBuffer(), 0, (int)captureBuffer.Length);
+    }
+
+    private static readonly SemaphoreSlim _pcapLogLock = new(1, 1);
+
+    /// <summary>
+    /// 写入抓包日志（与拦截明细日志格式一致，供 LogUtil.ParseLogFileAsync 解析）
+    /// </summary>
+    private static void WritePcapLog(string method, string path, string host,
+        Dictionary<string, string> headers, string? requestBody,
+        int statusCode, Dictionary<string, string> responseHeaders, string? responseBody)
+    {
+        try
+        {
+            var logSb = new StringBuilder();
+            logSb.AppendLine($"========== [{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] ==========");
+            logSb.AppendLine($"{method} {path} HTTP/1.1");
+            logSb.AppendLine($"Host: {host}");
+            logSb.AppendLine($"Scheme: https");
+            logSb.AppendLine($"Status: {statusCode}");
+
+            // 请求头
+            logSb.AppendLine("--- Headers ---");
+            foreach (var h in headers)
+            {
+                logSb.AppendLine($"{h.Key}: {h.Value}");
+            }
+
+            // 请求体
+            if (!string.IsNullOrEmpty(requestBody))
+            {
+                logSb.AppendLine("--- Request Body ---");
+                logSb.AppendLine(requestBody);
+            }
+
+            // 响应体
+            if (!string.IsNullOrEmpty(responseBody))
+            {
+                logSb.AppendLine("--- Response Body ---");
+                logSb.AppendLine(responseBody);
+            }
+
+            logSb.AppendLine();
+
+            var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
+            Directory.CreateDirectory(dir);
+            var fileName = $"pcap_{DateTime.Now:yyyy-MM-dd}.log";
+            var filePath = Path.Combine(dir, fileName);
+
+            _pcapLogLock.Wait();
+            try
+            {
+                File.AppendAllText(filePath, logSb.ToString(), Encoding.UTF8);
+            }
+            finally
+            {
+                _pcapLogLock.Release();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "写入抓包日志失败");
         }
     }
 
@@ -241,7 +583,7 @@ public class ProxyHandler
     //  SOCKS5 协议处理
     // ══════════════════════════════════════════
 
-    private async Task HandleSocks5Async(Socket clientSocket, NetworkStream clientStream, CancellationToken cancellationToken)
+    private async Task HandleSocks5Async(Socket clientSocket, NetworkStream clientStream, string clientIp, CancellationToken cancellationToken)
     {
         try
         {
@@ -257,7 +599,7 @@ public class ProxyHandler
             }
 
             // 3. 请求处理
-            await Socks5RequestAsync(clientSocket, clientStream, cancellationToken);
+            await Socks5RequestAsync(clientSocket, clientStream, clientIp, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -328,7 +670,7 @@ public class ProxyHandler
         return success;
     }
 
-    private async Task Socks5RequestAsync(Socket clientSocket, NetworkStream clientStream, CancellationToken cancellationToken)
+    private async Task Socks5RequestAsync(Socket clientSocket, NetworkStream clientStream, string clientIp, CancellationToken cancellationToken)
     {
         var buffer = new byte[256];
 
@@ -387,11 +729,11 @@ public class ProxyHandler
             return;
         }
 
-        await Socks5ConnectAsync(clientSocket, clientStream, targetHost, targetPort, cancellationToken);
+        await Socks5ConnectAsync(clientSocket, clientStream, targetHost, targetPort, clientIp, cancellationToken);
     }
 
     private async Task Socks5ConnectAsync(Socket clientSocket, NetworkStream clientStream,
-        string targetHost, int targetPort, CancellationToken cancellationToken)
+        string targetHost, int targetPort, string clientIp, CancellationToken cancellationToken)
     {
         Socket? targetSocket = null;
         try
@@ -401,8 +743,38 @@ public class ProxyHandler
             await Socks5ReplyAsync(clientStream, REP_SUCCESS, cancellationToken);
             _logger.Debug("SOCKS5 连接成功: {Host}:{Port}", targetHost, targetPort);
 
-            using var targetStream = new NetworkStream(targetSocket, ownsSocket: false);
-            await TunnelAsync(clientStream, targetStream, cancellationToken);
+            // SOCKS5 Pcap：目标端口为 443 且启用 Pcap 时，走 Pcap 路径
+            if (_portConfig.EnablePcap && _pcapCertProvider != null && targetPort == 443
+                && !IsPcapFallback(clientIp, targetHost))
+            {
+                using var targetNetStream = new NetworkStream(targetSocket, ownsSocket: false);
+
+                // 与目标建立真实 TLS
+                var targetSsl = new SslStream(targetNetStream, leaveInnerStreamOpen: true);
+                await targetSsl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                {
+                    TargetHost = targetHost,
+                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+                    RemoteCertificateValidationCallback = (_, _, _, _) => true,
+                }, cancellationToken);
+
+                // 用伪造证书与客户端建立 TLS
+                var fakeCert = _pcapCertProvider.GetCertForHost(targetHost);
+                var clientSsl = new SslStream(clientStream, leaveInnerStreamOpen: true);
+                await clientSsl.AuthenticateAsServerAsync(fakeCert, false, false);
+
+                _logger.Debug("SOCKS5 Pcap 已建立: {Host}:{Port}", targetHost, targetPort);
+
+                await PcapRelayAsync(clientSsl, targetSsl, targetHost, cancellationToken);
+
+                await clientSsl.ShutdownAsync();
+                await targetSsl.ShutdownAsync();
+            }
+            else
+            {
+                using var targetStream = new NetworkStream(targetSocket, ownsSocket: false);
+                await TunnelAsync(clientStream, targetStream, cancellationToken);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -649,6 +1021,31 @@ public class ProxyHandler
         await stream.FlushAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// 在代理端口上直接提供 CRL 文件
+    /// </summary>
+    private async Task ServeCrlAsync(NetworkStream stream, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var crlPath = _pcapCertProvider!.CaCrlPath;
+            if (File.Exists(crlPath))
+            {
+                var crlBytes = await File.ReadAllBytesAsync(crlPath, cancellationToken);
+                var header = $"HTTP/1.1 200 OK\r\nContent-Type: application/pkix-crl\r\nContent-Length: {crlBytes.Length}\r\nConnection: close\r\n\r\n";
+                await stream.WriteAsync(Encoding.ASCII.GetBytes(header), cancellationToken);
+                await stream.WriteAsync(crlBytes, cancellationToken);
+            }
+            else
+            {
+                var response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"u8.ToArray();
+                await stream.WriteAsync(response, cancellationToken);
+            }
+            await stream.FlushAsync(cancellationToken);
+        }
+        catch { }
+    }
+
     private static async Task SendHttpErrorAsync(NetworkStream stream, int statusCode, string message, CancellationToken cancellationToken)
     {
         try
@@ -702,5 +1099,127 @@ public class ProxyHandler
             }
         }
         catch { }
+    }
+
+    // ══════════════════════════════════════════
+    //  Pcap / SslStream 辅助方法
+    // ══════════════════════════════════════════
+
+    private static async Task<string?> ReadLineFromSslAsync(SslStream stream, CancellationToken cancellationToken)
+    {
+        var buffer = new List<byte>();
+        var singleByte = new byte[1];
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var read = await stream.ReadAsync(singleByte, cancellationToken);
+            if (read == 0) break;
+
+            if (singleByte[0] == '\n')
+            {
+                if (buffer.Count > 0 && buffer[^1] == '\r')
+                    buffer.RemoveAt(buffer.Count - 1);
+                break;
+            }
+
+            buffer.Add(singleByte[0]);
+        }
+
+        return buffer.Count > 0 ? Encoding.UTF8.GetString(buffer.ToArray()) : null;
+    }
+
+    private static async Task<Dictionary<string, string>> ReadHeadersFromSslAsync(SslStream stream, CancellationToken cancellationToken)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var line = await ReadLineFromSslAsync(stream, cancellationToken);
+            if (string.IsNullOrEmpty(line)) break;
+
+            var colonIndex = line.IndexOf(':');
+            if (colonIndex > 0)
+            {
+                var key = line[..colonIndex].Trim();
+                var value = line[(colonIndex + 1)..].Trim();
+                headers[key] = value;
+            }
+        }
+
+        return headers;
+    }
+
+    /// <summary>
+    /// 转发 chunked 编码的响应体
+    /// </summary>
+    private static async Task CopyChunkedAsync(Stream source, Stream destination, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            // 读取 chunk 大小行
+            var sizeLine = await ReadLineFromStreamAsync(source, cancellationToken);
+            if (string.IsNullOrEmpty(sizeLine)) break;
+
+            // 写入 chunk 大小到客户端
+            var sizeBytes = Encoding.UTF8.GetBytes(sizeLine + "\r\n");
+            await destination.WriteAsync(sizeBytes, cancellationToken);
+
+            // 解析 chunk 大小（忽略扩展）
+            var semiIdx = sizeLine.IndexOf(';');
+            var sizeStr = semiIdx >= 0 ? sizeLine[..semiIdx].Trim() : sizeLine.Trim();
+            if (!int.TryParse(sizeStr, System.Globalization.NumberStyles.HexNumber, null, out var chunkSize))
+                break;
+
+            if (chunkSize == 0)
+            {
+                // 终止 chunk：写入空行
+                await destination.WriteAsync("\r\n"u8.ToArray(), cancellationToken);
+                break;
+            }
+
+            // 转发 chunk 数据
+            await CopyBytesAsync(source, destination, chunkSize, cancellationToken);
+
+            // 读取 chunk 后的 \r\n
+            var trailingCrLf = new byte[2];
+            await ReadExactAsync(source, trailingCrLf, cancellationToken);
+            await destination.WriteAsync(trailingCrLf, cancellationToken);
+        }
+
+        await destination.FlushAsync(cancellationToken);
+    }
+
+    private static async Task<string?> ReadLineFromStreamAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        var buffer = new List<byte>();
+        var singleByte = new byte[1];
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var read = await stream.ReadAsync(singleByte, cancellationToken);
+            if (read == 0) break;
+
+            if (singleByte[0] == '\n')
+            {
+                if (buffer.Count > 0 && buffer[^1] == '\r')
+                    buffer.RemoveAt(buffer.Count - 1);
+                break;
+            }
+
+            buffer.Add(singleByte[0]);
+        }
+
+        return buffer.Count > 0 ? Encoding.UTF8.GetString(buffer.ToArray()) : null;
+    }
+
+    private static async Task ReadExactAsync(Stream stream, byte[] buffer, CancellationToken cancellationToken)
+    {
+        var offset = 0;
+        while (offset < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(offset), cancellationToken);
+            if (read == 0) break;
+            offset += read;
+        }
     }
 }

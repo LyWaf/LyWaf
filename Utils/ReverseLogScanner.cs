@@ -27,7 +27,8 @@ public sealed class ReverseLogScanner : IDisposable
     /// </summary>
     public async Task<(List<LogEntry> entries, int total)> QueryAsync(
         int offset = 0, int limit = 20, string? search = null,
-        DateTime? startTime = null, DateTime? endTime = null)
+        DateTime? startTime = null, DateTime? endTime = null,
+        string? host = null)
     {
         if (_fileLength == 0)
             return ([], 0);
@@ -37,10 +38,11 @@ public sealed class ReverseLogScanner : IDisposable
             return ([], 0);
 
         var hasSearch = !string.IsNullOrEmpty(search);
+        var hasHost = !string.IsNullOrEmpty(host);
         var hasTimeFilter = startTime.HasValue || endTime.HasValue;
 
         // 无过滤：直接在索引上分页，最快路径
-        if (!hasSearch && !hasTimeFilter)
+        if (!hasSearch && !hasHost && !hasTimeFilter)
         {
             var total = index.Count;
             var entries = await ReadPageReversedAsync(index, 0, index.Count - 1, offset, limit);
@@ -56,16 +58,16 @@ public sealed class ReverseLogScanner : IDisposable
                 return ([], 0);
         }
 
-        // 无搜索，仅时间过滤
-        if (!hasSearch)
+        // 无搜索且无 host 过滤，仅时间过滤
+        if (!hasSearch && !hasHost)
         {
             var total = rangeEnd - rangeStart + 1;
             var entries = await ReadPageReversedAsync(index, rangeStart, rangeEnd, offset, limit);
             return (entries, total);
         }
 
-        // 有搜索过滤：需逐条检查内容
-        return await SearchAndPageAsync(index, rangeStart, rangeEnd, offset, limit, search!);
+        // 有搜索/host 过滤：需逐条检查内容
+        return await SearchAndPageAsync(index, rangeStart, rangeEnd, offset, limit, search, host);
     }
 
     /// <summary>
@@ -264,18 +266,24 @@ public sealed class ReverseLogScanner : IDisposable
     private async Task<(List<LogEntry> entries, int total)> SearchAndPageAsync(
         List<(long ByteOffset, string Timestamp)> index,
         int rangeStart, int rangeEnd,
-        int offset, int limit, string search)
+        int offset, int limit, string? search, string? host)
     {
         var entries = new List<LogEntry>();
         var matchCount = 0;
         var collected = 0;
+        var hasSearch = !string.IsNullOrEmpty(search);
+        var hasHost = !string.IsNullOrEmpty(host);
 
         // 倒序扫描
         for (int i = rangeEnd; i >= rangeStart; i--)
         {
             var block = await ReadEntryBlockAsync(index, i);
 
-            if (!block.Contains(search, StringComparison.OrdinalIgnoreCase))
+            if (hasSearch && !block.Contains(search!, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            // Host 过滤：匹配 "Host: xxx" 行
+            if (hasHost && !MatchHost(block, host!))
                 continue;
 
             matchCount++;
@@ -289,6 +297,23 @@ public sealed class ReverseLogScanner : IDisposable
         }
 
         return (entries, matchCount);
+    }
+
+    /// <summary>
+    /// 检查日志块中的 Host 行是否包含指定域名（支持模糊匹配）
+    /// </summary>
+    private static bool MatchHost(string block, string host)
+    {
+        // 在 block 中查找 "Host:" 行
+        var idx = block.IndexOf("Host:", StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return false;
+
+        var lineEnd = block.IndexOf('\n', idx);
+        var hostValue = lineEnd > 0
+            ? block[(idx + 5)..lineEnd].Trim()
+            : block[(idx + 5)..].Trim();
+
+        return hostValue.Contains(host, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -372,6 +397,36 @@ public sealed class ReverseLogScanner : IDisposable
             await dest.WriteAsync(buffer.AsMemory(0, read));
             remaining -= read;
         }
+    }
+
+    /// <summary>
+    /// 提取日志文件中所有不重复的 Host 值
+    /// </summary>
+    public async Task<List<string>> GetUniqueHostsAsync()
+    {
+        if (_fileLength == 0) return [];
+
+        var index = await BuildIndexAsync();
+        if (index.Count == 0) return [];
+
+        var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var hostPrefix = "Host:"u8.ToArray();
+
+        for (int i = 0; i < index.Count; i++)
+        {
+            var block = await ReadEntryBlockAsync(index, i);
+            var idx = block.IndexOf("Host:", StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) continue;
+
+            var lineEnd = block.IndexOf('\n', idx);
+            var hostValue = (lineEnd > 0 ? block[(idx + 5)..lineEnd] : block[(idx + 5)..]).Trim();
+            if (!string.IsNullOrEmpty(hostValue))
+                hosts.Add(hostValue);
+        }
+
+        var result = hosts.ToList();
+        result.Sort(StringComparer.OrdinalIgnoreCase);
+        return result;
     }
 
     public void Dispose()

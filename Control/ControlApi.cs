@@ -16,7 +16,10 @@ using LyWaf.Services.Acme;
 using LyWaf.Shared;
 using System.Security.Cryptography.X509Certificates;
 using LyWaf.Utils;
+using LyWaf.Services.Param;
+using LyWaf.Services.ProxyServer;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Options;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -213,7 +216,8 @@ public static class ControlApi
             // 跳过免认证端点
             if (path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/time", StringComparison.OrdinalIgnoreCase) ||
-                path.Equals("/api/auth/check", StringComparison.OrdinalIgnoreCase))
+                path.Equals("/api/auth/check", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals("/api/pcap/ca.crl", StringComparison.OrdinalIgnoreCase))
             {
                 await next();
                 return;
@@ -6205,10 +6209,12 @@ public static class ControlApi
 
         app.MapGet("/api/param", (HttpContext ctx) =>
         {
+            var opts = ctx.RequestServices.GetRequiredService<IOptionsMonitor<GlobalOptions>>().CurrentValue;
             return Results.Json(new
             {
                 success = true,
                 isFirstServer = SharedData.IsFirstServer,
+                localAddress = opts.LocalAddress ?? "",
             });
         }).RequireHost($"*:{controlPort}");
 
@@ -6220,15 +6226,23 @@ public static class ControlApi
                 if (body == null)
                     return Results.Json(new { success = false, message = "无效的请求体" }, statusCode: 400);
 
+                var opts = ctx.RequestServices.GetRequiredService<IOptionsMonitor<GlobalOptions>>().CurrentValue;
+
                 if (body.IsFirstServer.HasValue)
                 {
                     SharedData.IsFirstServer = body.IsFirstServer.Value;
+                }
+
+                if (body.LocalAddress != null)
+                {
+                    opts.LocalAddress = string.IsNullOrWhiteSpace(body.LocalAddress) ? null : body.LocalAddress.Trim();
                 }
 
                 return Results.Json(new
                 {
                     success = true,
                     isFirstServer = SharedData.IsFirstServer,
+                    localAddress = opts.LocalAddress ?? "",
                     message = "参数配置已更新"
                 });
             }
@@ -6249,6 +6263,169 @@ public static class ControlApi
             list.Sort((a, b) => string.Compare(
                 ((dynamic)a).key, ((dynamic)b).key, StringComparison.OrdinalIgnoreCase));
             return Results.Json(new { success = true, items = list, total = list.Count });
+        }).RequireHost($"*:{controlPort}");
+
+        // =============== 抓包管理 API ===============
+
+        // 设置 CRL 分发点 URL（嵌入到 Pcap 签发的证书中，供客户端验证吊销状态）
+        // CRL 由代理端口直接提供（ProxyHandler.ServeCrlAsync），使用本机网络 IP
+        {
+            var pcapProvider = app.Services.GetRequiredService<PcapCertProvider>();
+            var proxyOptions = app.Services.GetRequiredService<IOptionsMonitor<ProxyServerOptions>>().CurrentValue;
+
+            // 找到第一个启用了 Pcap 的代理端口
+            var pcapPort = proxyOptions.Ports
+                .Where(p => p.Value.EnablePcap && (p.Value.EnableHttp || p.Value.EnableHttps))
+                .Select(p => {
+                    var lastColon = p.Key.LastIndexOf(':');
+                    return lastColon > 0 && int.TryParse(p.Key[(lastColon + 1)..], out var port) ? port
+                         : int.TryParse(p.Key, out var port2) ? port2 : 0;
+                })
+                .FirstOrDefault(p => p > 0);
+
+            // 没有 Pcap 端口就用 control 端口作为回退
+            if (pcapPort == 0) pcapPort = controlPort;
+
+            var globalOpts = app.Services.GetRequiredService<IOptionsMonitor<GlobalOptions>>().CurrentValue;
+            var localIp = GetLocalNetworkIp(globalOpts);
+            pcapProvider.CrlUrl = $"http://{localIp}:{pcapPort}{ProxyHandler.CrlPath}";
+        }
+
+        // CRL 下载（控制端口回退，不需要认证）
+        app.MapGet("/api/pcap/ca.crl", (HttpContext ctx) =>
+        {
+            var pcapCertProvider = ctx.RequestServices.GetRequiredService<PcapCertProvider>();
+            var crlPath = pcapCertProvider.CaCrlPath;
+            if (!File.Exists(crlPath))
+                return Results.NotFound();
+
+            return Results.File(crlPath, "application/pkix-crl", "proxy-ca.crl");
+        }).RequireHost($"*:{controlPort}");
+
+        // 获取抓包状态
+        app.MapGet("/api/pcap/status", (HttpContext ctx) =>
+        {
+            var proxyOptions = ctx.RequestServices.GetRequiredService<IOptionsMonitor<ProxyServerOptions>>().CurrentValue;
+            var pcapCertProvider = ctx.RequestServices.GetRequiredService<PcapCertProvider>();
+
+            var ports = proxyOptions.Ports.Select(p => new
+            {
+                port = p.Key,
+                enablePcap = p.Value.EnablePcap,
+                enableHttp = p.Value.EnableHttp,
+                enableHttps = p.Value.EnableHttps,
+                enableSocks5 = p.Value.EnableSocks5,
+            }).ToList();
+
+            return Results.Json(new
+            {
+                success = true,
+                proxyEnabled = proxyOptions.Enabled,
+                caCertExists = File.Exists(pcapCertProvider.CaCertPath),
+                ports,
+            });
+        }).RequireHost($"*:{controlPort}");
+
+        // 切换抓包开关
+        app.MapPost("/api/pcap/toggle", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var body = await ctx.Request.ReadFromJsonAsync<PcapToggleRequest>();
+                if (body == null || string.IsNullOrEmpty(body.PortKey))
+                    return Results.Json(new { success = false, message = "无效的请求" }, statusCode: 400);
+
+                var proxyOptionsMonitor = ctx.RequestServices.GetRequiredService<IOptionsMonitor<ProxyServerOptions>>();
+                var options = proxyOptionsMonitor.CurrentValue;
+                if (!options.Ports.TryGetValue(body.PortKey, out var portConfig))
+                    return Results.Json(new { success = false, message = $"端口 {body.PortKey} 不存在" }, statusCode: 404);
+
+                portConfig.EnablePcap = body.Enabled;
+
+                // 如果启用 Pcap 且 CA 证书未初始化，初始化证书
+                if (body.Enabled)
+                {
+                    var pcapCertProvider = ctx.RequestServices.GetRequiredService<PcapCertProvider>();
+                    pcapCertProvider.Initialize();
+                }
+
+                var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
+                audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown",
+                    $"切换抓包: 端口 {body.PortKey} → {(body.Enabled ? "启用" : "禁用")}",
+                    ctx.Connection.RemoteIpAddress?.ToString() ?? "");
+
+                return Results.Json(new { success = true, enabled = body.Enabled, message = body.Enabled ? "抓包已启用" : "抓包已禁用" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"操作失败: {ex.Message}" }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        // 下载 CA 证书
+        app.MapGet("/api/pcap/ca-cert", (HttpContext ctx) =>
+        {
+            var pcapCertProvider = ctx.RequestServices.GetRequiredService<PcapCertProvider>();
+            var certPath = pcapCertProvider.CaCertPath;
+            if (!File.Exists(certPath))
+                return Results.Json(new { success = false, message = "CA 证书不存在，请先启用抓包功能" }, statusCode: 404);
+
+            return Results.File(certPath, "application/x-x509-ca-cert", "proxy-ca.crt");
+        }).RequireHost($"*:{controlPort}");
+
+        // 列出抓包日志文件
+        app.MapGet("/api/pcap/logs/files", () =>
+        {
+            var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
+            var files = LogUtil.ListLogFiles(dir, "pcap_*.log");
+            return Results.Json(new { success = true, files });
+        }).RequireHost($"*:{controlPort}");
+
+        // 获取日志文件中所有不重复的 Host
+        app.MapGet("/api/pcap/logs/hosts", async (HttpContext ctx) =>
+        {
+            var fileName = ctx.Request.Query["file"].FirstOrDefault() ?? "";
+            if (string.IsNullOrEmpty(fileName) || fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\'))
+                return Results.Json(new { success = false, hosts = Array.Empty<string>() });
+
+            var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
+            var filePath = Path.Combine(dir, fileName);
+            if (!File.Exists(filePath))
+                return Results.Json(new { success = false, hosts = Array.Empty<string>() });
+
+            var hosts = await LogUtil.GetUniqueHostsAsync(filePath);
+            return Results.Json(new { success = true, hosts });
+        }).RequireHost($"*:{controlPort}");
+
+        // 读取抓包日志条目
+        app.MapGet("/api/pcap/logs/entries", async (HttpContext ctx) =>
+        {
+            var fileName = ctx.Request.Query["file"].FirstOrDefault() ?? "";
+            if (string.IsNullOrEmpty(fileName) || fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\'))
+                return Results.Json(new { success = false, message = "无效的文件名" });
+
+            var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
+            var filePath = Path.Combine(dir, fileName);
+            if (!File.Exists(filePath))
+                return Results.Json(new { success = false, message = $"文件不存在: {fileName}" });
+
+            _ = int.TryParse(ctx.Request.Query["offset"].FirstOrDefault() ?? "0", out var offset);
+            _ = int.TryParse(ctx.Request.Query["limit"].FirstOrDefault() ?? "20", out var limit);
+            var search = ctx.Request.Query["search"].FirstOrDefault();
+            var host = ctx.Request.Query["host"].FirstOrDefault();
+            DateTime? startTime = DateTime.TryParse(ctx.Request.Query["startTime"].FirstOrDefault(), out var st3) ? st3 : null;
+            DateTime? endTime = DateTime.TryParse(ctx.Request.Query["endTime"].FirstOrDefault(), out var et3) ? et3 : null;
+
+            var (entries, total) = await LogUtil.ParseLogFileAsync(filePath, offset, Math.Clamp(limit, 1, 100), search, startTime, endTime, host);
+            return Results.Json(new
+            {
+                success = true,
+                entries,
+                total,
+                offset,
+                limit,
+                fileName,
+            });
         }).RequireHost($"*:{controlPort}");
 
         return app;
@@ -7277,6 +7454,120 @@ public static class ControlApi
         _ => source.ToString()
     };
 
+    /// <summary>
+    /// 获取本机真实局域网 IP 地址
+    /// 排除虚拟网卡（VMware、VirtualBox、Hyper-V、Docker 等）
+    /// 优先选择有默认网关的物理/Wi-Fi 网卡上的 RFC 1918 私有地址
+    /// </summary>
+    private static string GetLocalNetworkIp(GlobalOptions? globalOptions = null)
+    {
+        // 优先使用用户配置的本地地址
+        if (!string.IsNullOrWhiteSpace(globalOptions?.LocalAddress))
+            return globalOptions.LocalAddress.Trim();
+
+        try
+        {
+            var candidates = new List<(System.Net.IPAddress addr, int priority, bool hasGateway)>();
+            var networkInterfaces = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces();
+
+            foreach (var ni in networkInterfaces)
+            {
+                if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                if (ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+
+                // 排除虚拟网卡
+                if (IsVirtualAdapter(ni)) continue;
+
+                // 只保留以太网和 Wi-Fi
+                if (ni.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Ethernet
+                    && ni.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Wireless80211
+                    && ni.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.GigabitEthernet)
+                    continue;
+
+                var ipProps = ni.GetIPProperties();
+
+                // 有默认网关 = 真正联网的接口
+                var hasGateway = ipProps.GatewayAddresses.Any(g =>
+                    g.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+                    && !g.Address.Equals(System.Net.IPAddress.Any));
+
+                foreach (var unicast in ipProps.UnicastAddresses)
+                {
+                    var addr = unicast.Address;
+                    if (addr.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) continue;
+
+                    var bytes = addr.GetAddressBytes();
+                    var priority = GetPrivateAddressPriority(bytes);
+                    if (priority >= 0)
+                        candidates.Add((addr, priority, hasGateway));
+                }
+            }
+
+            if (candidates.Count > 0)
+            {
+                // 有网关的优先，然后按私有地址优先级排序
+                candidates.Sort((a, b) =>
+                {
+                    var gwCmp = b.hasGateway.CompareTo(a.hasGateway); // true 排前面
+                    return gwCmp != 0 ? gwCmp : a.priority.CompareTo(b.priority);
+                });
+                return candidates[0].addr.ToString();
+            }
+
+            // 没有匹配的私有地址，用 UDP socket 探测出口 IP
+            using var socket = new System.Net.Sockets.Socket(
+                System.Net.Sockets.AddressFamily.InterNetwork,
+                System.Net.Sockets.SocketType.Dgram,
+                System.Net.Sockets.ProtocolType.Udp);
+            socket.Connect("8.8.8.8", 80);
+            if (socket.LocalEndPoint is System.Net.IPEndPoint endPoint)
+                return endPoint.Address.ToString();
+        }
+        catch { }
+
+        return "127.0.0.1";
+    }
+
+    /// <summary>
+    /// 判断网卡是否为虚拟网卡（VMware、VirtualBox、Hyper-V、Docker、WSL 等）
+    /// 通过 Description 和 Name 中的关键字匹配
+    /// </summary>
+    private static bool IsVirtualAdapter(System.Net.NetworkInformation.NetworkInterface ni)
+    {
+        var desc = ni.Description.ToLowerInvariant();
+        var name = ni.Name.ToLowerInvariant();
+
+        string[] virtualKeywords = [
+            "vmware", "vmnet", "virtualbox", "vbox",
+            "hyper-v", "virtual",
+            "docker", "veth", "br-",
+            "wsl", "vpn", "tap-", "tun",
+            "teredo", "isatap", "6to4",
+            "bluetooth", "vnic", "virbr"
+        ];
+
+        foreach (var kw in virtualKeywords)
+        {
+            if (desc.Contains(kw) || name.Contains(kw))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 判断 IPv4 是否为 RFC 1918 私有地址，并返回优先级
+    /// 192.168.x.x = 0（最高）, 10.x.x.x = 1, 172.16-31.x.x = 2
+    /// 非私有地址返回 -1
+    /// </summary>
+    private static int GetPrivateAddressPriority(byte[] bytes)
+    {
+        if (bytes[0] == 192 && bytes[1] == 168) return 0;
+        if (bytes[0] == 10) return 1;
+        if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) return 2;
+        return -1;
+    }
+
 }
 
 // =============== 请求模型 ===============
@@ -7486,6 +7777,9 @@ public class ParamUpdateRequest
 {
     [System.Text.Json.Serialization.JsonPropertyName("isFirstServer")]
     public bool? IsFirstServer { get; set; }
+
+    [System.Text.Json.Serialization.JsonPropertyName("localAddress")]
+    public string? LocalAddress { get; set; }
 }
 
 // =============== IP 请求日志请求模型 ===============
@@ -7674,4 +7968,10 @@ public class AcmeRenewRequest
 public class PathRequest
 {
     public string Path { get; set; } = "";
+}
+
+public class PcapToggleRequest
+{
+    public string PortKey { get; set; } = "";
+    public bool Enabled { get; set; }
 }

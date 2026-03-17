@@ -111,6 +111,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '速度限制', icon: '🚀' }
   },
   {
+    path: '/packet-capture',
+    name: 'PacketCapture',
+    component: () => import('@/views/PacketCapture.vue'),
+    meta: { title: '抓包管理', icon: '📦' }
+  },
+  {
     path: '/general-settings',
     name: 'GeneralSettings',
     component: () => import('@/views/GeneralSettings.vue'),

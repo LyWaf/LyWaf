@@ -16,11 +16,13 @@ public class HttpProxyService : BackgroundService
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private ProxyServerOptions _options;
+    private readonly PcapCertProvider _pcapCertProvider;
     private readonly List<(TcpListener listener, string key, IPAddress host, int port)> _listeners = [];
 
-    public HttpProxyService(IOptionsMonitor<ProxyServerOptions> optionsMonitor)
+    public HttpProxyService(IOptionsMonitor<ProxyServerOptions> optionsMonitor, PcapCertProvider pcapCertProvider)
     {
         _options = optionsMonitor.CurrentValue;
+        _pcapCertProvider = pcapCertProvider;
         optionsMonitor.OnChange(newConfig =>
         {
             _options = newConfig;
@@ -33,6 +35,12 @@ public class HttpProxyService : BackgroundService
         {
             _logger.Info("代理服务未启用");
             return;
+        }
+
+        // 如果有任意端口启用了 Pcap，初始化 CA 证书
+        if (_options.Ports.Values.Any(p => p.EnablePcap))
+        {
+            _pcapCertProvider.Initialize();
         }
 
         // 查找启用了任意代理类型的端口配置
@@ -98,7 +106,7 @@ public class HttpProxyService : BackgroundService
     {
         var protocols = new List<string>();
         if (config.EnableHttp) protocols.Add("HTTP");
-        if (config.EnableHttps) protocols.Add("HTTPS");
+        if (config.EnableHttps) protocols.Add(config.EnablePcap ? "HTTPS(Pcap)" : "HTTPS");
         if (config.EnableSocks5) protocols.Add("SOCKS5");
         return string.Join(", ", protocols);
     }
@@ -159,7 +167,7 @@ public class HttpProxyService : BackgroundService
             try
             {
                 var portConfig = GetPortConfig(_options, host.ToString(), port, configKey);
-                var handler = new ProxyHandler(_options, portConfig);
+                var handler = new ProxyHandler(_options, portConfig, _pcapCertProvider);
                 await handler.HandleAsync(client.Client, stoppingToken);
             }
             catch (OperationCanceledException)

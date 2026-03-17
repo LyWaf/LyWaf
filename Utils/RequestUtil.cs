@@ -8,7 +8,6 @@ namespace LyWaf.Utils
 
     public static class RequestUtil
     {
-
         public static string GetClientIp(HttpRequest request)
         {
             // 首台服务器模式：直接取连接 IP，忽略可被伪造的代理头

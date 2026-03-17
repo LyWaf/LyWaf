@@ -81,4 +81,10 @@ public class ProxyPortConfig
     /// 是否需要认证
     /// </summary>
     public bool RequireAuth { get; set; } = false;
+
+    /// <summary>
+    /// 是否启用 Pcap 抓包（HTTPS 解密）
+    /// 需要客户端安装 CA 证书
+    /// </summary>
+    public bool EnablePcap { get; set; } = false;
 }

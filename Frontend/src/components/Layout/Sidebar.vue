@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { pcapApi } from '@/api'
 
 interface MenuItem {
   path?: string
@@ -8,10 +9,22 @@ interface MenuItem {
   icon?: string
   children?: MenuItem[]
   action?: string
+  condition?: () => boolean
 }
 
 const route = useRoute()
 const router = useRouter()
+
+const proxyEnabled = ref(false)
+
+onMounted(async () => {
+  try {
+    const res = await pcapApi.getStatus() as any
+    if (res?.success) {
+      proxyEnabled.value = res.proxyEnabled
+    }
+  } catch { /* 静默处理 */ }
+})
 
 const menuItems: MenuItem[] = [
   { path: '/', name: '统计报表', icon: '📊' },
@@ -21,6 +34,7 @@ const menuItems: MenuItem[] = [
   { path: '/waf-rules', name: 'WAF 规则', icon: '🛡️' },
   { path: '/speed-limit', name: '速度限制', icon: '🚀' },
   { path: '/intercept-events', name: '拦截事件', icon: '📋' },
+  { path: '/packet-capture', name: '抓包管理', icon: '📦', condition: () => proxyEnabled.value },
   { path: '/api-timing', name: 'API 耗时', icon: '⏱️' },
   {
     name: '配置管理', icon: '📄', children: [
@@ -98,6 +112,7 @@ const scrollToSection = (sectionId: string) => {
     <!-- 导航菜单 -->
     <nav class="flex-1 py-3 overflow-y-auto">
       <template v-for="item in menuItems" :key="item.name">
+        <template v-if="!item.condition || item.condition()">
         <!-- 带子菜单的项 -->
         <div v-if="item.children" class="mb-1">
           <div 
@@ -147,6 +162,7 @@ const scrollToSection = (sectionId: string) => {
           <span class="w-5 text-center">{{ item.icon }}</span>
           <span class="flex-1">{{ item.name }}</span>
         </div>
+        </template>
       </template>
     </nav>
     

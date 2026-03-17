@@ -1077,7 +1077,7 @@ public class Program
         builder.Services.Configure<ProxyServerOptions>(builder.Configuration.GetSection("ProxyServer"));
         builder.Services.Configure<StreamServerOptions>(builder.Configuration.GetSection("StreamServer"));
         builder.Services.Configure<ABTestOptions>(builder.Configuration.GetSection("ABTest"));
-        builder.Services.Configure<ParamOptions>(builder.Configuration.GetSection("Param"));
+        builder.Services.Configure<GlobalOptions>(builder.Configuration.GetSection("Global"));
         builder.Services.Configure<LyWaf.Services.LyLog.LyLogOptions>(builder.Configuration.GetSection("LyLog"));
         builder.Services.Configure<LyWaf.Services.ErrorTemplate.ErrorTemplateOptions>(builder.Configuration.GetSection("ErrorTemplate"));
 
@@ -1111,7 +1111,8 @@ public class Program
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LyWaf.Services.DuckDb.StatisticFlushService>());
         builder.Services.AddHostedService<LyWaf.Services.DuckDb.DataRetentionService>();  // 数据保留策略
         builder.Services.AddSingleton<LyWaf.Services.DuckDb.RuntimeLogService>();  // 运行日志
-        builder.Services.AddHostedService<HttpProxyService>();  // 统一代理服务（HTTP/HTTPS/SOCKS5）
+        builder.Services.AddSingleton<PcapCertProvider>();       // Pcap 抓包证书提供器
+        builder.Services.AddHostedService<HttpProxyService>();  // 统一代理服务（HTTP/HTTPS/SOCKS5/Pcap）
         builder.Services.AddHostedService<StreamService>();     // TCP 流代理服务
         builder.Services.AddSingleton<IProbingRequestFactory, LyxProbingRequestFactory>();
         builder.Services.AddSingleton<IActiveHealthCheckPolicy, LyxActiveHealthPolicy>();
@@ -1229,12 +1230,12 @@ public class Program
         }
         var app = builder.Build();
 
-        // 同步 ParamOptions 到 SharedData
-        var paramOptions = app.Services.GetService<Microsoft.Extensions.Options.IOptionsMonitor<ParamOptions>>();
-        if (paramOptions != null)
+        // 同步 GlobalOptions 到 SharedData
+        var globalOptions = app.Services.GetService<Microsoft.Extensions.Options.IOptionsMonitor<GlobalOptions>>();
+        if (globalOptions != null)
         {
-            SharedData.IsFirstServer = paramOptions.CurrentValue.IsFirstServer;
-            paramOptions.OnChange((opts, _) => SharedData.IsFirstServer = opts.IsFirstServer);
+            SharedData.IsFirstServer = globalOptions.CurrentValue.IsFirstServer;
+            globalOptions.OnChange((opts, _) => SharedData.IsFirstServer = opts.IsFirstServer);
         }
 
         // 初始化 ServiceLocator，确保自定义 DNS 等服务可以通过 ServiceLocator 获取

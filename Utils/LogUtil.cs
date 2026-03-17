@@ -89,13 +89,25 @@ public static partial class LogUtil
     /// </summary>
     public static async Task<(List<LogEntry> entries, int total)> ParseLogFileAsync(
         string filePath, int offset = 0, int limit = 20, string? search = null,
-        DateTime? startTime = null, DateTime? endTime = null)
+        DateTime? startTime = null, DateTime? endTime = null, string? host = null)
     {
         if (!File.Exists(filePath))
             return ([], 0);
 
         using var scanner = new ReverseLogScanner(filePath);
-        return await scanner.QueryAsync(offset, limit, search, startTime, endTime);
+        return await scanner.QueryAsync(offset, limit, search, startTime, endTime, host);
+    }
+
+    /// <summary>
+    /// 提取日志文件中所有不重复的 Host 值（已排序）
+    /// </summary>
+    public static async Task<List<string>> GetUniqueHostsAsync(string filePath)
+    {
+        if (!File.Exists(filePath))
+            return [];
+
+        using var scanner = new ReverseLogScanner(filePath);
+        return await scanner.GetUniqueHostsAsync();
     }
 
     /// <summary>

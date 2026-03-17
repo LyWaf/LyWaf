@@ -2006,7 +2006,8 @@ public static class LyToAppSettingsConverter
         switch (lowerKey)
         {
             case "email":
-                // ACME 邮箱
+                // 全局邮箱 + 同步到 ACME
+                EnsureDict(result, "Global")["Email"] = value.ToString()!;
                 EnsureDict(result, "Acme")["Email"] = value.ToString()!;
                 break;
 
@@ -2040,8 +2041,23 @@ public static class LyToAppSettingsConverter
                 break;
 
             case "debug":
-                // 调试模式
+                // 调试模式：设置日志级别 + 全局标志
+                EnsureDict(result, "Global")["Debug"] = true;
                 EnsureDict(result, "Logging")["Level"] = "Debug";
+                break;
+
+            case "isfirstserver":
+            case "is_first_server":
+            case "firstserver":
+            case "first_server":
+                // 是否为首台服务器（直接面对客户端）
+                EnsureDict(result, "Global")["IsFirstServer"] = value;
+                break;
+
+            case "localaddress":
+            case "local_address":
+                // 本机地址
+                EnsureDict(result, "Global")["LocalAddress"] = value.ToString()!;
                 break;
 
             case "allowedhosts":
@@ -2122,14 +2138,6 @@ public static class LyToAppSettingsConverter
             case "stat":
                 // 统计配置（含 CcRules 等子块）
                 ProcessStatisticConfig(value, result);
-                break;
-
-            case "param":
-            case "params":
-            case "paramoptions":
-            case "param_options":
-                // 参数配置
-                ProcessParamConfig(value, result);
                 break;
 
             default:
@@ -2992,6 +3000,11 @@ public static class LyToAppSettingsConverter
                     case "auth":
                         config["RequireAuth"] = kv.Value is bool b4 ? b4 : kv.Value?.ToString()?.ToLower() == "true";
                         break;
+                    case "enablepcap":
+                    case "enable_pcap":
+                    case "pcap":
+                        config["EnablePcap"] = kv.Value is bool b5 ? b5 : kv.Value?.ToString()?.ToLower() == "true";
+                        break;
                 }
             }
             
@@ -3020,6 +3033,7 @@ public static class LyToAppSettingsConverter
             config["EnableHttp"] = types.Contains("http");
             config["EnableHttps"] = types.Contains("https");
             config["EnableSocks5"] = types.Contains("socks5") || types.Contains("socks");
+            config["EnablePcap"] = types.Contains("pcap") || types.Contains("mitm");
         }
         else
         {
@@ -3475,36 +3489,6 @@ public static class LyToAppSettingsConverter
         }
 
         result["Protect"] = protectDict;
-    }
-
-    /// <summary>
-    /// 处理 Param 块（参数配置）
-    /// <para>
-    /// config.ly 格式：
-    /// <code>
-    /// Param {
-    ///     IsFirstServer = true
-    /// }
-    /// </code>
-    /// </para>
-    /// </summary>
-    private static void ProcessParamConfig(object value, Dictionary<string, object> result)
-    {
-        if (value is not Dictionary<string, object> paramConfig)
-            return;
-
-        var paramDict = new Dictionary<string, object>();
-        foreach (var kv in paramConfig)
-        {
-            var normalizedKey = kv.Key.ToLower() switch
-            {
-                "isfirstserver" or "is_first_server" or "firstserver" or "first_server" => "IsFirstServer",
-                _ => char.ToUpper(kv.Key[0]) + kv.Key[1..],
-            };
-            paramDict[normalizedKey] = kv.Value;
-        }
-
-        result["Param"] = paramDict;
     }
 
     /// <summary>

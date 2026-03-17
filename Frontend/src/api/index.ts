@@ -1159,6 +1159,65 @@ export const interceptLogApi = {
   },
 }
 
+// ==================== 抓包管理 API ====================
+
+export interface PcapPortStatus {
+  port: string
+  enablePcap: boolean
+  enableHttp: boolean
+  enableHttps: boolean
+  enableSocks5: boolean
+}
+
+export interface PcapStatus {
+  success: boolean
+  proxyEnabled: boolean
+  caCertExists: boolean
+  ports: PcapPortStatus[]
+}
+
+export const pcapApi = {
+  getStatus: () =>
+    api.get<PcapStatus>('/pcap/status'),
+
+  toggle: (portKey: string, enabled: boolean) =>
+    api.post<{ success: boolean; enabled: boolean; message: string }>('/pcap/toggle', { portKey, enabled }),
+
+  downloadCaCert: async () => {
+    const token = localStorage.getItem('lywaf_token')
+    const res = await fetch('/api/pcap/ca-cert', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) throw new Error('下载失败')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'proxy-ca.crt'
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+
+  listLogFiles: () =>
+    api.get<{ success: boolean; files: InterceptLogFile[] }>('/pcap/logs/files'),
+
+  getLogEntries: (params: { file: string; offset?: number; limit?: number; search?: string; host?: string; clientIp?: string; startTime?: string; endTime?: string }) => {
+    const query = new URLSearchParams()
+    query.set('file', params.file)
+    if (params.offset !== undefined) query.set('offset', params.offset.toString())
+    if (params.limit !== undefined) query.set('limit', params.limit.toString())
+    if (params.search) query.set('search', params.search)
+    if (params.host) query.set('host', params.host)
+    if (params.clientIp) query.set('clientIp', params.clientIp)
+    if (params.startTime) query.set('startTime', params.startTime)
+    if (params.endTime) query.set('endTime', params.endTime)
+    return api.get<{ success: boolean; entries: InterceptLogEntry[]; total: number; offset: number; limit: number; fileName: string }>(`/pcap/logs/entries?${query.toString()}`)
+  },
+
+  deleteLogFile: (file: string) =>
+    api.post<{ success: boolean; message?: string }>('/pcap/logs/delete', { file }),
+}
+
 // ==================== 访问控制（黑白名单）API ====================
 
 export interface AccessControlData {
