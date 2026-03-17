@@ -28,7 +28,7 @@ public sealed class ReverseLogScanner : IDisposable
     public async Task<(List<LogEntry> entries, int total)> QueryAsync(
         int offset = 0, int limit = 20, string? search = null,
         DateTime? startTime = null, DateTime? endTime = null,
-        string? host = null)
+        string? host = null, string? clientIp = null)
     {
         if (_fileLength == 0)
             return ([], 0);
@@ -39,10 +39,12 @@ public sealed class ReverseLogScanner : IDisposable
 
         var hasSearch = !string.IsNullOrEmpty(search);
         var hasHost = !string.IsNullOrEmpty(host);
+        var hasClientIp = !string.IsNullOrEmpty(clientIp);
+        var hasContentFilter = hasSearch || hasHost || hasClientIp;
         var hasTimeFilter = startTime.HasValue || endTime.HasValue;
 
         // 无过滤：直接在索引上分页，最快路径
-        if (!hasSearch && !hasHost && !hasTimeFilter)
+        if (!hasContentFilter && !hasTimeFilter)
         {
             var total = index.Count;
             var entries = await ReadPageReversedAsync(index, 0, index.Count - 1, offset, limit);
@@ -58,16 +60,16 @@ public sealed class ReverseLogScanner : IDisposable
                 return ([], 0);
         }
 
-        // 无搜索且无 host 过滤，仅时间过滤
-        if (!hasSearch && !hasHost)
+        // 无内容过滤，仅时间过滤
+        if (!hasContentFilter)
         {
             var total = rangeEnd - rangeStart + 1;
             var entries = await ReadPageReversedAsync(index, rangeStart, rangeEnd, offset, limit);
             return (entries, total);
         }
 
-        // 有搜索/host 过滤：需逐条检查内容
-        return await SearchAndPageAsync(index, rangeStart, rangeEnd, offset, limit, search, host);
+        // 有内容过滤：需逐条检查
+        return await SearchAndPageAsync(index, rangeStart, rangeEnd, offset, limit, search, host, clientIp);
     }
 
     /// <summary>
@@ -133,6 +135,7 @@ public sealed class ReverseLogScanner : IDisposable
         var buffer = new byte[BufferSize];
         var carryOver = Array.Empty<byte>(); // 上一块的尾部（处理跨块的分隔符）
         long fileOffset = 0;
+        long contentStart = 0; // 内容起始位置（跳过 BOM 后）
 
         _stream.Seek(0, SeekOrigin.Begin);
 
@@ -144,6 +147,7 @@ public sealed class ReverseLogScanner : IDisposable
             if (bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF)
             {
                 fileOffset = 3;
+                contentStart = 3;
             }
             else
             {
@@ -185,8 +189,8 @@ public sealed class ReverseLogScanner : IDisposable
                 var matchPos = pos + found;
                 var absolutePos = fileOffset + matchPos + searchOffset;
 
-                // 确保分隔符在行首（前一个字符是换行或文件开头）
-                if (absolutePos == 0 || (matchPos > 0 && (searchData[matchPos - 1] == '\n')))
+                // 确保分隔符在行首（前一个字符是换行或文件开头/BOM后起始）
+                if (absolutePos == contentStart || (matchPos > 0 && (searchData[matchPos - 1] == '\n')))
                 {
                     // 提取时间戳：找到 [ 和 ] 之间的文本
                     var bracketStart = matchPos + SeparatorPattern.Length - 1; // '[' 的位置
@@ -266,13 +270,14 @@ public sealed class ReverseLogScanner : IDisposable
     private async Task<(List<LogEntry> entries, int total)> SearchAndPageAsync(
         List<(long ByteOffset, string Timestamp)> index,
         int rangeStart, int rangeEnd,
-        int offset, int limit, string? search, string? host)
+        int offset, int limit, string? search, string? host, string? clientIp)
     {
         var entries = new List<LogEntry>();
         var matchCount = 0;
         var collected = 0;
         var hasSearch = !string.IsNullOrEmpty(search);
         var hasHost = !string.IsNullOrEmpty(host);
+        var hasClientIp = !string.IsNullOrEmpty(clientIp);
 
         // 倒序扫描
         for (int i = rangeEnd; i >= rangeStart; i--)
@@ -286,6 +291,10 @@ public sealed class ReverseLogScanner : IDisposable
             if (hasHost && !MatchHost(block, host!))
                 continue;
 
+            // Client-IP 过滤：匹配 "Client-IP: xxx" 行
+            if (hasClientIp && !MatchClientIp(block, clientIp!))
+                continue;
+
             matchCount++;
 
             if (matchCount > offset && collected < limit)
@@ -297,6 +306,22 @@ public sealed class ReverseLogScanner : IDisposable
         }
 
         return (entries, matchCount);
+    }
+
+    /// <summary>
+    /// 检查日志块中的 Client-IP 行是否包含指定 IP（支持模糊匹配）
+    /// </summary>
+    private static bool MatchClientIp(string block, string clientIp)
+    {
+        var idx = block.IndexOf("Client-IP:", StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return false;
+
+        var lineEnd = block.IndexOf('\n', idx);
+        var ipValue = lineEnd > 0
+            ? block[(idx + 10)..lineEnd].Trim()
+            : block[(idx + 10)..].Trim();
+
+        return ipValue.Contains(clientIp, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

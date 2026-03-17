@@ -1216,6 +1216,9 @@ export const pcapApi = {
 
   deleteLogFile: (file: string) =>
     api.post<{ success: boolean; message?: string }>('/pcap/logs/delete', { file }),
+
+  getLogHosts: (file: string) =>
+    api.get<{ success: boolean; hosts: string[] }>(`/pcap/logs/hosts?file=${encodeURIComponent(file)}`),
 }
 
 // ==================== 访问控制（黑白名单）API ====================

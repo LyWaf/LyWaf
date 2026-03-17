@@ -6307,6 +6307,7 @@ public static class ControlApi
         {
             var proxyOptions = ctx.RequestServices.GetRequiredService<IOptionsMonitor<ProxyServerOptions>>().CurrentValue;
             var pcapCertProvider = ctx.RequestServices.GetRequiredService<PcapCertProvider>();
+            var globalOpts = ctx.RequestServices.GetRequiredService<IOptionsMonitor<GlobalOptions>>().CurrentValue;
 
             var ports = proxyOptions.Ports.Select(p => new
             {
@@ -6317,11 +6318,28 @@ public static class ControlApi
                 enableSocks5 = p.Value.EnableSocks5,
             }).ToList();
 
+            // 构建 CA 证书通过代理端口的下载链接
+            string? certDownloadUrl = null;
+            var pcapPort = proxyOptions.Ports
+                .Where(p => p.Value.EnablePcap && (p.Value.EnableHttp || p.Value.EnableHttps))
+                .Select(p => {
+                    var lastColon = p.Key.LastIndexOf(':');
+                    return lastColon > 0 && int.TryParse(p.Key[(lastColon + 1)..], out var port) ? port
+                         : int.TryParse(p.Key, out var port2) ? port2 : 0;
+                })
+                .FirstOrDefault(p => p > 0);
+            if (pcapPort > 0)
+            {
+                var localIp = GetLocalNetworkIp(globalOpts);
+                certDownloadUrl = $"http://{localIp}:{pcapPort}{ProxyHandler.CaCertPath}";
+            }
+
             return Results.Json(new
             {
                 success = true,
                 proxyEnabled = proxyOptions.Enabled,
                 caCertExists = File.Exists(pcapCertProvider.CaCertPath),
+                certDownloadUrl,
                 ports,
             });
         }).RequireHost($"*:{controlPort}");
@@ -6413,10 +6431,11 @@ public static class ControlApi
             _ = int.TryParse(ctx.Request.Query["limit"].FirstOrDefault() ?? "20", out var limit);
             var search = ctx.Request.Query["search"].FirstOrDefault();
             var host = ctx.Request.Query["host"].FirstOrDefault();
+            var clientIp = ctx.Request.Query["clientIp"].FirstOrDefault();
             DateTime? startTime = DateTime.TryParse(ctx.Request.Query["startTime"].FirstOrDefault(), out var st3) ? st3 : null;
             DateTime? endTime = DateTime.TryParse(ctx.Request.Query["endTime"].FirstOrDefault(), out var et3) ? et3 : null;
 
-            var (entries, total) = await LogUtil.ParseLogFileAsync(filePath, offset, Math.Clamp(limit, 1, 100), search, startTime, endTime, host);
+            var (entries, total) = await LogUtil.ParseLogFileAsync(filePath, offset, Math.Clamp(limit, 1, 100), search, startTime, endTime, host, clientIp);
             return Results.Json(new
             {
                 success = true,
@@ -6428,8 +6447,38 @@ public static class ControlApi
             });
         }).RequireHost($"*:{controlPort}");
 
+        // 删除抓包日志文件
+        app.MapPost("/api/pcap/logs/delete", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var body = await ctx.Request.ReadFromJsonAsync<PcapLogDeleteRequest>();
+                if (body == null || string.IsNullOrEmpty(body.File))
+                    return Results.Json(new { success = false, message = "无效的请求" }, statusCode: 400);
+
+                var fileName = body.File;
+                if (fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\'))
+                    return Results.Json(new { success = false, message = "无效的文件名" }, statusCode: 400);
+
+                var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
+                var filePath = Path.Combine(dir, fileName);
+                if (!File.Exists(filePath))
+                    return Results.Json(new { success = false, message = $"文件不存在: {fileName}" });
+
+                ReverseLogScanner.InvalidateCache(filePath);
+                File.Delete(filePath);
+                return Results.Json(new { success = true, message = $"已删除: {fileName}" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         return app;
     }
+
+    private record PcapLogDeleteRequest(string? File);
 
     /// <summary>
     /// 递归展平 IConfigurationSection 为 flat key-value

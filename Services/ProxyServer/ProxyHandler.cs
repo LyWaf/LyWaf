@@ -46,6 +46,11 @@ public class ProxyHandler
     internal const string CrlPath = "/lywaf-proxy-ca.crl";
 
     /// <summary>
+    /// CA 证书在代理端口上的下载路径
+    /// </summary>
+    internal const string CaCertPath = "/lywaf-proxy-ca.crt";
+
+    /// <summary>
     /// 记录 Pcap TLS 握手失败的 clientIp:host，在过期前直接走隧道模式
     /// Value 为失败时间，超过过期时间后自动重试 Pcap
     /// </summary>
@@ -132,11 +137,15 @@ public class ProxyHandler
             }
         }
 
-        // CRL 分发点请求（直接 HTTP 请求，非代理格式）
-        if (method == "GET" && target.Equals(CrlPath, StringComparison.OrdinalIgnoreCase)
-            && _portConfig.EnablePcap && _pcapCertProvider != null)
+        // CRL 分发点 / CA 证书下载请求（直接 HTTP 请求，非代理格式）
+        if (method == "GET" && _portConfig.EnablePcap && _pcapCertProvider != null
+            && (target.Equals(CrlPath, StringComparison.OrdinalIgnoreCase)
+                || target.Equals(CaCertPath, StringComparison.OrdinalIgnoreCase)))
         {
-            await ServeCrlAsync(clientStream, cancellationToken);
+            if (target.Equals(CrlPath, StringComparison.OrdinalIgnoreCase))
+                await ServeCrlAsync(clientStream, cancellationToken);
+            else
+                await ServeCaCertAsync(clientStream, cancellationToken);
         }
         else if (method == "CONNECT" && _portConfig.EnableHttps)
         {
@@ -296,7 +305,7 @@ public class ProxyHandler
             _logger.Debug("Pcap 已建立: {Host}:{Port}", targetHost, targetPort);
 
             // 5. 在两个 SslStream 之间中继 HTTP 流量
-            await PcapRelayAsync(clientSsl, targetSsl, targetHost, cancellationToken);
+            await PcapRelayAsync(clientSsl, targetSsl, targetHost, clientIp, cancellationToken);
 
             await clientSsl.ShutdownAsync();
             await targetSsl.ShutdownAsync();
@@ -323,7 +332,7 @@ public class ProxyHandler
     /// Pcap 中继：从客户端 SslStream 读取 HTTP 请求，转发到目标 SslStream，记录流量
     /// 支持 keep-alive 多次请求
     /// </summary>
-    private async Task PcapRelayAsync(SslStream clientSsl, SslStream targetSsl, string targetHost, CancellationToken cancellationToken)
+    private async Task PcapRelayAsync(SslStream clientSsl, SslStream targetSsl, string targetHost, string clientIp, CancellationToken cancellationToken)
     {
         var dataTimeout = TimeSpan.FromSeconds(_options.DataTimeout);
 
@@ -411,7 +420,7 @@ public class ProxyHandler
             await clientSsl.FlushAsync(timeoutCts.Token);
 
             // 写入抓包日志
-            _ = Task.Run(() => WritePcapLog(method, path, targetHost, headers, requestBody, statusCode, responseHeaders, responseBody), CancellationToken.None);
+            _ = Task.Run(() => WritePcapLog(method, path, targetHost, clientIp, headers, requestBody, statusCode, responseHeaders, responseBody), CancellationToken.None);
 
             // 检查 Connection: close
             if (headers.TryGetValue("Connection", out var conn) &&
@@ -460,7 +469,7 @@ public class ProxyHandler
     /// <summary>
     /// 写入抓包日志（与拦截明细日志格式一致，供 LogUtil.ParseLogFileAsync 解析）
     /// </summary>
-    private static void WritePcapLog(string method, string path, string host,
+    private static void WritePcapLog(string method, string path, string host, string clientIp,
         Dictionary<string, string> headers, string? requestBody,
         int statusCode, Dictionary<string, string> responseHeaders, string? responseBody)
     {
@@ -470,6 +479,7 @@ public class ProxyHandler
             logSb.AppendLine($"========== [{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] ==========");
             logSb.AppendLine($"{method} {path} HTTP/1.1");
             logSb.AppendLine($"Host: {host}");
+            logSb.AppendLine($"Client-IP: {clientIp}");
             logSb.AppendLine($"Scheme: https");
             logSb.AppendLine($"Status: {statusCode}");
 
@@ -765,7 +775,7 @@ public class ProxyHandler
 
                 _logger.Debug("SOCKS5 Pcap 已建立: {Host}:{Port}", targetHost, targetPort);
 
-                await PcapRelayAsync(clientSsl, targetSsl, targetHost, cancellationToken);
+                await PcapRelayAsync(clientSsl, targetSsl, targetHost, clientIp, cancellationToken);
 
                 await clientSsl.ShutdownAsync();
                 await targetSsl.ShutdownAsync();
@@ -1035,6 +1045,31 @@ public class ProxyHandler
                 var header = $"HTTP/1.1 200 OK\r\nContent-Type: application/pkix-crl\r\nContent-Length: {crlBytes.Length}\r\nConnection: close\r\n\r\n";
                 await stream.WriteAsync(Encoding.ASCII.GetBytes(header), cancellationToken);
                 await stream.WriteAsync(crlBytes, cancellationToken);
+            }
+            else
+            {
+                var response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"u8.ToArray();
+                await stream.WriteAsync(response, cancellationToken);
+            }
+            await stream.FlushAsync(cancellationToken);
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// 在代理端口上直接提供 CA 证书文件（供客户端下载安装）
+    /// </summary>
+    private async Task ServeCaCertAsync(NetworkStream stream, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var certPath = _pcapCertProvider!.CaCertPath;
+            if (File.Exists(certPath))
+            {
+                var certBytes = await File.ReadAllBytesAsync(certPath, cancellationToken);
+                var header = $"HTTP/1.1 200 OK\r\nContent-Type: application/x-x509-ca-cert\r\nContent-Disposition: attachment; filename=\"lywaf-proxy-ca.crt\"\r\nContent-Length: {certBytes.Length}\r\nConnection: close\r\n\r\n";
+                await stream.WriteAsync(Encoding.ASCII.GetBytes(header), cancellationToken);
+                await stream.WriteAsync(certBytes, cancellationToken);
             }
             else
             {

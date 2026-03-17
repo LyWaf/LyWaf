@@ -89,13 +89,14 @@ public static partial class LogUtil
     /// </summary>
     public static async Task<(List<LogEntry> entries, int total)> ParseLogFileAsync(
         string filePath, int offset = 0, int limit = 20, string? search = null,
-        DateTime? startTime = null, DateTime? endTime = null, string? host = null)
+        DateTime? startTime = null, DateTime? endTime = null,
+        string? host = null, string? clientIp = null)
     {
         if (!File.Exists(filePath))
             return ([], 0);
 
         using var scanner = new ReverseLogScanner(filePath);
-        return await scanner.QueryAsync(offset, limit, search, startTime, endTime, host);
+        return await scanner.QueryAsync(offset, limit, search, startTime, endTime, host, clientIp);
     }
 
     /// <summary>

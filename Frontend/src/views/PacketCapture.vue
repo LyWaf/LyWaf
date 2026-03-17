@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { pcapApi } from '@/api'
 import type { PcapPortStatus, InterceptLogFile, InterceptLogEntry } from '@/api'
 import { useToast } from '@/composables/useToast'
@@ -14,6 +14,7 @@ const activeTab = ref<'settings' | 'details'>('settings')
 const loading = ref(false)
 const ports = ref<PcapPortStatus[]>([])
 const caCertExists = ref(false)
+const certDownloadUrl = ref('')
 const togglingPort = ref<string | null>(null)
 
 const loadStatus = async () => {
@@ -23,11 +24,29 @@ const loadStatus = async () => {
     if (res?.success) {
       ports.value = res.ports || []
       caCertExists.value = res.caCertExists
+      certDownloadUrl.value = res.certDownloadUrl || ''
     }
   } catch {
     showError('加载抓包状态失败')
   } finally {
     loading.value = false
+  }
+}
+
+const copyCertUrl = async () => {
+  if (!certDownloadUrl.value) return
+  try {
+    await navigator.clipboard.writeText(certDownloadUrl.value)
+    showSuccess('下载链接已复制到剪贴板')
+  } catch {
+    // fallback
+    const input = document.createElement('input')
+    input.value = certDownloadUrl.value
+    document.body.appendChild(input)
+    input.select()
+    document.execCommand('copy')
+    document.body.removeChild(input)
+    showSuccess('下载链接已复制到剪贴板')
   }
 }
 
@@ -71,6 +90,7 @@ const logOffset = ref(0)
 const logLimit = 20
 const logSearch = ref('')
 const logHost = ref('')
+const logHosts = ref<string[]>([])
 const logClientIp = ref('')
 const logStartTime = ref('')
 const logEndTime = ref('')
@@ -88,6 +108,14 @@ const loadLogFiles = async () => {
   } catch {
     showError('加载日志文件列表失败')
   }
+}
+
+const loadLogHosts = async () => {
+  if (!selectedFile.value) { logHosts.value = []; return }
+  try {
+    const res = await pcapApi.getLogHosts(selectedFile.value) as any
+    if (res?.success) logHosts.value = res.hosts || []
+  } catch { logHosts.value = [] }
 }
 
 const deleteLogFile = async () => {
@@ -137,11 +165,49 @@ const loadLogEntries = async () => {
 const onFileChange = () => {
   logOffset.value = 0
   loadLogEntries()
+  loadLogHosts()
 }
 
 const onSearchEnter = () => {
   logOffset.value = 0
   loadLogEntries()
+}
+
+// 防抖自动搜索（域名/客户端IP 输入时自动触发）
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
+const debouncedSearch = () => {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  debounceTimer = setTimeout(() => {
+    logOffset.value = 0
+    loadLogEntries()
+  }, 500)
+}
+
+// ==================== 域名下拉组合框 ====================
+const hostDropdownOpen = ref(false)
+const filteredHosts = computed(() => {
+  if (!logHost.value) return logHosts.value
+  return logHosts.value.filter(h => h.toLowerCase().includes(logHost.value.toLowerCase()))
+})
+const selectHost = (host: string) => {
+  logHost.value = host
+  hostDropdownOpen.value = false
+  logOffset.value = 0
+  loadLogEntries()
+}
+const clearHost = () => {
+  logHost.value = ''
+  hostDropdownOpen.value = false
+  logOffset.value = 0
+  loadLogEntries()
+}
+const onHostInput = () => {
+  hostDropdownOpen.value = true
+  debouncedSearch()
+}
+// 点击外部关闭
+const onHostBlur = () => {
+  setTimeout(() => { hostDropdownOpen.value = false }, 200)
 }
 
 // ==================== 详情弹窗 ====================
@@ -216,6 +282,7 @@ watch(selectedFile, (f) => {
   if (f) {
     logOffset.value = 0
     loadLogEntries()
+    loadLogHosts()
   }
 })
 
@@ -327,16 +394,29 @@ const getMethodClass = (method: string) => {
                 </span>
               </div>
             </div>
-            <button
-              @click="downloadCert"
-              :disabled="!caCertExists"
-              class="btn btn-sm btn-primary flex items-center gap-1.5"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              下载证书
-            </button>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <button
+                @click="downloadCert"
+                :disabled="!caCertExists"
+                class="btn btn-sm btn-primary flex items-center gap-1.5"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                下载证书
+              </button>
+              <button
+                v-if="certDownloadUrl"
+                @click="copyCertUrl"
+                class="btn btn-sm btn-secondary flex items-center gap-1.5"
+                :title="certDownloadUrl"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                </svg>
+                复制下载链接
+              </button>
+            </div>
           </div>
         </div>
 
@@ -416,8 +496,9 @@ const getMethodClass = (method: string) => {
     <!-- ==================== 抓包明细 Tab ==================== -->
     <template v-if="activeTab === 'details'">
       <!-- 工具栏 -->
-      <div class="card !py-3">
-        <div class="flex items-center gap-3">
+      <div class="card !py-3 space-y-3">
+        <!-- 第一行：文件选择 + 过滤条件 -->
+        <div class="flex items-center gap-3 flex-wrap">
           <select v-model="selectedFile" @change="onFileChange" class="input w-56 text-sm">
             <option value="" disabled>选择日志文件</option>
             <option v-for="f in logFiles" :key="f.name" :value="f.name">
@@ -427,17 +508,70 @@ const getMethodClass = (method: string) => {
           <input
             v-model="logSearch"
             type="text"
-            class="input w-44 text-sm"
+            class="input w-40 text-sm"
             placeholder="搜索关键字..."
             @keydown.enter="onSearchEnter"
           />
+          <div class="relative w-44">
+            <div class="flex items-center">
+              <input
+                v-model="logHost"
+                type="text"
+                class="input w-full text-sm !pr-12"
+                placeholder="过滤域名..."
+                @input="onHostInput"
+                @focus="hostDropdownOpen = true"
+                @blur="onHostBlur"
+                @keydown.enter="onSearchEnter"
+              />
+              <div class="absolute right-1 flex items-center gap-0.5">
+                <button
+                  v-if="logHost"
+                  @mousedown.prevent="clearHost"
+                  class="p-0.5 text-gray-500 hover:text-gray-300"
+                  title="清除"
+                >
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                <button
+                  @mousedown.prevent="hostDropdownOpen = !hostDropdownOpen"
+                  class="p-0.5 text-gray-500 hover:text-gray-300"
+                >
+                  <svg class="w-3.5 h-3.5 transition-transform" :class="hostDropdownOpen ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div
+              v-show="hostDropdownOpen && filteredHosts.length > 0"
+              class="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto bg-dark-card border border-dark-border rounded-lg shadow-xl"
+            >
+              <div
+                v-for="h in filteredHosts"
+                :key="h"
+                @mousedown.prevent="selectHost(h)"
+                class="px-3 py-2 text-sm text-gray-300 cursor-pointer hover:bg-primary-500/15 hover:text-primary-400 transition-colors"
+                :class="{ 'bg-primary-500/10 text-primary-400': logHost === h }"
+              >{{ h }}</div>
+            </div>
+          </div>
           <input
-            v-model="logHost"
+            v-model="logClientIp"
             type="text"
-            class="input w-40 text-sm"
-            placeholder="过滤域名..."
+            class="input w-32 text-sm"
+            placeholder="客户端IP..."
+            @input="debouncedSearch"
             @keydown.enter="onSearchEnter"
           />
+          <div class="ml-auto text-xs text-gray-500" v-if="logTotal > 0">
+            共 {{ logTotal }} 条记录
+          </div>
+        </div>
+        <!-- 第二行：时间过滤 + 操作按钮 -->
+        <div class="flex items-center gap-3">
           <DateTimePicker v-model="logStartTime" placeholder="开始时间" />
           <DateTimePicker v-model="logEndTime" placeholder="结束时间" />
           <button @click="onSearchEnter" class="btn btn-sm btn-primary flex items-center gap-1.5">
@@ -446,13 +580,6 @@ const getMethodClass = (method: string) => {
             </svg>
             搜索
           </button>
-          <input
-            v-model="logClientIp"
-            type="text"
-            class="input w-32 text-sm"
-            placeholder="客户端IP..."
-            @keydown.enter="onSearchEnter"
-          />
           <button @click="loadLogFiles" class="btn btn-sm btn-secondary flex items-center gap-1.5">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -465,9 +592,6 @@ const getMethodClass = (method: string) => {
             </svg>
             删除
           </button>
-          <div class="ml-auto text-xs text-gray-500" v-if="logTotal > 0">
-            共 {{ logTotal }} 条记录
-          </div>
         </div>
       </div>
 
