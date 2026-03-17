@@ -6316,6 +6316,7 @@ public static class ControlApi
                 enableHttp = p.Value.EnableHttp,
                 enableHttps = p.Value.EnableHttps,
                 enableSocks5 = p.Value.EnableSocks5,
+                pcapHosts = p.Value.PcapHosts,
             }).ToList();
 
             // 构建 CA 证书通过代理端口的下载链接
@@ -6359,6 +6360,17 @@ public static class ControlApi
                     return Results.Json(new { success = false, message = $"端口 {body.PortKey} 不存在" }, statusCode: 404);
 
                 portConfig.EnablePcap = body.Enabled;
+
+                // 更新 PcapHosts（如果提供）
+                if (body.PcapHosts != null)
+                {
+                    portConfig.PcapHosts = body.PcapHosts
+                        .Where(h => !string.IsNullOrWhiteSpace(h))
+                        .Select(h => h.Trim())
+                        .ToList();
+                    if (portConfig.PcapHosts.Count == 0)
+                        portConfig.PcapHosts = ["*"];
+                }
 
                 // 如果启用 Pcap 且 CA 证书未初始化，初始化证书
                 if (body.Enabled)
@@ -8023,4 +8035,5 @@ public class PcapToggleRequest
 {
     public string PortKey { get; set; } = "";
     public bool Enabled { get; set; }
+    public List<string>? PcapHosts { get; set; }
 }

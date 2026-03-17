@@ -87,4 +87,11 @@ public class ProxyPortConfig
     /// 需要客户端安装 CA 证书
     /// </summary>
     public bool EnablePcap { get; set; } = false;
+
+    /// <summary>
+    /// Pcap 抓包的目标域名列表（白名单）
+    /// 默认 ["*"] 表示抓取所有域名
+    /// 支持通配符：*.example.com 匹配所有子域名
+    /// </summary>
+    public List<string> PcapHosts { get; set; } = ["*"];
 }

@@ -66,6 +66,61 @@ const togglePcap = async (port: PcapPortStatus) => {
   }
 }
 
+// ==================== Pcap Hosts 编辑 ====================
+const editingHostsPort = ref<string | null>(null)
+const editingHostsList = ref<string[]>([])
+const newHostInput = ref('')
+
+const startEditHosts = (port: PcapPortStatus) => {
+  editingHostsPort.value = port.port
+  editingHostsList.value = [...(port.pcapHosts || ['*'])]
+  newHostInput.value = ''
+}
+
+const cancelEditHosts = () => {
+  editingHostsPort.value = null
+}
+
+const addHost = () => {
+  const val = newHostInput.value.trim()
+  if (!val) return
+  // 支持逗号/分号分隔的批量添加
+  const items = val.split(/[,;]+/).map(h => h.trim()).filter(h => h.length > 0)
+  for (const item of items) {
+    if (!editingHostsList.value.includes(item)) {
+      // 如果添加具体域名，移除 *
+      if (item !== '*' && editingHostsList.value.includes('*')) {
+        editingHostsList.value = editingHostsList.value.filter(h => h !== '*')
+      }
+      editingHostsList.value.push(item)
+    }
+  }
+  newHostInput.value = ''
+}
+
+const removeHost = (index: number) => {
+  editingHostsList.value.splice(index, 1)
+}
+
+const saveHosts = async (port: PcapPortStatus) => {
+  let hosts = editingHostsList.value.filter(h => h.length > 0)
+  if (hosts.length === 0) hosts = ['*']
+
+  togglingPort.value = port.port
+  try {
+    const res = await pcapApi.toggle(port.port, port.enablePcap, hosts) as any
+    if (res?.success) {
+      port.pcapHosts = hosts
+      editingHostsPort.value = null
+      showSuccess('抓包域名已更新')
+    }
+  } catch {
+    showError('保存失败')
+  } finally {
+    togglingPort.value = null
+  }
+}
+
 const downloadCert = async () => {
   try {
     await pcapApi.downloadCaCert()
@@ -348,32 +403,109 @@ const getMethodClass = (method: string) => {
             <div
               v-for="port in ports"
               :key="port.port"
-              @click="togglePcap(port)"
               :class="[
-                'flex items-center justify-between px-4 py-3 rounded-lg cursor-pointer transition-colors',
+                'rounded-lg transition-colors',
                 port.enablePcap
-                  ? 'bg-green-500/5 border border-green-500/20 hover:bg-green-500/10'
-                  : 'bg-dark-card-hover border border-dark-border hover:bg-white/5'
+                  ? 'bg-green-500/5 border border-green-500/20'
+                  : 'bg-dark-card-hover border border-dark-border'
               ]"
             >
-              <div>
-                <span class="text-gray-200 text-sm font-medium">端口 {{ port.port }}</span>
-                <div class="flex items-center gap-2 mt-1">
-                  <span v-if="port.enableHttp" class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30">HTTP</span>
-                  <span v-if="port.enableHttps" class="text-[10px] px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 border border-green-500/30">HTTPS</span>
-                  <span v-if="port.enableSocks5" class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30">SOCKS5</span>
+              <!-- 端口行：点击切换 -->
+              <div
+                @click="togglePcap(port)"
+                class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-white/5 transition-colors rounded-t-lg"
+              >
+                <div>
+                  <span class="text-gray-200 text-sm font-medium">端口 {{ port.port }}</span>
+                  <div class="flex items-center gap-2 mt-1">
+                    <span v-if="port.enableHttp" class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30">HTTP</span>
+                    <span v-if="port.enableHttps" class="text-[10px] px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 border border-green-500/30">HTTPS</span>
+                    <span v-if="port.enableSocks5" class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30">SOCKS5</span>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span v-if="togglingPort === port.port" class="text-gray-400 text-sm">切换中...</span>
+                  <span
+                    :class="[
+                      'text-xs px-2 py-1 rounded font-medium',
+                      port.enablePcap
+                        ? 'bg-green-500/20 text-green-400'
+                        : 'bg-gray-500/20 text-gray-400'
+                    ]"
+                  >{{ port.enablePcap ? '已启用' : '已禁用' }}</span>
                 </div>
               </div>
-              <div class="flex items-center gap-2">
-                <span v-if="togglingPort === port.port" class="text-gray-400 text-sm">切换中...</span>
-                <span
-                  :class="[
-                    'text-xs px-2 py-1 rounded font-medium',
-                    port.enablePcap
-                      ? 'bg-green-500/20 text-green-400'
-                      : 'bg-gray-500/20 text-gray-400'
-                  ]"
-                >{{ port.enablePcap ? '已启用' : '已禁用' }}</span>
+              <!-- 域名配置（启用时显示） -->
+              <div v-if="port.enablePcap" class="px-4 pb-3 border-t border-dark-border/30">
+                <div class="mt-2">
+                  <!-- 查看模式 -->
+                  <template v-if="editingHostsPort !== port.port">
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs text-gray-500 flex-shrink-0">抓包域名:</span>
+                      <div class="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
+                        <span
+                          v-for="h in (port.pcapHosts || ['*'])"
+                          :key="h"
+                          class="text-[10px] px-1.5 py-0.5 rounded bg-primary-500/10 text-primary-400 border border-primary-500/20 font-mono"
+                        >{{ h }}</span>
+                      </div>
+                      <button
+                        @click.stop="startEditHosts(port)"
+                        class="text-xs text-gray-400 hover:text-primary-400 transition-colors flex-shrink-0"
+                      >编辑</button>
+                    </div>
+                  </template>
+                  <!-- 编辑模式 -->
+                  <template v-else>
+                    <div class="space-y-2" @click.stop>
+                      <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-500 flex-shrink-0">抓包域名:</span>
+                        <span class="text-[10px] text-gray-500">（* 表示所有，支持 *.example.com 通配符）</span>
+                      </div>
+                      <!-- 已添加的域名标签 -->
+                      <div class="flex items-center gap-1.5 flex-wrap">
+                        <span
+                          v-for="(h, idx) in editingHostsList"
+                          :key="idx"
+                          class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-primary-500/10 text-primary-400 border border-primary-500/20 font-mono"
+                        >
+                          {{ h }}
+                          <button
+                            @click="removeHost(idx)"
+                            class="hover:text-red-400 transition-colors"
+                          >
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </span>
+                      </div>
+                      <!-- 添加输入 -->
+                      <div class="flex items-center gap-2">
+                        <input
+                          v-model="newHostInput"
+                          type="text"
+                          class="input flex-1 text-xs font-mono"
+                          placeholder="输入域名后回车添加，如 example.com 或 *.jd.com"
+                          @keydown.enter.prevent="addHost"
+                        />
+                        <button
+                          @click="addHost"
+                          class="btn btn-sm btn-secondary text-xs !py-1"
+                        >添加</button>
+                        <button
+                          @click="saveHosts(port)"
+                          class="btn btn-sm btn-primary text-xs !py-1"
+                          :disabled="togglingPort === port.port"
+                        >保存</button>
+                        <button
+                          @click="cancelEditHosts"
+                          class="btn btn-sm btn-secondary text-xs !py-1"
+                        >取消</button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
               </div>
             </div>
           </div>

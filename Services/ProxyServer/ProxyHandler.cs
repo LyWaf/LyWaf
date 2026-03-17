@@ -177,6 +177,7 @@ public class ProxyHandler
         }
 
         if (_portConfig.EnablePcap && _pcapCertProvider != null
+            && IsPcapHostAllowed(targetHost)
             && !IsPcapFallback(clientIp, targetHost))
         {
             await HandlePcapConnectAsync(clientStream, targetHost, targetPort, clientIp, cancellationToken);
@@ -232,6 +233,31 @@ public class ProxyHandler
     /// 3. 用伪造证书与客户端建立 TLS
     /// 4. 在两个 SslStream 之间中继 HTTP 请求/响应并记录
     /// </summary>
+    /// <summary>
+    /// 检查目标域名是否在 Pcap 抓包白名单中
+    /// </summary>
+    private bool IsPcapHostAllowed(string host)
+    {
+        var pcapHosts = _portConfig.PcapHosts;
+        if (pcapHosts == null || pcapHosts.Count == 0 || pcapHosts.Contains("*"))
+            return true;
+
+        foreach (var pattern in pcapHosts)
+        {
+            if (string.IsNullOrWhiteSpace(pattern)) continue;
+
+            // 精确匹配
+            if (host.Equals(pattern, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // 通配符匹配：*.example.com
+            if (pattern.StartsWith("*.") &&
+                host.EndsWith(pattern[1..], StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
     /// <summary>
     /// 检查 clientIp:host 是否在 Pcap 降级缓存中（未过期）
     /// </summary>
@@ -755,6 +781,7 @@ public class ProxyHandler
 
             // SOCKS5 Pcap：目标端口为 443 且启用 Pcap 时，走 Pcap 路径
             if (_portConfig.EnablePcap && _pcapCertProvider != null && targetPort == 443
+                && IsPcapHostAllowed(targetHost)
                 && !IsPcapFallback(clientIp, targetHost))
             {
                 using var targetNetStream = new NetworkStream(targetSocket, ownsSocket: false);

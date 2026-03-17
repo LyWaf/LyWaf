@@ -1167,6 +1167,7 @@ export interface PcapPortStatus {
   enableHttp: boolean
   enableHttps: boolean
   enableSocks5: boolean
+  pcapHosts: string[]
 }
 
 export interface PcapStatus {
@@ -1180,8 +1181,8 @@ export const pcapApi = {
   getStatus: () =>
     api.get<PcapStatus>('/pcap/status'),
 
-  toggle: (portKey: string, enabled: boolean) =>
-    api.post<{ success: boolean; enabled: boolean; message: string }>('/pcap/toggle', { portKey, enabled }),
+  toggle: (portKey: string, enabled: boolean, pcapHosts?: string[]) =>
+    api.post<{ success: boolean; enabled: boolean; message: string }>('/pcap/toggle', { portKey, enabled, pcapHosts }),
 
   downloadCaCert: async () => {
     const token = localStorage.getItem('lywaf_token')
