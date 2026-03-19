@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { throttleApi } from '@/api'
 import { useToast } from '@/composables/useToast'
+import ConnectionLimitPanel from '@/components/dashboard/ConnectionLimitPanel.vue'
 
 const { showSuccess, showError } = useToast()
 
@@ -461,5 +462,8 @@ onMounted(loadConfig)
         </tbody>
       </table>
     </div>
+
+    <!-- 并发连接限制 -->
+    <ConnectionLimitPanel />
   </div>
 </template>

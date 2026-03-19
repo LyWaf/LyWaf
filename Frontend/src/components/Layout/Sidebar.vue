@@ -30,11 +30,15 @@ const menuItems: MenuItem[] = [
   { path: '/', name: '统计报表', icon: '📊' },
   { path: '/security', name: '安全态势', icon: '🛡️' },
   { path: '/feature-status', name: '防护应用', icon: '⚙️' },
-  { path: '/cc-protection', name: 'CC 防护', icon: '⚡' },
-  { path: '/waf-rules', name: 'WAF 规则', icon: '🛡️' },
-  { path: '/speed-limit', name: '速度限制', icon: '🚀' },
   { path: '/intercept-events', name: '拦截事件', icon: '📋' },
-  { path: '/packet-capture', name: '抓包管理', icon: '📦', condition: () => proxyEnabled.value },
+  {
+    name: '规则管理', icon: '📐', children: [
+      { path: '/cc-protection', name: 'CC 防护' },
+      { path: '/waf-rules', name: 'WAF 规则' },
+      { path: '/speed-limit', name: '速度限制' },
+      { path: '/packet-capture', name: '抓包管理', condition: () => proxyEnabled.value },
+    ]
+  },
   { path: '/api-timing', name: 'API 耗时', icon: '⏱️' },
   {
     name: '配置管理', icon: '📄', children: [
@@ -53,7 +57,7 @@ const menuItems: MenuItem[] = [
 ]
 
 // 展开状态：默认展开「配置管理」
-const expandedGroups = ref<Set<string>>(new Set(['配置管理']))
+const expandedGroups = ref<Set<string>>(new Set())
 
 const isActive = (item: MenuItem) => {
   if (item.path) {
@@ -132,9 +136,12 @@ const scrollToSection = (sectionId: string) => {
             >›</span>
           </div>
           <div v-show="expandedGroups.has(item.name)" class="overflow-hidden">
-            <div
+            <template
               v-for="child in item.children"
               :key="child.name"
+            >
+            <div
+              v-if="!child.condition || child.condition()"
               @click="handleClick(child)"
               :class="[
                 'flex items-center gap-3 pl-12 pr-5 py-2 cursor-pointer transition-colors text-sm border-l-[3px]',
@@ -145,6 +152,7 @@ const scrollToSection = (sectionId: string) => {
             >
               <span>{{ child.name }}</span>
             </div>
+            </template>
           </div>
         </div>
         

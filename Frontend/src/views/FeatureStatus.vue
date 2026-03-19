@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import AccessControlPanel from '@/components/dashboard/AccessControlPanel.vue'
-import ConnectionLimitPanel from '@/components/dashboard/ConnectionLimitPanel.vue'
 import WafRules from '@/components/dashboard/WafRules.vue'
 import { featureApi, dashboardApi } from '@/api'
 import { useToast } from '@/composables/useToast'
@@ -71,9 +70,6 @@ const getFeatureName = (feature: keyof FeatureStatus) => {
 
     <!-- 地理位置访问控制 -->
     <AccessControlPanel mode="geo" />
-
-    <!-- 并发连接限制 -->
-    <ConnectionLimitPanel />
 
     <!-- WAF Args 检测 -->
     <WafRules

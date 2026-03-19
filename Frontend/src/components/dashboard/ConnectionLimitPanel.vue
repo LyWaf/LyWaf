@@ -183,9 +183,9 @@ onMounted(loadConfig)
         >{{ formatValue(maxPerIp) }}</span>
       </div>
 
-      <!-- 单目标最大连接数 -->
+      <!-- 单后端最大连接数 -->
       <div class="bg-dark-card-hover rounded-lg p-3">
-        <div class="text-xs text-gray-500 mb-1">单目标最大连接数</div>
+        <div class="text-xs text-gray-500 mb-1">单后端最大连接数</div>
         <template v-if="editingField === 'maxPerDest'">
           <div class="flex items-center gap-1">
             <input
