@@ -36,7 +36,7 @@ const menuItems: MenuItem[] = [
       { path: '/cc-protection', name: 'CC 防护' },
       { path: '/waf-rules', name: 'WAF 规则' },
       { path: '/speed-limit', name: '速度限制' },
-      { path: '/packet-capture', name: '抓包管理', condition: () => proxyEnabled.value },
+      { path: '/packet-capture', name: '代理管理', condition: () => proxyEnabled.value },
     ]
   },
   { path: '/api-timing', name: 'API 耗时', icon: '⏱️' },
@@ -56,8 +56,10 @@ const menuItems: MenuItem[] = [
   { path: '/general-settings', name: '通用设置', icon: '⚙️' },
 ]
 
-// 展开状态：默认展开「配置管理」
-const expandedGroups = ref<Set<string>>(new Set())
+// 展开状态：默认不展开，但当前路由所在分组自动展开
+const expandedGroups = ref<Set<string>>(new Set(
+  menuItems.filter(m => m.children?.some(c => c.path && route.path === c.path)).map(m => m.name)
+))
 
 const isActive = (item: MenuItem) => {
   if (item.path) {

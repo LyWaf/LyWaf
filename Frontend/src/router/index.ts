@@ -114,7 +114,7 @@ const routes: RouteRecordRaw[] = [
     path: '/packet-capture',
     name: 'PacketCapture',
     component: () => import('@/views/PacketCapture.vue'),
-    meta: { title: '抓包管理', icon: '📦' }
+    meta: { title: '代理管理', icon: '📦' }
   },
   {
     path: '/general-settings',

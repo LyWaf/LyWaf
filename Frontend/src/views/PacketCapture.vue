@@ -8,14 +8,16 @@ import DateTimePicker from '@/components/common/DateTimePicker.vue'
 const { showSuccess, showError } = useToast()
 
 // ==================== Tab ====================
-const activeTab = ref<'settings' | 'details'>('settings')
+const activeTab = ref<'settings' | 'pcapSettings' | 'details'>('settings')
 
-// ==================== 抓包设置 ====================
+// ==================== 代理设置 ====================
 const loading = ref(false)
 const ports = ref<PcapPortStatus[]>([])
 const caCertExists = ref(false)
 const certDownloadUrl = ref('')
 const togglingPort = ref<string | null>(null)
+const anyPcapEnabled = computed(() => ports.value.some(p => p.enablePcap))
+watch(anyPcapEnabled, (val) => { if (!val && activeTab.value !== 'settings') activeTab.value = 'settings' })
 
 const loadStatus = async () => {
   loading.value = true
@@ -372,8 +374,19 @@ const getMethodClass = (method: string) => {
               ? 'text-gray-100 border-primary-500'
               : 'text-gray-500 border-transparent hover:text-gray-300'
           ]"
+        >代理设置</button>
+        <button
+          v-if="anyPcapEnabled"
+          @click="activeTab = 'pcapSettings'"
+          :class="[
+            'text-base font-semibold pb-1 border-b-2 transition-colors',
+            activeTab === 'pcapSettings'
+              ? 'text-gray-100 border-primary-500'
+              : 'text-gray-500 border-transparent hover:text-gray-300'
+          ]"
         >抓包设置</button>
         <button
+          v-if="anyPcapEnabled"
           @click="activeTab = 'details'"
           :class="[
             'text-base font-semibold pb-1 border-b-2 transition-colors',
@@ -385,7 +398,7 @@ const getMethodClass = (method: string) => {
       </div>
     </div>
 
-    <!-- ==================== 抓包设置 Tab ==================== -->
+    <!-- ==================== 代理设置 Tab ==================== -->
     <template v-if="activeTab === 'settings'">
       <!-- 加载中 -->
       <div v-if="loading && ports.length === 0" class="card flex items-center justify-center py-12">
@@ -511,118 +524,122 @@ const getMethodClass = (method: string) => {
           </div>
         </div>
 
-        <!-- CA 证书 -->
-        <div class="card">
-          <h3 class="text-sm font-semibold text-gray-200 mb-4">CA 证书</h3>
-          <div class="flex items-center gap-4">
-            <div class="flex-1">
-              <p class="text-sm text-gray-400">
-                HTTPS 抓包需要客户端安装并信任 CA 根证书。点击下载证书后，按照下方说明安装到对应设备。
-              </p>
-              <div class="flex items-center gap-2 mt-2">
-                <span :class="['w-2 h-2 rounded-full', caCertExists ? 'bg-green-500' : 'bg-gray-500']"></span>
-                <span class="text-xs" :class="caCertExists ? 'text-green-400' : 'text-gray-500'">
-                  {{ caCertExists ? 'CA 证书已生成' : 'CA 证书未生成（启用抓包后自动生成）' }}
-                </span>
-              </div>
-            </div>
-            <div class="flex items-center gap-2 flex-shrink-0">
-              <button
-                @click="downloadCert"
-                :disabled="!caCertExists"
-                class="btn btn-sm btn-primary flex items-center gap-1.5"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                下载证书
-              </button>
-              <button
-                v-if="certDownloadUrl"
-                @click="copyCertUrl"
-                class="btn btn-sm btn-secondary flex items-center gap-1.5"
-                :title="certDownloadUrl"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                </svg>
-                复制下载链接
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- 安装说明 -->
-        <div class="card">
-          <h3 class="text-sm font-semibold text-gray-200 mb-4">证书安装说明</h3>
-          <div class="space-y-2">
-            <!-- Windows -->
-            <div class="border border-dark-border rounded-lg overflow-hidden">
-              <div
-                @click="toggleGuide('windows')"
-                class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-white/5 transition-colors"
-              >
-                <div class="flex items-center gap-3">
-                  <span class="text-base">🖥️</span>
-                  <span class="text-sm text-gray-200 font-medium">Windows</span>
-                </div>
-                <span class="text-xs text-gray-500 transition-transform duration-200" :class="expandedGuide === 'windows' ? 'rotate-90' : ''">›</span>
-              </div>
-              <div v-show="expandedGuide === 'windows'" class="px-4 pb-4 text-sm text-gray-400 space-y-2 border-t border-dark-border/50 pt-3">
-                <p>1. 双击下载的 <code class="text-primary-400">proxy-ca.crt</code> 文件</p>
-                <p>2. 点击「安装证书」</p>
-                <p>3. 选择「本地计算机」，点击下一步</p>
-                <p>4. 选择「将所有的证书都放入下列存储」，点击浏览</p>
-                <p>5. 选择「受信任的根证书颁发机构」，确定</p>
-                <p>6. 完成安装，重启浏览器</p>
-              </div>
-            </div>
-
-            <!-- Android -->
-            <div class="border border-dark-border rounded-lg overflow-hidden">
-              <div
-                @click="toggleGuide('android')"
-                class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-white/5 transition-colors"
-              >
-                <div class="flex items-center gap-3">
-                  <span class="text-base">📱</span>
-                  <span class="text-sm text-gray-200 font-medium">Android</span>
-                </div>
-                <span class="text-xs text-gray-500 transition-transform duration-200" :class="expandedGuide === 'android' ? 'rotate-90' : ''">›</span>
-              </div>
-              <div v-show="expandedGuide === 'android'" class="px-4 pb-4 text-sm text-gray-400 space-y-2 border-t border-dark-border/50 pt-3">
-                <p>1. 将 <code class="text-primary-400">proxy-ca.crt</code> 传输到手机</p>
-                <p>2. 打开「设置」→「安全」→「加密与凭据」</p>
-                <p>3. 点击「安装证书」→「CA 证书」</p>
-                <p>4. 选择下载的证书文件，确认安装</p>
-                <p>5. 在 WiFi 设置中配置代理服务器地址和端口</p>
-                <p class="text-yellow-400/80 text-xs mt-2">注意：Android 7.0+ 用户应用可能不信任用户安装的 CA 证书，部分应用的 HTTPS 流量可能无法抓取</p>
-              </div>
-            </div>
-
-            <!-- iOS -->
-            <div class="border border-dark-border rounded-lg overflow-hidden">
-              <div
-                @click="toggleGuide('ios')"
-                class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-white/5 transition-colors"
-              >
-                <div class="flex items-center gap-3">
-                  <span class="text-base">📱</span>
-                  <span class="text-sm text-gray-200 font-medium">iOS / iPadOS</span>
-                </div>
-                <span class="text-xs text-gray-500 transition-transform duration-200" :class="expandedGuide === 'ios' ? 'rotate-90' : ''">›</span>
-              </div>
-              <div v-show="expandedGuide === 'ios'" class="px-4 pb-4 text-sm text-gray-400 space-y-2 border-t border-dark-border/50 pt-3">
-                <p>1. 使用 Safari 浏览器下载 <code class="text-primary-400">proxy-ca.crt</code></p>
-                <p>2. 打开「设置」→「已下载描述文件」→ 点击安装</p>
-                <p>3. 进入「设置」→「通用」→「关于本机」→「证书信任设置」</p>
-                <p>4. 开启「LyWaf Proxy CA」的完全信任</p>
-                <p>5. 在 WiFi 设置中配置 HTTP 代理</p>
-              </div>
-            </div>
-          </div>
-        </div>
       </template>
+    </template>
+
+    <!-- ==================== 抓包设置 Tab ==================== -->
+    <template v-if="activeTab === 'pcapSettings'">
+      <!-- CA 证书 -->
+      <div class="card">
+        <h3 class="text-sm font-semibold text-gray-200 mb-4">CA 证书</h3>
+        <div class="flex items-center gap-4">
+          <div class="flex-1">
+            <p class="text-sm text-gray-400">
+              HTTPS 抓包需要客户端安装并信任 CA 根证书。点击下载证书后，按照下方说明安装到对应设备。
+            </p>
+            <div class="flex items-center gap-2 mt-2">
+              <span :class="['w-2 h-2 rounded-full', caCertExists ? 'bg-green-500' : 'bg-gray-500']"></span>
+              <span class="text-xs" :class="caCertExists ? 'text-green-400' : 'text-gray-500'">
+                {{ caCertExists ? 'CA 证书已生成' : 'CA 证书未生成（启用抓包后自动生成）' }}
+              </span>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 flex-shrink-0">
+            <button
+              @click="downloadCert"
+              :disabled="!caCertExists"
+              class="btn btn-sm btn-primary flex items-center gap-1.5"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              下载证书
+            </button>
+            <button
+              v-if="certDownloadUrl"
+              @click="copyCertUrl"
+              class="btn btn-sm btn-secondary flex items-center gap-1.5"
+              :title="certDownloadUrl"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+              </svg>
+              复制下载链接
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 安装说明 -->
+      <div class="card">
+        <h3 class="text-sm font-semibold text-gray-200 mb-4">证书安装说明</h3>
+        <div class="space-y-2">
+          <!-- Windows -->
+          <div class="border border-dark-border rounded-lg overflow-hidden">
+            <div
+              @click="toggleGuide('windows')"
+              class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-white/5 transition-colors"
+            >
+              <div class="flex items-center gap-3">
+                <span class="text-base">🖥️</span>
+                <span class="text-sm text-gray-200 font-medium">Windows</span>
+              </div>
+              <span class="text-xs text-gray-500 transition-transform duration-200" :class="expandedGuide === 'windows' ? 'rotate-90' : ''">›</span>
+            </div>
+            <div v-show="expandedGuide === 'windows'" class="px-4 pb-4 text-sm text-gray-400 space-y-2 border-t border-dark-border/50 pt-3">
+              <p>1. 双击下载的 <code class="text-primary-400">proxy-ca.crt</code> 文件</p>
+              <p>2. 点击「安装证书」</p>
+              <p>3. 选择「本地计算机」，点击下一步</p>
+              <p>4. 选择「将所有的证书都放入下列存储」，点击浏览</p>
+              <p>5. 选择「受信任的根证书颁发机构」，确定</p>
+              <p>6. 完成安装，重启浏览器</p>
+            </div>
+          </div>
+
+          <!-- Android -->
+          <div class="border border-dark-border rounded-lg overflow-hidden">
+            <div
+              @click="toggleGuide('android')"
+              class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-white/5 transition-colors"
+            >
+              <div class="flex items-center gap-3">
+                <span class="text-base">📱</span>
+                <span class="text-sm text-gray-200 font-medium">Android</span>
+              </div>
+              <span class="text-xs text-gray-500 transition-transform duration-200" :class="expandedGuide === 'android' ? 'rotate-90' : ''">›</span>
+            </div>
+            <div v-show="expandedGuide === 'android'" class="px-4 pb-4 text-sm text-gray-400 space-y-2 border-t border-dark-border/50 pt-3">
+              <p>1. 将 <code class="text-primary-400">proxy-ca.crt</code> 传输到手机</p>
+              <p>2. 打开「设置」→「安全」→「加密与凭据」</p>
+              <p>3. 点击「安装证书」→「CA 证书」</p>
+              <p>4. 选择下载的证书文件，确认安装</p>
+              <p>5. 在 WiFi 设置中配置代理服务器地址和端口</p>
+              <p class="text-yellow-400/80 text-xs mt-2">注意：Android 7.0+ 用户应用可能不信任用户安装的 CA 证书，部分应用的 HTTPS 流量可能无法抓取</p>
+            </div>
+          </div>
+
+          <!-- iOS -->
+          <div class="border border-dark-border rounded-lg overflow-hidden">
+            <div
+              @click="toggleGuide('ios')"
+              class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-white/5 transition-colors"
+            >
+              <div class="flex items-center gap-3">
+                <span class="text-base">📱</span>
+                <span class="text-sm text-gray-200 font-medium">iOS / iPadOS</span>
+              </div>
+              <span class="text-xs text-gray-500 transition-transform duration-200" :class="expandedGuide === 'ios' ? 'rotate-90' : ''">›</span>
+            </div>
+            <div v-show="expandedGuide === 'ios'" class="px-4 pb-4 text-sm text-gray-400 space-y-2 border-t border-dark-border/50 pt-3">
+              <p>1. 使用 Safari 浏览器下载 <code class="text-primary-400">proxy-ca.crt</code></p>
+              <p>2. 打开「设置」→「已下载描述文件」→ 点击安装</p>
+              <p>3. 进入「设置」→「通用」→「关于本机」→「证书信任设置」</p>
+              <p>4. 开启「LyWaf Proxy CA」的完全信任</p>
+              <p>5. 在 WiFi 设置中配置 HTTP 代理</p>
+            </div>
+          </div>
+        </div>
+      </div>
     </template>
 
     <!-- ==================== 抓包明细 Tab ==================== -->

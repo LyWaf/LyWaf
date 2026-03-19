@@ -1159,7 +1159,7 @@ export const interceptLogApi = {
   },
 }
 
-// ==================== 抓包管理 API ====================
+// ==================== 代理管理 API ====================
 
 export interface PcapPortStatus {
   port: string
