@@ -29,7 +29,7 @@
     .\build.ps1 -Target all         # 编译所有平台
     .\build.ps1 -Target win-x64 -SkipFrontend  # 跳过前端，仅编译后端
     .\build.ps1 -Target win-x64 -Trim         # 启用裁剪，减小体积
-    .\build.ps1 -Target win-x64 -CopyDirs plugins,certs  # 额外拷贝 plugins 和 certs 目录
+    .\build.ps1 -Target win-x64 -CopyDirs temp,datas,Rules  # 额外拷贝 temp 和 datas 目录
     .\build.ps1 -Target win-x64,osx-arm64              # 同时编译多个平台
 #>
 

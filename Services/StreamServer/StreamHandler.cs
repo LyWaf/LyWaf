@@ -210,11 +210,14 @@ public class StreamHandler
     {
         var dataTimeout = TimeSpan.FromSeconds(
             _streamConfig.DataTimeout ?? _globalOptions.DataTimeout);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        var clientToTarget = CopyStreamAsync(clientStream, targetStream, dataTimeout, cancellationToken);
-        var targetToClient = CopyStreamAsync(targetStream, clientStream, dataTimeout, cancellationToken);
+        var clientToTarget = CopyStreamAsync(clientStream, targetStream, dataTimeout, cts.Token);
+        var targetToClient = CopyStreamAsync(targetStream, clientStream, dataTimeout, cts.Token);
 
         await Task.WhenAny(clientToTarget, targetToClient);
+        await cts.CancelAsync();
+        await Task.WhenAll(clientToTarget, targetToClient);
     }
 
     private static async Task CopyStreamAsync(Stream source, Stream destination, TimeSpan timeout, CancellationToken cancellationToken)
