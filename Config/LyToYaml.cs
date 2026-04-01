@@ -688,11 +688,13 @@ public static class LyToAppSettingsConverter
             var defaultFileServerConfig = new Dictionary<string, object>();
             var hasRespond = false;
             var defaultRespondConfig = new Dictionary<string, object>();
+            var siteHeaderUps = new Dictionary<string, object>();
+            var siteHeaderDowns = new Dictionary<string, object>();
 
             foreach (var directive in siteContent)
             {
                 var key = directive.Key.ToLower();
-                
+
                 // 处理 handle 或 route 块（带路径的子路由）
                 if ((key == "handle" || key == "route") && directive.Value is Dictionary<string, object> handleConfig)
                 {
@@ -818,6 +820,18 @@ public static class LyToAppSettingsConverter
                             // 将这些属性收集到 file_server 配置中
                             defaultFileServerConfig[directive.Key] = directive.Value;
                             break;
+
+                        case "headerups":
+                        case "header_ups":
+                            if (directive.Value is Dictionary<string, object> hdrUps)
+                                foreach (var kv in hdrUps) siteHeaderUps[kv.Key] = kv.Value;
+                            break;
+
+                        case "headerdowns":
+                        case "header_downs":
+                            if (directive.Value is Dictionary<string, object> hdrDowns)
+                                foreach (var kv in hdrDowns) siteHeaderDowns[kv.Key] = kv.Value;
+                            break;
                     }
                 }
             }
@@ -935,6 +949,7 @@ public static class LyToAppSettingsConverter
                         ["Match"] = match,
                         ["Order"] = ctx.NextRouteOrder(normalizedPath, hosts.Count > 0)
                     };
+                    ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
 
                     ctx.Routes[routeId] = routeConfig;
                 }
@@ -966,6 +981,7 @@ public static class LyToAppSettingsConverter
                         ["Match"] = match,
                         ["Order"] = ctx.NextRouteOrder(matchPath, hosts.Count > 0)
                     };
+                    ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
 
                     ctx.Routes[fileServerId] = routeConfig;
                 }
@@ -990,6 +1006,7 @@ public static class LyToAppSettingsConverter
                         ["Match"] = match,
                         ["Order"] = ctx.NextRouteOrder(normalizedPath, hosts.Count > 0)
                     };
+                    ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
 
                     ctx.Routes[routeId] = routeConfig;
                     ctx.HasFileServerRoute = true; // 确保 cluster1 存在
@@ -1027,6 +1044,7 @@ public static class LyToAppSettingsConverter
                     ["Match"] = match,
                     ["Order"] = ctx.NextRouteOrder("/{**catch-all}", hosts.Count > 0)
                 };
+                ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
 
                 ctx.Routes[routeId] = routeConfig;
             }
@@ -1049,6 +1067,7 @@ public static class LyToAppSettingsConverter
                     ["Match"] = match,
                     ["Order"] = ctx.NextRouteOrder("/{**catch-all}", hosts.Count > 0)
                 };
+                ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
 
                 ctx.Routes[routeId] = routeConfig;
                 ctx.HasFileServerRoute = true; // 确保 cluster1 存在
@@ -1076,6 +1095,7 @@ public static class LyToAppSettingsConverter
                     ["Match"] = match,
                     ["Order"] = ctx.NextRouteOrder("/{**file-all}", hosts.Count > 0)
                 };
+                ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
 
                 ctx.Routes[fileServerId] = routeConfig;
             }
@@ -1919,6 +1939,25 @@ public static class LyToAppSettingsConverter
                 }
                 break;
         }
+    }
+
+    /// <summary>
+    /// 将站点级 HeaderUps/HeaderDowns 写入路由 Metadata
+    /// 序列化为 JSON 字符串，避免 ':' 被 .NET Configuration 当作层级分隔符
+    /// </summary>
+    private static void ApplyHeaderMetadata(
+        Dictionary<string, object> routeConfig,
+        Dictionary<string, object> headerUps,
+        Dictionary<string, object> headerDowns)
+    {
+        if (headerUps.Count == 0 && headerDowns.Count == 0) return;
+        var metadata = EnsureDict(routeConfig, "Metadata");
+        if (headerUps.Count > 0)
+            metadata["_HeaderUps"] = System.Text.Json.JsonSerializer.Serialize(
+                headerUps.ToDictionary(kv => kv.Key, kv => kv.Value?.ToString() ?? ""));
+        if (headerDowns.Count > 0)
+            metadata["_HeaderDowns"] = System.Text.Json.JsonSerializer.Serialize(
+                headerDowns.ToDictionary(kv => kv.Key, kv => kv.Value?.ToString() ?? ""));
     }
 
     private static Dictionary<string, object> EnsureDict(Dictionary<string, object> parent, string key)

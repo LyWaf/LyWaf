@@ -321,7 +321,7 @@ if ($Target.Count -eq 1 -and $Target[0] -eq "all") {
     $TargetRIDs = $AllRIDs
 } else {
     # 支持数组形式（PowerShell 逗号自动拆分）和字符串内逗号两种写法
-    $TargetRIDs = $Target | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+    $TargetRIDs = @($Target | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
 }
 
 # 编译

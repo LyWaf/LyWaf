@@ -1,4 +1,5 @@
 
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using LyWaf.Services.WafInfo;
@@ -12,6 +13,18 @@ namespace LyWaf.Transformer
     // 1. 创建自定义请求转换器
     public class WafTrans : ITransformProvider
     {
+        /// <summary>
+        /// 路由级 Header 配置缓存（key = metadata JSON 字符串，value = 解析后的字典）
+        /// 同一个路由配置不会变化，只需解析一次
+        /// </summary>
+        private static readonly ConcurrentDictionary<string, Dictionary<string, string>> _headerCache = new();
+
+        private static Dictionary<string, string> ParseHeaderMetadata(string json)
+        {
+            return _headerCache.GetOrAdd(json, static j =>
+                System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(j) ?? []);
+        }
+
         /// <summary>
         /// 从请求头中提取现有的 Forwarded 数据（同时解析 Forwarded 和 X-Forwarded-* 格式）
         /// </summary>
@@ -195,9 +208,29 @@ namespace LyWaf.Transformer
 
             transformBuildContext.AddRequestTransform(async transformContext =>
             {
+                var proxyHeaders = transformContext.ProxyRequest.Headers;
+                // 全局 HeaderUps
                 foreach (var (k, v) in services.GetOptions().HeaderUps)
                 {
-                    transformContext.HttpContext.Request.Headers[k] = v;
+                    var headerValue = v.Contains('{')
+                        ? Utils.StringUtil.FormatTemplate(v, transformContext.HttpContext)
+                        : v;
+                    proxyHeaders.Remove(k);
+                    proxyHeaders.TryAddWithoutValidation(k, headerValue);
+                }
+                // 路由级 HeaderUps（通过 Metadata 按域名配置，覆盖全局）
+                var routeModel = transformContext.HttpContext.GetEndpoint()?.Metadata.GetMetadata<Yarp.ReverseProxy.Model.RouteModel>();
+                var routeMetadata = routeModel?.Config?.Metadata;
+                if (routeMetadata?.TryGetValue("_HeaderUps", out var headerUpsJson) == true && !string.IsNullOrEmpty(headerUpsJson))
+                {
+                    foreach (var (hk, hv) in ParseHeaderMetadata(headerUpsJson))
+                    {
+                        var headerValue = hv.Contains('{')
+                            ? Utils.StringUtil.FormatTemplate(hv, transformContext.HttpContext)
+                            : hv;
+                        proxyHeaders.Remove(hk);
+                        proxyHeaders.TryAddWithoutValidation(hk, headerValue);
+                    }
                 }
                 transformContext.HttpContext.Items.Add("ProxyDestUrl", transformContext.DestinationPrefix);
                 
@@ -221,9 +254,26 @@ namespace LyWaf.Transformer
                     transformContext.HttpContext.Items["BackendTime"] = backendTime;
                 }
                 
+                // 全局 HeaderDowns
                 foreach (var (k, v) in services.GetOptions().HeaderDowns)
                 {
-                    transformContext.HttpContext.Response.Headers[k] = v;
+                    var headerValue = v.Contains('{')
+                        ? Utils.StringUtil.FormatTemplate(v, transformContext.HttpContext)
+                        : v;
+                    transformContext.HttpContext.Response.Headers[k] = headerValue;
+                }
+                // 路由级 HeaderDowns（通过 Metadata 按域名配置，覆盖全局）
+                var respRouteModel = transformContext.HttpContext.GetEndpoint()?.Metadata.GetMetadata<Yarp.ReverseProxy.Model.RouteModel>();
+                var respRouteMetadata = respRouteModel?.Config?.Metadata;
+                if (respRouteMetadata?.TryGetValue("_HeaderDowns", out var headerDownsJson) == true && !string.IsNullOrEmpty(headerDownsJson))
+                {
+                    foreach (var (hk, hv) in ParseHeaderMetadata(headerDownsJson))
+                    {
+                        var headerValue = hv.Contains('{')
+                            ? Utils.StringUtil.FormatTemplate(hv, transformContext.HttpContext)
+                            : hv;
+                        transformContext.HttpContext.Response.Headers[hk] = headerValue;
+                    }
                 }
                 transformContext.HttpContext.Response.Headers.Server = "LyWaf";
             });
