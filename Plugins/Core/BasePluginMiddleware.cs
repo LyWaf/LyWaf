@@ -3,6 +3,7 @@ using LyWaf.Shared;
 using LyWaf.Services.WafInfo;
 using LyWaf.Utils;
 using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Http.Extensions;
 
 namespace LyWaf.Plugins.Core;
 
@@ -34,6 +35,10 @@ public class BasePluginMiddleware(IPluginEventBus eventBus, IOptions<WafInfoOpti
             || string.Equals(context.Request.Headers.Upgrade.ToString(),
                 "websocket", StringComparison.OrdinalIgnoreCase);
 
+        if(isWebSocket)
+        {
+            _logger.Info($"Websocket长链开始建立连接: {context.Request.GetDisplayUrl()}");
+        }
         // 跟踪活跃连接（区分 HTTP 和 WebSocket）
         ConnectionTracker.OnRequestStart(clientIp, isWebSocket);
 

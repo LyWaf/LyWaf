@@ -208,6 +208,15 @@ namespace LyWaf.Transformer
 
             transformBuildContext.AddRequestTransform(async transformContext =>
             {
+                transformContext.HttpContext.Items.Add("ProxyDestUrl", transformContext.DestinationPrefix);
+                // 记录发送到后端的时间点
+                transformContext.HttpContext.Items["BackendStartTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+                // 处理 Forwarded 头
+                if (isOpen)
+                {
+                    ProcessForwardedHeaders(transformContext.ProxyRequest.Headers, forwardedConfig!, transformContext.HttpContext);
+                }
                 var proxyHeaders = transformContext.ProxyRequest.Headers;
                 // 全局 HeaderUps
                 foreach (var (k, v) in services.GetOptions().HeaderUps)
@@ -231,16 +240,6 @@ namespace LyWaf.Transformer
                         proxyHeaders.Remove(hk);
                         proxyHeaders.TryAddWithoutValidation(hk, headerValue);
                     }
-                }
-                transformContext.HttpContext.Items.Add("ProxyDestUrl", transformContext.DestinationPrefix);
-                
-                // 记录发送到后端的时间点
-                transformContext.HttpContext.Items["BackendStartTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-                // 处理 Forwarded 头
-                if (isOpen)
-                {
-                    ProcessForwardedHeaders(transformContext.ProxyRequest.Headers, forwardedConfig!, transformContext.HttpContext);
                 }
             });
 
