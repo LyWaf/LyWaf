@@ -25,6 +25,7 @@ public class ProxyHandler
     private const byte AUTH_NO_ACCEPTABLE = 0xFF;
 
     private const byte CMD_CONNECT = 0x01;
+    private const byte CMD_UDP_ASSOCIATE = 0x03;
 
     private const byte ATYP_IPV4 = 0x01;
     private const byte ATYP_DOMAIN = 0x03;
@@ -816,6 +817,12 @@ public class ProxyHandler
             return;
         }
 
+        if (cmd == CMD_UDP_ASSOCIATE)
+        {
+            await Socks5UdpAssociateAsync(clientSocket, clientStream, cancellationToken);
+            return;
+        }
+
         if (cmd != CMD_CONNECT)
         {
             await Socks5ReplyAsync(clientStream, REP_COMMAND_NOT_SUPPORTED, cancellationToken);
@@ -823,6 +830,153 @@ public class ProxyHandler
         }
 
         await Socks5ConnectAsync(clientSocket, clientStream, targetHost, targetPort, clientIp, cancellationToken);
+    }
+
+    /// <summary>
+    /// SOCKS5 UDP ASSOCIATE (CMD=3)
+    /// 绑定一个 UDP 端口用于中继，客户端通过该端口收发 UDP 数据包。
+    /// 当客户端 TCP 控制连接关闭时，UDP 中继自动停止。
+    /// </summary>
+    private async Task Socks5UdpAssociateAsync(Socket clientSocket, NetworkStream clientStream, CancellationToken cancellationToken)
+    {
+        UdpClient? udpRelay = null;
+        try
+        {
+            // 绑定一个随机 UDP 端口
+            udpRelay = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
+            var localEp = (IPEndPoint)udpRelay.Client.LocalEndPoint!;
+
+            // 回复客户端：告知 UDP 中继地址和端口
+            // 使用服务器的监听地址，客户端通过此端口发 UDP
+            var serverIp = clientSocket.LocalEndPoint is IPEndPoint sep ? sep.Address : IPAddress.Any;
+            if (IPAddress.IsLoopback(serverIp) || serverIp.Equals(IPAddress.Any) || serverIp.Equals(IPAddress.IPv6Any))
+                serverIp = IPAddress.Loopback;
+
+            var ipBytes = serverIp.MapToIPv4().GetAddressBytes();
+            var portBytes = new byte[] { (byte)(localEp.Port >> 8), (byte)(localEp.Port & 0xFF) };
+            var reply = new byte[] { SOCKS_VERSION, REP_SUCCESS, 0x00, ATYP_IPV4, ipBytes[0], ipBytes[1], ipBytes[2], ipBytes[3], portBytes[0], portBytes[1] };
+            await clientStream.WriteAsync(reply, cancellationToken);
+            await clientStream.FlushAsync(cancellationToken);
+
+            _logger.Debug("SOCKS5 UDP ASSOCIATE 已绑定: {Ip}:{Port}", serverIp, localEp.Port);
+
+            // UDP 中继任务：在客户端和目标之间中继 UDP 数据包
+            IPEndPoint? clientUdpEp = null;
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            var relayTask = Task.Run(async () =>
+            {
+                var buf = new byte[65536];
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var result = await udpRelay.ReceiveAsync(cts.Token);
+                        var data = result.Buffer;
+                        var sender = result.RemoteEndPoint;
+
+                        if (clientUdpEp == null || sender.Equals(clientUdpEp))
+                        {
+                            // 来自客户端 → 解析 SOCKS5 UDP 头部，转发到目标
+                            clientUdpEp ??= sender;
+                            if (data.Length < 10) continue;
+
+                            // +----+------+------+----------+----------+----------+
+                            // |RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
+                            // +----+------+------+----------+----------+----------+
+                            // | 2  |  1   |  1   | Variable |    2     | Variable |
+                            // +----+------+------+----------+----------+----------+
+                            var frag = data[2];
+                            if (frag != 0) continue; // 不支持分片
+
+                            var atyp = data[3];
+                            int headerLen;
+                            IPEndPoint targetEp;
+
+                            switch (atyp)
+                            {
+                                case ATYP_IPV4:
+                                    headerLen = 4 + 4 + 2; // RSV(2)+FRAG(1)+ATYP(1)+IP(4)+PORT(2)
+                                    if (data.Length < headerLen) continue;
+                                    var ipv4 = new IPAddress(data.AsSpan(4, 4));
+                                    var port4 = (data[8] << 8) | data[9];
+                                    targetEp = new IPEndPoint(ipv4, port4);
+                                    break;
+
+                                case ATYP_DOMAIN:
+                                    var dLen = data[4];
+                                    headerLen = 4 + 1 + dLen + 2;
+                                    if (data.Length < headerLen) continue;
+                                    var domain = Encoding.UTF8.GetString(data, 5, dLen);
+                                    var portD = (data[5 + dLen] << 8) | data[6 + dLen];
+                                    var addresses = await System.Net.Dns.GetHostAddressesAsync(domain, cts.Token);
+                                    if (addresses.Length == 0) continue;
+                                    targetEp = new IPEndPoint(addresses[0], portD);
+                                    break;
+
+                                case ATYP_IPV6:
+                                    headerLen = 4 + 16 + 2;
+                                    if (data.Length < headerLen) continue;
+                                    var ipv6 = new IPAddress(data.AsSpan(4, 16));
+                                    var port6 = (data[20] << 8) | data[21];
+                                    targetEp = new IPEndPoint(ipv6, port6);
+                                    break;
+
+                                default:
+                                    continue;
+                            }
+
+                            // 转发净数据到目标
+                            var payload = data.AsMemory(headerLen);
+                            await udpRelay.SendAsync(payload, targetEp, cts.Token);
+                        }
+                        else
+                        {
+                            // 来自目标 → 封装 SOCKS5 UDP 头部，回传给客户端
+                            var senderBytes = sender.Address.MapToIPv4().GetAddressBytes();
+                            var senderPort = new byte[] { (byte)(sender.Port >> 8), (byte)(sender.Port & 0xFF) };
+
+                            // RSV(2) + FRAG(1) + ATYP(1) + IP(4) + PORT(2) + DATA
+                            var header = new byte[] { 0, 0, 0, ATYP_IPV4, senderBytes[0], senderBytes[1], senderBytes[2], senderBytes[3], senderPort[0], senderPort[1] };
+                            var packet = new byte[header.Length + data.Length];
+                            header.CopyTo(packet, 0);
+                            data.CopyTo(packet, header.Length);
+
+                            await udpRelay.SendAsync(packet.AsMemory(), clientUdpEp, cts.Token);
+                        }
+                    }
+                    catch (OperationCanceledException) { break; }
+                    catch (SocketException) { break; }
+                    catch (ObjectDisposedException) { break; }
+                }
+            }, cts.Token);
+
+            // TCP 控制连接保活：等待客户端关闭 TCP 连接
+            // RFC 1928: "A UDP association terminates when the TCP connection that the
+            //            UDP ASSOCIATE request arrived on terminates."
+            var tcpBuf = new byte[1];
+            try
+            {
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    var n = await clientStream.ReadAsync(tcpBuf, cts.Token);
+                    if (n == 0) break; // 客户端关闭了 TCP 连接
+                }
+            }
+            catch { /* TCP 断开 */ }
+
+            await cts.CancelAsync();
+            try { await relayTask; } catch { /* ignore */ }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warn("SOCKS5 UDP ASSOCIATE 异常: {Message}", ex.Message);
+            await Socks5ReplyAsync(clientStream, REP_GENERAL_FAILURE, cancellationToken);
+        }
+        finally
+        {
+            udpRelay?.Dispose();
+        }
     }
 
     private async Task Socks5ConnectAsync(Socket clientSocket, NetworkStream clientStream,
