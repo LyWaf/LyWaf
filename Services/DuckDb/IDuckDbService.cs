@@ -8,7 +8,7 @@ namespace LyWaf.Services.DuckDb;
 public interface IDuckDbService : IDisposable
 {
     /// <summary>DuckDB 是否已启用</summary>
-    bool IsEnabled { get; }
+    bool IsEnabled { get; set; }
 
     /// <summary>获取数据库连接（单例长连接）</summary>
     DuckDBConnection GetConnection();

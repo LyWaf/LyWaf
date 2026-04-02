@@ -16,11 +16,12 @@ public class DuckDbService : IDuckDbService
     private readonly object _lock = new();
     private bool _disposed;
 
-    public bool IsEnabled => _options.Enabled;
+    public bool IsEnabled { get; set; }
 
     public DuckDbService(IOptions<DuckDbOptions> options)
     {
         _options = options.Value;
+        IsEnabled = _options.Enabled;
 
         if (!_options.Enabled)
         {

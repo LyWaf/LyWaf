@@ -30,32 +30,39 @@ public class StatisticFlushService : BackgroundService
     {
         if (!_db.IsEnabled) return;
 
-        // 初始化 Schema
-        await _db.InitializeSchemaAsync();
-
-        // 等待应用完全启动
-        await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
-
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
-            {
-                if (_finalFlushed) break;
-                FlushAll();
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "DuckDB 刷写周期失败");
-            }
+            // 初始化 Schema
+            await _db.InitializeSchemaAsync();
 
-            try
+            // 等待应用完全启动
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromSeconds(_options.FlushIntervalSeconds), stoppingToken);
+                try
+                {
+                    if (_finalFlushed) break;
+                    FlushAll();
+                }
+                catch (Exception ex)
+                {
+                    _logger.Error(ex, "DuckDB 刷写周期失败");
+                }
+
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(_options.FlushIntervalSeconds), stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+        }
+        catch (Exception e)
+        {
+            _db.IsEnabled = false;
         }
     }
 

@@ -470,6 +470,23 @@ public class ProxyHandler
             await clientSsl.WriteAsync(respHeaderBytes, timeoutCts.Token);
             await clientSsl.FlushAsync(timeoutCts.Token);
 
+            // WebSocket 升级（101 Switching Protocols）→ 切换为双向隧道
+            if (statusCode == 101)
+            {
+                _logger.Debug("Pcap WebSocket 升级: https://{Host}{Path}", targetHost, path);
+                _ = Task.Run(() => WritePcapLog(method, path, targetHost, clientIp, headers, requestBody, statusCode, responseHeaders, null), CancellationToken.None);
+
+                // SslStream 双向透传 WebSocket 帧
+                var wsTimeout = TimeSpan.FromSeconds(_options.DataTimeout);
+                using var wsCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var clientToTarget = CopyStreamAsync(clientSsl, targetSsl, wsTimeout, wsCts.Token);
+                var targetToClient = CopyStreamAsync(targetSsl, clientSsl, wsTimeout, wsCts.Token);
+                await Task.WhenAny(clientToTarget, targetToClient);
+                await wsCts.CancelAsync();
+                await Task.WhenAll(clientToTarget, targetToClient);
+                return;
+            }
+
             // 转发响应体（带捕获）
             string? responseBody = null;
             if (responseHeaders.TryGetValue("Content-Length", out var respClStr) &&
@@ -828,17 +845,47 @@ public class ProxyHandler
 
                 // 与目标建立真实 TLS
                 var targetSsl = new SslStream(targetNetStream, leaveInnerStreamOpen: true);
-                await targetSsl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                try
                 {
-                    TargetHost = targetHost,
-                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-                    RemoteCertificateValidationCallback = (_, _, _, _) => true,
-                }, cancellationToken);
+                    await targetSsl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                    {
+                        TargetHost = targetHost,
+                        CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+                        RemoteCertificateValidationCallback = (_, _, _, _) => true,
+                    }, cancellationToken);
+                }
+                catch (AuthenticationException ex)
+                {
+                    var inner = ex.InnerException?.Message ?? "无详细信息";
+                    _logger.Warn("SOCKS5 Pcap 目标 TLS 握手失败，降级为隧道模式: {Host}:{Port} ({Inner})", targetHost, targetPort, inner);
+                    _pcapFallbackCache[$"{clientIp}:{targetHost}"] = DateTime.UtcNow;
+                    targetSsl.Dispose();
+                    // 降级：重新建立连接走隧道透传
+                    targetSocket.Dispose();
+                    targetSocket = await ConnectTargetAsync(targetHost, targetPort, cancellationToken);
+                    using var fallbackStream = new NetworkStream(targetSocket, ownsSocket: false);
+                    await TunnelAsync(clientStream, fallbackStream, cancellationToken);
+                    return;
+                }
 
                 // 优先使用真实证书，否则使用假证书与客户端建立 TLS
-                var cert = TryGetRealCert(targetHost) ?? _pcapCertProvider.GetCertForHost(targetHost);
-                var clientSsl = new SslStream(clientStream, leaveInnerStreamOpen: true);
-                await clientSsl.AuthenticateAsServerAsync(cert, false, false);
+                SslStream? clientSsl = null;
+                try
+                {
+                    var cert = TryGetRealCert(targetHost) ?? _pcapCertProvider.GetCertForHost(targetHost);
+                    clientSsl = new SslStream(clientStream, leaveInnerStreamOpen: true);
+                    await clientSsl.AuthenticateAsServerAsync(cert, false, false);
+                }
+                catch (AuthenticationException ex)
+                {
+                    var inner = ex.InnerException?.Message ?? "无详细信息";
+                    _logger.Warn("SOCKS5 Pcap 假证书握手失败，{Min}分钟内降级为隧道模式: {ClientIp} → {Host}:{Port} ({Inner})",
+                        PcapFallbackExpiry.TotalMinutes, clientIp, targetHost, targetPort, inner);
+                    _pcapFallbackCache[$"{clientIp}:{targetHost}"] = DateTime.UtcNow;
+                    clientSsl?.Dispose();
+                    targetSsl.Dispose();
+                    return;
+                }
 
                 _logger.Debug("SOCKS5 Pcap 已建立: {Host}:{Port}", targetHost, targetPort);
 
