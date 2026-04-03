@@ -1241,9 +1241,19 @@ public class Program
         // 初始化 ServiceLocator，确保自定义 DNS 等服务可以通过 ServiceLocator 获取
         ServiceLocator.Initialize(app.Services);
 
-        // 初始化插件系统
+        // 初始化插件系统（不阻塞启动）
         var pluginManager = app.Services.GetRequiredService<PluginManager>();
-        pluginManager.InitializePluginsAsync(app.Services).GetAwaiter().GetResult();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await pluginManager.InitializePluginsAsync(app.Services);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "插件系统初始化失败");
+            }
+        });
 
         // 初始化认证服务（加载或创建 .lywaf.auth.json）
         var authService = app.Services.GetRequiredService<LyWaf.Services.Auth.IAuthService>();

@@ -6,7 +6,7 @@ namespace LyWaf.Services.DuckDb;
 
 /// <summary>
 /// 启动恢复服务：从 DuckDB 恢复上次运行的统计数据到内存
-/// 在 StartAsync 中阻塞执行，确保数据在第一个请求前恢复
+/// 在后台异步执行，不阻塞应用启动
 /// </summary>
 public class StatisticRecoveryService : IHostedService
 {
@@ -14,41 +14,58 @@ public class StatisticRecoveryService : IHostedService
     private readonly IDuckDbService _db;
     private readonly RuntimeLogService? _runtimeLog;
 
+    /// <summary>数据恢复是否已完成</summary>
+    public bool IsRecovered { get; private set; }
+
     public StatisticRecoveryService(IDuckDbService db, RuntimeLogService? runtimeLog = null)
     {
         _db = db;
         _runtimeLog = runtimeLog;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
     {
-        if (!_db.IsEnabled) return;
-
-        try
+        if (!_db.IsEnabled)
         {
-            // 先初始化 Schema（确保表存在）
-            await _db.InitializeSchemaAsync();
-
-            // Schema 就绪后立即记录启动（必须在恢复之前，以便 MarkAbnormalExits 正确标记）
-            _runtimeLog?.RecordStartup();
-
-            RecoverTraffic();
-            RecoverSecurityCounters();
-            RecoverSecurityTimeSlots();
-            RecoverSecurityAttackSources();
-            RecoverGeoTraffic();
-            RecoverApiTimings();
-            RecoverEndpointStats();
-            RecoverInterceptEvents();
-            _logger.Info("DuckDB 数据恢复完成");
-
-            // 恢复完成后，捕获基线值（用于计算当次运行增量）
-            _runtimeLog?.CaptureBaseline();
+            IsRecovered = true;
+            return Task.CompletedTask;
         }
-        catch (Exception ex)
+
+        // 不阻塞启动，后台执行恢复
+        _ = Task.Run(async () =>
         {
-            _logger.Error(ex, "DuckDB 数据恢复失败，将以空数据启动");
-        }
+            try
+            {
+                // 先初始化 Schema（确保表存在）
+                await _db.InitializeSchemaAsync();
+
+                // Schema 就绪后立即记录启动（必须在恢复之前，以便 MarkAbnormalExits 正确标记）
+                _runtimeLog?.RecordStartup();
+
+                RecoverTraffic();
+                RecoverSecurityCounters();
+                RecoverSecurityTimeSlots();
+                RecoverSecurityAttackSources();
+                RecoverGeoTraffic();
+                RecoverApiTimings();
+                RecoverEndpointStats();
+                RecoverInterceptEvents();
+                _logger.Info("DuckDB 数据恢复完成");
+
+                // 恢复完成后，捕获基线值（用于计算当次运行增量）
+                _runtimeLog?.CaptureBaseline();
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "DuckDB 数据恢复失败，将以空数据启动");
+            }
+            finally
+            {
+                IsRecovered = true;
+            }
+        }, cancellationToken);
+
+        return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
