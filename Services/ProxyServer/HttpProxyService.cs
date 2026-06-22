@@ -34,6 +34,9 @@ public class HttpProxyService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // 立即让出控制权，避免后续同步工作（Pcap CA 证书初始化、监听器绑定）阻塞 host 启动就绪
+        await Task.Yield();
+
         if (!_options.Enabled)
         {
             _logger.Info("代理服务未启用");

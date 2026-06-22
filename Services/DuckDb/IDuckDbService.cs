@@ -15,4 +15,7 @@ public interface IDuckDbService : IDisposable
 
     /// <summary>初始化表结构</summary>
     Task InitializeSchemaAsync();
+
+    /// <summary>执行 CHECKPOINT，将 WAL 合并进主库文件（控制 WAL 体积、加速下次启动）</summary>
+    void Checkpoint();
 }

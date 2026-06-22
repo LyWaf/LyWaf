@@ -100,6 +100,9 @@ public class StatisticFlushService : BackgroundService
         FlushApiTimings();
         FlushEndpointStats();
         FlushInterceptEvents();
+
+        // 合并 WAL 进主库，防止 WAL 无限增长导致下次启动重放缓慢
+        _db.Checkpoint();
     }
 
     // ===================== Traffic =====================

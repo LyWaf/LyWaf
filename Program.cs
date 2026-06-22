@@ -379,64 +379,100 @@ public class Program
             pidFile += ".pid";
         }
 
-        // 如果 PID 文件不存在，尝试通过 HTTP 请求停止服务
-        if (!File.Exists(pidFile))
+        // 尝试解析 PID（用于确认优雅退出 / 兜底强杀），缺失或异常时仍可走 HTTP 优雅停止
+        Process? process = null;
+        if (File.Exists(pidFile))
         {
-            _logger.Info("PID文件不存在: {PidFile}，尝试通过 HTTP 请求停止服务...", pidFile);
-            DoStopViaHttp(stop.Config);
-            return;
-        }
-
-        try
-        {
-            string content = File.ReadAllText(pidFile).Trim();
-            if (!int.TryParse(content, out int pid))
-            {
-                _logger.Info("PID文件格式错误: {PidFile}，尝试通过 HTTP 请求停止服务...", pidFile);
-                DoStopViaHttp(stop.Config);
-                return;
-            }
-
             try
             {
-                var process = Process.GetProcessById(pid);
-                if (process.HasExited)
+                string content = File.ReadAllText(pidFile).Trim();
+                if (int.TryParse(content, out int pid))
                 {
-                    _logger.Info("进程 {Pid} 已经退出", pid);
-                    return;
-                }
-
-                process.Kill();
-                process.WaitForExit(5000); // 等待最多5秒
-
-                if (process.HasExited)
-                {
-                    _logger.Info("✓ 进程 {Pid} 已成功停止", pid);
+                    try
+                    {
+                        process = Process.GetProcessById(pid);
+                        if (process.HasExited)
+                        {
+                            _logger.Info("进程 {Pid} 已经退出", pid);
+                            return;
+                        }
+                    }
+                    catch (ArgumentException)
+                    {
+                        _logger.Info("进程 {Pid} 不存在或已经退出", pid);
+                        return;
+                    }
                 }
                 else
                 {
-                    _logger.Warn("警告: 进程 {Pid} 可能未完全停止", pid);
+                    _logger.Warn("PID文件格式错误: {PidFile}，将尝试通过 HTTP 优雅停止", pidFile);
                 }
             }
-            catch (ArgumentException)
+            catch (Exception ex)
             {
-                _logger.Info("进程 {Pid} 不存在或已经退出", pid);
+                _logger.Warn(ex, "读取 PID 文件失败: {PidFile}，将尝试通过 HTTP 优雅停止", pidFile);
             }
         }
-        catch (Exception ex)
+        else
         {
-            _logger.Error(ex, "停止进程失败: {Message}", ex.Message);
+            _logger.Info("PID文件不存在: {PidFile}，将尝试通过 HTTP 优雅停止", pidFile);
+        }
+
+        // 优先优雅停止：HTTP /api/stop → StopApplication() → 触发 ApplicationStopping
+        // （DuckDB 最终刷写+CHECKPOINT、插件停止等），避免硬杀导致 WAL 堆积
+        bool gracefulSent = TryStopViaHttp(stop.Config);
+
+        if (process != null)
+        {
+            if (gracefulSent)
+            {
+                // 等待优雅退出（关机超时 5s + 最终刷写余量）
+                if (process.WaitForExit(15000))
+                {
+                    _logger.Info("✓ 进程 {Pid} 已优雅停止", process.Id);
+                    return;
+                }
+                _logger.Warn("优雅停止超时，强制结束进程 {Pid}", process.Id);
+            }
+            else
+            {
+                _logger.Warn("无法通过 HTTP 优雅停止，回退为强制结束进程 {Pid}", process.Id);
+            }
+
+            // 兜底：强制结束
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill();
+                    process.WaitForExit(5000);
+                }
+                _logger.Info(process.HasExited ? "✓ 进程 {Pid} 已停止" : "警告: 进程 {Pid} 可能未完全停止", process.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "强制停止进程失败: {Message}", ex.Message);
+                Environment.Exit(1);
+            }
+        }
+        else if (!gracefulSent)
+        {
+            // 既无可用 PID，也无法通过 HTTP 停止
+            _logger.Error("停止失败：无可用 PID 且无法通过 HTTP 连接到服务");
             Environment.Exit(1);
         }
     }
 
-    private static void DoStopViaHttp(string configFile)
+    /// <summary>
+    /// 通过 HTTP /api/stop 请求优雅停止服务。
+    /// 成功发送返回 true；无法连接/超时/配置缺失返回 false（由调用方决定是否回退强杀）。
+    /// </summary>
+    private static bool TryStopViaHttp(string configFile)
     {
         if (!File.Exists(configFile))
         {
-            _logger.Error("配置文件不存在: {ConfigFile}，无法获取 ControlListen 信息", configFile);
-            Environment.Exit(1);
-            return;
+            _logger.Warn("配置文件不存在: {ConfigFile}，无法通过 HTTP 优雅停止", configFile);
+            return false;
         }
 
         // 读取配置文件获取 ControlListen
@@ -464,22 +500,21 @@ public class Program
             {
                 var result = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
                 _logger.Info("✓ 停止请求已发送: {Result}", result);
+                return true;
             }
-            else
-            {
-                _logger.Error("停止请求失败: HTTP {StatusCode} {ReasonPhrase}", (int)response.StatusCode, response.ReasonPhrase);
-                Environment.Exit(1);
-            }
+
+            _logger.Warn("停止请求失败: HTTP {StatusCode} {ReasonPhrase}", (int)response.StatusCode, response.ReasonPhrase);
+            return false;
         }
         catch (HttpRequestException ex)
         {
-            _logger.Error(ex, "无法连接到服务: {Message}", ex.Message);
-            Environment.Exit(1);
+            _logger.Warn(ex, "无法连接到服务: {Message}", ex.Message);
+            return false;
         }
         catch (TaskCanceledException)
         {
-            _logger.Error("请求超时");
-            Environment.Exit(1);
+            _logger.Warn("停止请求超时");
+            return false;
         }
     }
 
@@ -1140,7 +1175,9 @@ public class Program
         builder.Services.AddSingleton<LyWaf.Services.Auth.IAuthService, LyWaf.Services.Auth.AuthService>();
 
         // 注册插件系统
+        var startupSw = Stopwatch.StartNew();
         builder.Services.AddLyWafPlugins(builder.Configuration);
+        _logger.Info("[启动耗时] 插件注册: {}ms", startupSw.ElapsedMilliseconds);
 
         var wafInfos = new WafInfoOptions();
         builder.Configuration.GetSection("WafInfos").Bind(wafInfos);
@@ -1194,6 +1231,7 @@ public class Program
         builder.Configuration.GetSection("CustomDns").Bind(customDnsOptions);
         var customDnsEnabled = customDnsOptions.Enabled && (customDnsOptions.Entries.Count > 0 || customDnsOptions.DnsServers.Count > 0);
         
+        startupSw.Restart();
         var reverse = builder.Services.AddReverseProxy()
             .ConfigureHttpClient((context, handler) =>
             {
@@ -1228,7 +1266,10 @@ public class Program
         {
             reverse.LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
         }
+        _logger.Info("[启动耗时] YARP 配置: {}ms", startupSw.ElapsedMilliseconds);
+        startupSw.Restart();
         var app = builder.Build();
+        _logger.Info("[启动耗时] builder.Build(): {}ms", startupSw.ElapsedMilliseconds);
 
         // 同步 GlobalOptions 到 SharedData
         var globalOptions = app.Services.GetService<Microsoft.Extensions.Options.IOptionsMonitor<GlobalOptions>>();
@@ -1255,6 +1296,7 @@ public class Program
             }
         });
 
+        startupSw.Restart();
         // 初始化认证服务（加载或创建 .lywaf.auth.json）
         var authService = app.Services.GetRequiredService<LyWaf.Services.Auth.IAuthService>();
         authService.Initialize();
@@ -1348,6 +1390,14 @@ public class Program
             SharedData.DisposeAll();
         });
 
+        _logger.Info("[启动耗时] 中间件配置: {}ms", startupSw.ElapsedMilliseconds);
+        startupSw.Restart();
+        // app.Run() 会阻塞直到关机，无法用它后面的日志测启动耗时。
+        // 在 ApplicationStarted 回调里记录"启动到就绪"的真实耗时。
+        app.Lifetime.ApplicationStarted.Register(() =>
+            _logger.Info("[启动耗时] 服务就绪(到 ApplicationStarted): {}ms", startupSw.ElapsedMilliseconds));
+        _logger.Info("[启动耗时] 开始 app.Run()...");
         app.Run();
+        _logger.Info("[启动耗时] app.Run() 退出");
     }
 }
