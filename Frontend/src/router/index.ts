@@ -33,6 +33,18 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'CC 防护', icon: '🛡️' }
   },
   {
+    path: '/ip-control',
+    name: 'IpControl',
+    component: () => import('@/views/IpControl.vue'),
+    meta: { title: 'IP 管理', icon: '🌐' }
+  },
+  {
+    path: '/web-tamper',
+    name: 'WebTamper',
+    component: () => import('@/views/WebTamper.vue'),
+    meta: { title: '网页防篡改', icon: '🧾' }
+  },
+  {
     path: '/api-timing',
     name: 'ApiTiming',
     component: () => import('@/views/ApiTiming.vue'),

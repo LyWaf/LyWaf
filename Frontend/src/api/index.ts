@@ -92,6 +92,77 @@ export interface IpLogEntry {
   raw: string
 }
 
+export interface IpGroup {
+  id: string
+  name: string
+  description: string
+  entries: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface WebTamperResource {
+  id: string
+  name: string
+  website: string
+  path: string
+  url: string
+  enabled: boolean
+  contentType: string
+  baselineHash: string
+  currentHash?: string
+  createdAt: string
+  updatedAt: string
+  lastCheckedAt?: string
+  changed: boolean
+  isPattern: boolean
+  parentResourceId?: string
+  capturedCount: number
+  capturedResources?: WebTamperResource[]
+}
+
+export interface WebTamperEvent {
+  id: string
+  resourceId: string
+  resourceName: string
+  url: string
+  baselineHash: string
+  currentHash: string
+  detectedAt: string
+  resolved: boolean
+  resolvedAt?: string
+}
+
+export interface WebTamperComparison {
+  resource: WebTamperResource
+  changed: boolean
+  baselineContent: string
+  currentContent: string
+}
+
+export interface WebTamperWebsite {
+  id: string
+  name: string
+  host: string
+  domain: string
+  source: 'config' | 'manual'
+  removable: boolean
+}
+
+export const webTamperApi = {
+  getWebsites: () => api.get<{ success: boolean; websites: WebTamperWebsite[] }>('/web-tamper/websites'),
+  addWebsite: (name: string, domain: string) => api.post<{ success: boolean; message?: string }>('/web-tamper/websites', { name, origin: domain }),
+  renameWebsite: (name: string, domain: string, source: 'config' | 'manual') => api.put<{ success: boolean; message?: string }>('/web-tamper/websites/name', { name, origin: domain, source }),
+  deleteWebsite: (id: string) => api.delete<{ success: boolean; message?: string }>(`/web-tamper/websites/${encodeURIComponent(id)}`),
+  getResources: () => api.get<{ success: boolean; resources: WebTamperResource[] }>('/web-tamper/resources'),
+  getEvents: () => api.get<{ success: boolean; events: WebTamperEvent[] }>('/web-tamper/events'),
+  add: (website: string, path: string) => api.post<{ success: boolean; resource?: WebTamperResource; message?: string }>('/web-tamper/resources', { website, path }),
+  update: (id: string, name: string, enabled: boolean) => api.put<{ success: boolean; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}`, { name, enabled }),
+  delete: (id: string) => api.delete<{ success: boolean; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}`),
+  check: (id: string) => api.post<{ success: boolean; comparison?: WebTamperComparison; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}/check`),
+  accept: (id: string) => api.post<{ success: boolean; comparison?: WebTamperComparison; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}/accept`),
+}
+
 interface IpLogReadResponse {
   success: boolean
   ip: string
@@ -106,6 +177,18 @@ interface IpLogReadResponse {
 // ==================== IP 管理 API ====================
 
 export const ipApi = {
+  getGroups: () =>
+    api.get<{ success: boolean; groups: IpGroup[] }>('/ip-groups'),
+
+  createGroup: (data: { name: string; description: string; entries: string[] }) =>
+    api.post<{ success: boolean; group?: IpGroup; message?: string }>('/ip-groups', data),
+
+  updateGroup: (id: string, data: { name: string; description: string; entries: string[] }) =>
+    api.put<{ success: boolean; group?: IpGroup; message?: string }>(`/ip-groups/${encodeURIComponent(id)}`, data),
+
+  deleteGroup: (id: string) =>
+    api.delete<{ success: boolean; message?: string }>(`/ip-groups/${encodeURIComponent(id)}`),
+
   // 白名单
   getWhitelist: () =>
     api.get<{ success: boolean; whitelist: string[] }>('/ac/whitelist'),

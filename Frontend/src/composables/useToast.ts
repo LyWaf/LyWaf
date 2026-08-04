@@ -29,7 +29,7 @@ export function useToast() {
   }
   
   const showSuccess = (message: string) => show('success', message)
-  const showError = (message: string) => show('error', message)
+  const showError = (message: string) => show('error', message, 6000)
   const showWarning = (message: string) => show('warning', message)
   const showInfo = (message: string) => show('info', message)
   

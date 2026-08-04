@@ -33,6 +33,8 @@ const menuItems: MenuItem[] = [
   { path: '/intercept-events', name: '拦截事件', icon: '📋' },
   {
     name: '规则管理', icon: '📐', children: [
+      { path: '/ip-control', name: 'IP 管理' },
+      { path: '/web-tamper', name: '网页防篡改' },
       { path: '/cc-protection', name: 'CC 防护' },
       { path: '/waf-rules', name: 'WAF 规则' },
       { path: '/speed-limit', name: '速度限制' },

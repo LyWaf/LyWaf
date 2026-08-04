@@ -195,7 +195,10 @@ public sealed class ReverseLogScanner : IDisposable
                     // 提取时间戳：找到 [ 和 ] 之间的文本
                     var bracketStart = matchPos + SeparatorPattern.Length - 1; // '[' 的位置
                     var timestamp = ExtractTimestamp(searchData, bracketStart, carryOver.Length + bytesRead);
-                    if (timestamp != null)
+                    // 去重：保留每块尾部 keepBytes 字节用于跨块匹配，会导致完全落在块尾的
+                    // 分隔符被下一块的 carryOver 重复扫描。分隔符位置严格递增，重复项的
+                    // absolutePos 与上一个相同，跳过可避免产生 endByte==startByte 的零长度空条目。
+                    if (timestamp != null && (index.Count == 0 || absolutePos > index[^1].ByteOffset))
                     {
                         index.Add((absolutePos, timestamp));
                     }
@@ -579,7 +582,10 @@ public sealed class ReverseLogScanner : IDisposable
                 {
                     var bracketStart = matchPos + SeparatorPattern.Length - 1;
                     var timestamp = ExtractTimestamp(searchData, bracketStart, carryOver.Length + bytesRead);
-                    if (timestamp != null)
+                    // 去重：保留每块尾部 keepBytes 字节用于跨块匹配，会导致完全落在块尾的
+                    // 分隔符被下一块的 carryOver 重复扫描。分隔符位置严格递增，重复项的
+                    // absolutePos 与上一个相同，跳过可避免产生 endByte==startByte 的零长度空条目。
+                    if (timestamp != null && (index.Count == 0 || absolutePos > index[^1].ByteOffset))
                     {
                         index.Add((absolutePos, timestamp));
                     }

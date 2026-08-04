@@ -27,6 +27,7 @@ using System.Net.Security;
 using LyWaf.Utils;
 using LyWaf.Services.WafInfo;
 using LyWaf.Services.AccessControl;
+using LyWaf.Services.WebTamper;
 using LyWaf.Plugins.Core;
 using LyWaf.Control;
 using LyWaf.Services.Compress;
@@ -1130,6 +1131,9 @@ public class Program
         builder.Services.AddSingleton<ICaptchaService, CaptchaService>();
         builder.Services.AddSingleton<ICcRuleChecker, CcRuleChecker>();
         builder.Services.AddSingleton<IAccessControlService, AccessControlService>();
+        builder.Services.AddSingleton<IIpGroupService, IpGroupService>();
+        builder.Services.AddSingleton<IWebTamperService, WebTamperService>();
+        builder.Services.AddHostedService<WebTamperMonitorService>();
         builder.Services.AddSingleton<IWafRuleService, WafRuleService>();
         builder.Services.AddSingleton<IWafInfoService, WafInfoService>();
         builder.Services.AddSingleton<IAcmeService, AcmeService>();
@@ -1326,6 +1330,7 @@ public class Program
             proxyApp.UseMiddleware<BandwidthCountingMiddleware>();
             // 启用响应压缩（必须放在其他中间件之前）
             proxyApp.UseMiddleware<ResponseCompressMiddleware>();
+            proxyApp.UseMiddleware<WebTamperMiddleware>();
             
             // 高优先级插件（Highest, High）- 在核心中间件之前
             proxyApp.UseLyWafPluginsInProxyHigh();

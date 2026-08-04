@@ -20,21 +20,21 @@ const colorMap = {
 
 <template>
   <Teleport to="body">
-    <div class="fixed top-4 right-4 z-[9999] flex flex-col gap-2">
+    <div class="fixed top-4 left-4 right-4 sm:left-auto z-[9999] flex flex-col items-end gap-2 pointer-events-none">
       <TransitionGroup name="toast">
         <div
           v-for="toast in toasts"
           :key="toast.id"
           :class="[
-            'flex items-center gap-3 px-4 py-3 rounded-lg border shadow-lg min-w-[280px] backdrop-blur-sm',
+            'flex items-start gap-3 px-4 py-3 rounded-lg border shadow-lg w-full sm:w-auto sm:min-w-[280px] sm:max-w-[640px] backdrop-blur-sm pointer-events-auto',
             colorMap[toast.type]
           ]"
         >
-          <span class="text-lg">{{ iconMap[toast.type] }}</span>
-          <span class="flex-1 text-sm">{{ toast.message }}</span>
+          <span class="text-lg leading-5 shrink-0">{{ iconMap[toast.type] }}</span>
+          <span class="flex-1 text-sm whitespace-pre-line break-words min-w-0">{{ toast.message }}</span>
           <button 
             @click="remove(toast.id)"
-            class="text-current opacity-60 hover:opacity-100 transition-opacity"
+            class="text-current opacity-60 hover:opacity-100 transition-opacity shrink-0 leading-5"
           >
             ✕
           </button>
