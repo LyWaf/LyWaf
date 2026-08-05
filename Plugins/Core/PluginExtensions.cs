@@ -10,6 +10,8 @@ namespace LyWaf.Plugins.Core;
 /// </summary>
 public static class PluginExtensions
 {
+    private static readonly string[] PluginApiMethods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+
     /// <summary>
     /// 添加插件系统
     /// </summary>
@@ -51,6 +53,24 @@ public static class PluginExtensions
         manager.ConfigureMiddleware(app);
         // 注册基础中间件，发布请求开始/结束事件
         app.UseMiddleware<BasePluginMiddleware>();
+        return app;
+    }
+
+    /// <summary>注册统一插件 API 代理，插件业务路由不会进入 ControlApi。</summary>
+    public static WebApplication MapLyWafPluginApi(this WebApplication app, int controlPort)
+    {
+        app.MapMethods("/api/plugins/{pluginId}/proxy/{**pluginPath}", PluginApiMethods,
+            async (string pluginId, string? pluginPath, HttpContext context, IPluginManager manager) =>
+            {
+                var plugin = manager.GetPlugin(pluginId);
+                if (plugin == null)
+                    return Results.NotFound(new { success = false, message = $"插件 {pluginId} 不存在" });
+                if (manager.GetPluginState(pluginId) is not (PluginState.Running or PluginState.Initialized))
+                    return Results.Json(new { success = false, message = $"插件 {pluginId} 未启用" }, statusCode: 503);
+                if (plugin is not IPluginApiHandler handler)
+                    return Results.NotFound(new { success = false, message = $"插件 {pluginId} 未提供控制台 API" });
+                return await handler.HandleApiAsync(pluginPath ?? "", context);
+            }).RequireHost($"*:{controlPort}");
         return app;
     }
     

@@ -57,6 +57,17 @@ type UnwrappedAxios = {
 
 const api = http as unknown as UnwrappedAxios
 
+// 插件前端只能通过统一代理访问自身后端，不在核心 API 中声明业务路由。
+export const pluginProxyApi = (pluginId: string) => {
+  const prefix = `/plugins/${encodeURIComponent(pluginId)}/proxy`
+  return {
+    get: <T>(path: string, config?: object) => api.get<T>(`${prefix}/${path}`, config),
+    post: <T>(path: string, data?: object, config?: object) => api.post<T>(`${prefix}/${path}`, data, config),
+    put: <T>(path: string, data?: object, config?: object) => api.put<T>(`${prefix}/${path}`, data, config),
+    delete: <T>(path: string, config?: object) => api.delete<T>(`${prefix}/${path}`, config),
+  }
+}
+
 // ==================== 功能开关 API ====================
 
 export const featureApi = {
@@ -99,68 +110,6 @@ export interface IpGroup {
   entries: string[]
   createdAt: string
   updatedAt: string
-}
-
-export interface WebTamperResource {
-  id: string
-  name: string
-  website: string
-  path: string
-  url: string
-  enabled: boolean
-  contentType: string
-  baselineHash: string
-  currentHash?: string
-  createdAt: string
-  updatedAt: string
-  lastCheckedAt?: string
-  changed: boolean
-  isPattern: boolean
-  parentResourceId?: string
-  capturedCount: number
-  capturedResources?: WebTamperResource[]
-}
-
-export interface WebTamperEvent {
-  id: string
-  resourceId: string
-  resourceName: string
-  url: string
-  baselineHash: string
-  currentHash: string
-  detectedAt: string
-  resolved: boolean
-  resolvedAt?: string
-}
-
-export interface WebTamperComparison {
-  resource: WebTamperResource
-  changed: boolean
-  baselineContent: string
-  currentContent: string
-}
-
-export interface WebTamperWebsite {
-  id: string
-  name: string
-  host: string
-  domain: string
-  source: 'config' | 'manual'
-  removable: boolean
-}
-
-export const webTamperApi = {
-  getWebsites: () => api.get<{ success: boolean; websites: WebTamperWebsite[] }>('/web-tamper/websites'),
-  addWebsite: (name: string, domain: string, port?: number) => api.post<{ success: boolean; website?: WebTamperWebsite; message?: string }>('/web-tamper/websites', { name, origin: domain, port }),
-  renameWebsite: (name: string, domain: string, source: 'config' | 'manual') => api.put<{ success: boolean; message?: string }>('/web-tamper/websites/name', { name, origin: domain, source }),
-  deleteWebsite: (id: string) => api.delete<{ success: boolean; message?: string }>(`/web-tamper/websites/${encodeURIComponent(id)}`),
-  getResources: () => api.get<{ success: boolean; resources: WebTamperResource[] }>('/web-tamper/resources'),
-  getEvents: () => api.get<{ success: boolean; events: WebTamperEvent[] }>('/web-tamper/events'),
-  add: (website: string, path: string) => api.post<{ success: boolean; resource?: WebTamperResource; message?: string }>('/web-tamper/resources', { website, path }),
-  update: (id: string, name: string, enabled: boolean) => api.put<{ success: boolean; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}`, { name, enabled }),
-  delete: (id: string) => api.delete<{ success: boolean; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}`),
-  check: (id: string) => api.post<{ success: boolean; comparison?: WebTamperComparison; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}/check`, undefined, { timeout: 60000 }),
-  accept: (id: string) => api.post<{ success: boolean; comparison?: WebTamperComparison; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}/accept`),
 }
 
 interface IpLogReadResponse {
@@ -999,6 +948,7 @@ export interface PluginActionItem {
   name: string
   type: string
   description?: string
+  path?: string
 }
 
 export interface PluginItem {

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { webTamperApi, type WebTamperComparison, type WebTamperEvent, type WebTamperResource, type WebTamperWebsite } from '@/api'
+import { webTamperApi, type WebTamperComparison, type WebTamperEvent, type WebTamperResource, type WebTamperWebsite } from './api'
 import { useToast } from '@/composables/useToast'
+import { useRouter } from 'vue-router'
 
 const { showSuccess, showError } = useToast()
+const router = useRouter()
 const resources = ref<WebTamperResource[]>([])
 const events = ref<WebTamperEvent[]>([])
 const websites = ref<WebTamperWebsite[]>([])
@@ -244,11 +246,12 @@ onMounted(loadData)
 
 <template>
   <div class="space-y-6">
-    <div>
+    <div class="flex items-start justify-between gap-4">
       <div>
         <h1 class="text-xl font-semibold text-gray-100">网页防篡改</h1>
         <p class="text-sm text-gray-500 mt-1">按网站管理保护资源，检测变更后持续向访客返回已确认的安全基线。</p>
       </div>
+      <button class="btn btn-secondary btn-sm shrink-0" @click="router.push('/plugin-management')">返回插件管理</button>
     </div>
 
     <section class="bg-dark-card border border-dark-border rounded-lg p-4">

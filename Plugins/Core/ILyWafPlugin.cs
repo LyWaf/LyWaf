@@ -98,6 +98,9 @@ public class PluginAction
 
     /// <summary>操作说明</summary>
     public string? Description { get; init; }
+
+    /// <summary>page-link 类型操作对应的前端路由。</summary>
+    public string? Path { get; init; }
 }
 
 /// <summary>
@@ -175,6 +178,12 @@ public interface ILyWafPlugin
     /// <param name="parameters">操作参数</param>
     Task<PluginActionResult> ExecuteActionAsync(string actionId, Dictionary<string, string>? parameters)
         => Task.FromResult(new PluginActionResult { Success = false, Message = $"操作 {actionId} 未实现" });
+}
+
+/// <summary>由插件实现，用于接收插件系统统一代理入口分派的控制台请求。</summary>
+public interface IPluginApiHandler
+{
+    Task<IResult> HandleApiAsync(string path, HttpContext context);
 }
 
 /// <summary>

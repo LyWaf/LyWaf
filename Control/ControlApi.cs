@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Text;
 using LyWaf.Services.ABTest;
 using LyWaf.Services.AccessControl;
-using LyWaf.Services.WebTamper;
 using LyWaf.Services.Captcha;
 using LyWaf.Services.Protect;
 using LyWaf.Services.SpeedLimit;
@@ -2180,200 +2179,6 @@ public static class ControlApi
         }).RequireHost($"*:{controlPort}");
 
         // =============== 动态访问控制管理 API ===============
-
-        // =============== 网页防篡改 API ===============
-        app.MapGet("/api/web-tamper/websites", (HttpContext ctx, IConfiguration configuration, IWebTamperService service) =>
-        {
-            var sites = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
-            foreach (var route in configuration.GetSection("ReverseProxy:Routes").GetChildren())
-            {
-                foreach (var hostItem in route.GetSection("Match:Hosts").GetChildren())
-                {
-                    var pattern = hostItem.Value?.Trim();
-                    if (string.IsNullOrEmpty(pattern) || pattern.Contains('*') || pattern.Contains('{')) continue;
-
-                    var host = pattern;
-                    int? port = null;
-                    if (pattern.StartsWith('['))
-                    {
-                        var bracket = pattern.IndexOf(']');
-                        if (bracket > 0)
-                        {
-                            host = pattern[..(bracket + 1)];
-                            if (bracket + 2 < pattern.Length && int.TryParse(pattern[(bracket + 2)..], out var ipv6Port)) port = ipv6Port;
-                        }
-                    }
-                    else
-                    {
-                        var colon = pattern.LastIndexOf(':');
-                        if (colon > 0 && int.TryParse(pattern[(colon + 1)..], out var parsedPort))
-                        {
-                            host = pattern[..colon];
-                            port = parsedPort;
-                        }
-                    }
-
-                    host = host.Trim('[', ']').TrimEnd('.').ToLowerInvariant();
-                    var authorityHost = host.Contains(':') ? $"[{host}]" : host;
-                    var authority = port.HasValue ? $"{authorityHost}:{port.Value}" : authorityHost;
-                    sites[authority] = new { id = $"config:{authority}", name = authority, host = authority, domain = authority, source = "config", removable = false };
-                }
-            }
-            foreach (var website in service.GetWebsites())
-            {
-                var isManual = website.Source != "config";
-                sites[website.Origin] = new
-                {
-                    id = isManual ? website.Id : $"config:{website.Origin}",
-                    name = website.Name,
-                    host = website.Origin,
-                    domain = website.Origin,
-                    source = isManual ? "manual" : "config",
-                    removable = isManual
-                };
-            }
-            return Results.Json(new { success = true, websites = sites.Values });
-        }).RequireHost($"*:{controlPort}");
-
-        app.MapPut("/api/web-tamper/websites/name", async (HttpContext ctx, IWebTamperService service) =>
-        {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<RenameWebTamperWebsiteRequest>();
-                if (request == null) return Results.BadRequest(new { success = false, message = "请求内容不能为空" });
-                var website = service.RenameWebsite(request.Name, request.Origin, request.Source);
-                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
-                    ctx.Items["Username"]?.ToString() ?? "unknown", $"修改防篡改网站备注: {website.Name} {website.Origin}",
-                    ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-                return Results.Json(new { success = true, website, message = "网站备注已更新" });
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { success = false, message = ex.Message });
-            }
-        }).RequireHost($"*:{controlPort}");
-
-        app.MapPost("/api/web-tamper/websites", async (HttpContext ctx, IWebTamperService service) =>
-        {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<CreateWebTamperWebsiteRequest>();
-                if (request == null) return Results.BadRequest(new { success = false, message = "请求内容不能为空" });
-                var website = service.AddWebsite(request.Name, request.Origin, request.Port);
-                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
-                    ctx.Items["Username"]?.ToString() ?? "unknown", $"添加防篡改网站: {website.Name} {website.Origin}",
-                    ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-                return Results.Json(new { success = true, website, message = "网站已添加" });
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { success = false, message = ex.Message });
-            }
-        }).RequireHost($"*:{controlPort}");
-
-        app.MapDelete("/api/web-tamper/websites/{id}", (string id, HttpContext ctx, IWebTamperService service) =>
-        {
-            try
-            {
-                if (!service.DeleteWebsite(id)) return Results.NotFound(new { success = false, message = "网站不存在" });
-                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
-                    ctx.Items["Username"]?.ToString() ?? "unknown", $"删除防篡改网站: {id}",
-                    ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-                return Results.Json(new { success = true, message = "网站已删除" });
-            }
-            catch (InvalidOperationException ex)
-            {
-                return Results.BadRequest(new { success = false, message = ex.Message });
-            }
-        }).RequireHost($"*:{controlPort}");
-
-        app.MapGet("/api/web-tamper/resources", (HttpContext ctx, IWebTamperService service) =>
-            Results.Json(new { success = true, resources = service.GetResources() }))
-            .RequireHost($"*:{controlPort}");
-
-        app.MapGet("/api/web-tamper/events", (HttpContext ctx, IWebTamperService service) =>
-            Results.Json(new { success = true, events = service.GetEvents() }))
-            .RequireHost($"*:{controlPort}");
-
-        app.MapPost("/api/web-tamper/resources", async (HttpContext ctx, IWebTamperService service) =>
-        {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<CreateWebTamperResourceRequest>();
-                if (request == null) return Results.BadRequest(new { success = false, message = "请求内容不能为空" });
-                var resource = await service.AddAsync(request.Website, request.Path, ctx.RequestAborted);
-                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
-                    ctx.Items["Username"]?.ToString() ?? "unknown", $"添加网页防篡改资源: {resource.Name}",
-                    ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-                return Results.Json(new
-                {
-                    success = true,
-                    resource,
-                    message = resource.IsPattern ? "通配保护规则已创建，匹配路径首次访问时将建立独立基线" : "资源基线已创建"
-                });
-            }
-            catch (Exception ex) when (ex is ArgumentException or HttpRequestException or TaskCanceledException)
-            {
-                return Results.BadRequest(new { success = false, message = $"抓取资源失败\n{ex.Message}" });
-            }
-        }).RequireHost($"*:{controlPort}");
-
-        app.MapPut("/api/web-tamper/resources/{id}", async (string id, HttpContext ctx, IWebTamperService service) =>
-        {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<UpdateWebTamperResourceRequest>();
-                if (request == null) return Results.BadRequest(new { success = false, message = "请求内容不能为空" });
-                if (!service.Update(id, request.Name, request.Enabled))
-                    return Results.NotFound(new { success = false, message = "资源不存在" });
-                return Results.Json(new { success = true, message = "资源已更新" });
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { success = false, message = ex.Message });
-            }
-        }).RequireHost($"*:{controlPort}");
-
-        app.MapDelete("/api/web-tamper/resources/{id}", (string id, HttpContext ctx, IWebTamperService service) =>
-        {
-            if (!service.Delete(id)) return Results.NotFound(new { success = false, message = "资源不存在" });
-            ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
-                ctx.Items["Username"]?.ToString() ?? "unknown", $"删除网页防篡改资源: {id}",
-                ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-            return Results.Json(new { success = true, message = "资源已删除" });
-        }).RequireHost($"*:{controlPort}");
-
-        app.MapPost("/api/web-tamper/resources/{id}/check", async (string id, HttpContext ctx, IWebTamperService service) =>
-        {
-            try
-            {
-                var comparison = await service.CheckAsync(id, ctx.RequestAborted);
-                return comparison == null
-                    ? Results.NotFound(new { success = false, message = "资源不存在" })
-                    : Results.Json(new { success = true, comparison });
-            }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or HttpRequestException or TaskCanceledException)
-            {
-                return Results.BadRequest(new { success = false, message = $"检查失败: {ex.Message}" });
-            }
-        }).RequireHost($"*:{controlPort}");
-
-        app.MapPost("/api/web-tamper/resources/{id}/accept", async (string id, HttpContext ctx, IWebTamperService service) =>
-        {
-            try
-            {
-                var comparison = await service.AcceptCurrentAsync(id, ctx.RequestAborted);
-                if (comparison == null) return Results.NotFound(new { success = false, message = "资源不存在" });
-                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
-                    ctx.Items["Username"]?.ToString() ?? "unknown", $"更新网页防篡改基线: {comparison.Resource.Name}",
-                    ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-                return Results.Json(new { success = true, comparison, message = "安全基线已更新" });
-            }
-            catch (Exception ex) when (ex is ArgumentException or HttpRequestException or TaskCanceledException)
-            {
-                return Results.BadRequest(new { success = false, message = $"更新基线失败: {ex.Message}" });
-            }
-        }).RequireHost($"*:{controlPort}");
 
         app.MapGet("/api/ip-groups", (HttpContext ctx, IIpGroupService ipGroupService) =>
             Results.Json(new { success = true, groups = ipGroupService.GetAll() }))
@@ -5750,6 +5555,7 @@ public static class ControlApi
                         name = a.Name,
                         type = a.Type,
                         description = a.Description,
+                        path = a.Path,
                     }).ToList();
 
                     return new
@@ -7894,32 +7700,6 @@ public class SaveIpGroupRequest
     public string Name { get; set; } = "";
     public string? Description { get; set; }
     public List<string> Entries { get; set; } = [];
-}
-
-public class CreateWebTamperResourceRequest
-{
-    public string Website { get; set; } = "";
-    public string Path { get; set; } = "/";
-}
-
-public class CreateWebTamperWebsiteRequest
-{
-    public string Name { get; set; } = "";
-    public string Origin { get; set; } = "";
-    public int? Port { get; set; }
-}
-
-public class RenameWebTamperWebsiteRequest
-{
-    public string Name { get; set; } = "";
-    public string Origin { get; set; } = "";
-    public string Source { get; set; } = "manual";
-}
-
-public class UpdateWebTamperResourceRequest
-{
-    public string Name { get; set; } = "";
-    public bool Enabled { get; set; }
 }
 
 public class BlockIpRequest

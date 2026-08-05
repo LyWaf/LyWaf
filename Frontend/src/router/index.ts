@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
+import { pluginRoutes } from '@/plugins'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -38,12 +39,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/IpControl.vue'),
     meta: { title: 'IP 管理', icon: '🌐' }
   },
-  {
-    path: '/web-tamper',
-    name: 'WebTamper',
-    component: () => import('@/views/WebTamper.vue'),
-    meta: { title: '网页防篡改', icon: '🧾' }
-  },
+  ...pluginRoutes,
   {
     path: '/api-timing',
     name: 'ApiTiming',

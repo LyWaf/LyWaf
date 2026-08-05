@@ -94,7 +94,7 @@ public class PluginOptions
     /// 系统插件是 LyWaf 自带的插件，默认加载，不会被外部插件覆盖
     /// 除非在 DisabledPlugins 中明确禁用
     /// </summary>
-    public HashSet<string> SystemPlugins { get; } = ["request-logger", "analysis"];
+    public HashSet<string> SystemPlugins { get; } = ["request-logger", "analysis", "web-tamper"];
 }
 
 /// <summary>
@@ -309,7 +309,11 @@ public class PluginManager : IPluginManager
     /// </summary>
     public void ConfigureServices(IServiceCollection services)
     {
-        var enabledPlugins = GetEnabledPluginsSorted();
+        // 所有插件都注册服务，确保运行时启用插件时依赖已经存在。
+        var enabledPlugins = _plugins.Values
+            .OrderBy(p => (int)p.Plugin.Metadata.Priority)
+            .ThenBy(p => p.Plugin.Metadata.Id)
+            .ToList();
 
         foreach (var info in enabledPlugins)
         {

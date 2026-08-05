@@ -634,7 +634,7 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
     }
 }
 
-public sealed class WebTamperMonitorService(IWebTamperService service) : BackgroundService
+public sealed class WebTamperMonitorService(IWebTamperService service, LyWaf.Plugins.Core.IPluginManager pluginManager) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -643,6 +643,8 @@ public sealed class WebTamperMonitorService(IWebTamperService service) : Backgro
         {
             try { await Task.Delay(TimeSpan.FromDays(1), stoppingToken); }
             catch (OperationCanceledException) { break; }
+            if (pluginManager.GetPluginState("web-tamper") is not (LyWaf.Plugins.Core.PluginState.Running or LyWaf.Plugins.Core.PluginState.Initialized))
+                continue;
             await service.CheckAllAsync(stoppingToken);
         }
     }

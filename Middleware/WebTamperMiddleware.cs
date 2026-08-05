@@ -1,14 +1,21 @@
 using LyWaf.Services.WebTamper;
+using LyWaf.Plugins.Core;
 
 namespace LyWaf.Middleware;
 
-public sealed class WebTamperMiddleware(RequestDelegate next, IWebTamperService service)
+public sealed class WebTamperMiddleware(RequestDelegate next, IWebTamperService service, IPluginManager pluginManager)
 {
     public async Task InvokeAsync(HttpContext context)
     {
         if (service.IsInternalCheck(context.Request))
         {
             context.Request.Headers.Remove("X-LyWaf-Tamper-Check");
+            await next(context);
+            return;
+        }
+
+        if (pluginManager.GetPluginState("web-tamper") is not (PluginState.Running or PluginState.Initialized))
+        {
             await next(context);
             return;
         }

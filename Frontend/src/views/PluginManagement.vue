@@ -3,8 +3,10 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { pluginApi } from '@/api'
 import type { PluginItem, PluginLogEntry, PluginLogFile, PluginActionItem } from '@/api'
 import { useToast } from '@/composables/useToast'
+import { useRouter } from 'vue-router'
 
 const { showSuccess, showError } = useToast()
+const router = useRouter()
 
 const plugins = ref<PluginItem[]>([])
 const loading = ref(true)
@@ -662,6 +664,10 @@ onUnmounted(() => document.removeEventListener('click', onLogDocClick))
 
 // =============== 通用插件操作（button 类型） ===============
 const executePluginAction = async (plugin: PluginItem, action: PluginActionItem) => {
+  if (action.type === 'page-link' && action.path) {
+    await router.push(action.path)
+    return
+  }
   if (action.type === 'log-viewer') {
     openLogViewer(plugin, action)
     return
@@ -742,8 +748,9 @@ onMounted(loadPlugins)
               @click="executePluginAction(plugin, action)"
               class="text-gray-400 hover:text-primary-400 transition-colors p-1"
               :title="action.name">
+              <span v-if="action.type === 'page-link'" class="text-xs px-1">管理</span>
               <!-- 日志查看器图标 -->
-              <svg v-if="action.type === 'log-viewer'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg v-else-if="action.type === 'log-viewer'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
               <!-- 通用操作图标 -->
