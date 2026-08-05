@@ -1,7 +1,7 @@
 using LyWaf.Services.WebTamper;
 using LyWaf.Plugins.Core;
 
-namespace LyWaf.Middleware;
+namespace LyWaf.Plugins.Sys.WebTamper;
 
 public sealed class WebTamperMiddleware(RequestDelegate next, IWebTamperService service, IPluginManager pluginManager)
 {
@@ -30,11 +30,14 @@ public sealed class WebTamperMiddleware(RequestDelegate next, IWebTamperService 
         var originalBody = context.Response.Body;
         var acceptEncoding = context.Request.Headers.AcceptEncoding.ToString();
         context.Request.Headers.Remove("Accept-Encoding");
-        await using var captured = new MemoryStream();
+        var capturedPath = Path.Combine(Path.GetTempPath(), $"lywaf-tamper-{Guid.NewGuid():N}.tmp");
+        var captured = new FileStream(capturedPath, FileMode.CreateNew, FileAccess.ReadWrite,
+            FileShare.Read | FileShare.Delete, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
         context.Response.Body = captured;
         try
         {
             await next(context);
+            await captured.FlushAsync(context.RequestAborted);
             if (context.Response.StatusCode is < 200 or >= 300 || captured.Length > WebTamperService.MaxContentBytes)
             {
                 captured.Position = 0;
@@ -42,12 +45,12 @@ public sealed class WebTamperMiddleware(RequestDelegate next, IWebTamperService 
                 return;
             }
 
-            var observed = captured.ToArray();
+            var currentHash = await WebTamperService.HashFileAsync(capturedPath, context.RequestAborted);
             var requestPath = $"{context.Request.PathBase}{context.Request.Path}{context.Request.QueryString}";
-            service.RecordObservedContent(resource, requestPath, context.Response.ContentType ?? "application/octet-stream", observed);
+            service.RecordObservedContent(resource, requestPath, context.Response.ContentType ?? "application/octet-stream", capturedPath, currentHash);
+            service.TryQueueBackgroundCheck(resource.Website, requestPath);
             var changed = baseline != null
-                && !string.Equals(resource.BaselineHash, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(observed)), StringComparison.Ordinal);
-            var output = changed ? baseline!.Bytes : observed;
+                && !string.Equals(resource.BaselineHash, currentHash, StringComparison.Ordinal);
             if (changed)
             {
                 context.Response.ContentType = baseline!.ContentType;
@@ -55,13 +58,18 @@ public sealed class WebTamperMiddleware(RequestDelegate next, IWebTamperService 
                 context.Response.Headers.Remove("Last-Modified");
                 context.Response.Headers["X-LyWaf-Tamper-Protected"] = "baseline";
             }
-            context.Response.ContentLength = output.Length;
-            await originalBody.WriteAsync(output, context.RequestAborted);
+            var outputPath = changed ? baseline!.FilePath : capturedPath;
+            context.Response.ContentLength = changed ? baseline!.Length : captured.Length;
+            await using var output = new FileStream(outputPath, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await output.CopyToAsync(originalBody, context.RequestAborted);
         }
         finally
         {
             if (acceptEncoding.Length > 0) context.Request.Headers.AcceptEncoding = acceptEncoding;
             context.Response.Body = originalBody;
+            await captured.DisposeAsync();
+            try { File.Delete(capturedPath); } catch { }
         }
     }
 }

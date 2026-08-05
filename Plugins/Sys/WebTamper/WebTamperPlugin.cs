@@ -1,4 +1,3 @@
-using LyWaf.Middleware;
 using LyWaf.Plugins.Core;
 using LyWaf.Services.WebTamper;
 using LyWaf.Services.AuditLog;
@@ -6,7 +5,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace LyWaf.Plugins.Sys;
+namespace LyWaf.Plugins.Sys.WebTamper;
 
 /// <summary>系统插件：按网站和路径维护响应基线，阻止网页内容被篡改。</summary>
 public sealed class WebTamperPlugin : LyWafPluginBase, IPluginApiHandler

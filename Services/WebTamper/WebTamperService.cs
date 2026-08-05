@@ -2,6 +2,8 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Collections.Concurrent;
+using System.Threading.Channels;
 using NLog;
 
 namespace LyWaf.Services.WebTamper;
@@ -50,7 +52,7 @@ public sealed class WebTamperEvent
     public DateTime? ResolvedAt { get; set; }
 }
 
-public sealed record ProtectedContent(byte[] Bytes, string ContentType);
+public sealed record ProtectedContent(string FilePath, string ContentType, long Length);
 public sealed record ContentComparison(WebTamperResource Resource, bool Changed, string BaselineContent, string CurrentContent);
 
 public interface IWebTamperService
@@ -66,7 +68,9 @@ public interface IWebTamperService
     bool Delete(string id);
     bool IsInternalCheck(HttpRequest request);
     bool TryGetProtectedContent(HttpRequest request, out WebTamperResource? resource, out ProtectedContent? baseline);
-    void RecordObservedContent(WebTamperResource resource, string requestPath, string contentType, ReadOnlySpan<byte> content);
+    void RecordObservedContent(WebTamperResource resource, string requestPath, string contentType, string contentFilePath, string currentHash);
+    bool TryQueueBackgroundCheck(string website, string requestPath);
+    Task ProcessBackgroundChecksAsync(CancellationToken cancellationToken);
     Task<ContentComparison?> CheckAsync(string id, CancellationToken cancellationToken);
     Task<ContentComparison?> AcceptCurrentAsync(string id, CancellationToken cancellationToken);
     Task CheckAllAsync(CancellationToken cancellationToken);
@@ -80,7 +84,17 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
     private readonly object _lock = new();
     private readonly string _dataFile;
     private readonly string _contentDirectory;
+    private readonly string _remoteCacheDirectory;
     private readonly HttpClient _httpClient;
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _fetchLocks = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, CachedFetch> _fetchCache = new(StringComparer.Ordinal);
+    private readonly object _queueLock = new();
+    private readonly Dictionary<string, DateTime> _lastQueuedChecks = new(StringComparer.Ordinal);
+    private readonly Channel<string> _checkQueue = Channel.CreateBounded<string>(new BoundedChannelOptions(10_000)
+    {
+        SingleReader = true,
+        FullMode = BoundedChannelFullMode.DropWrite
+    });
     private readonly string _bypassToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
     private WebTamperStore _store;
 
@@ -91,6 +105,9 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
         _dataFile = Path.Combine(directory, "resources.json");
         _contentDirectory = Path.Combine(directory, "content");
         Directory.CreateDirectory(_contentDirectory);
+        _remoteCacheDirectory = Path.Combine(directory, "remote-cache");
+        Directory.CreateDirectory(_remoteCacheDirectory);
+        foreach (var staleFile in Directory.EnumerateFiles(_remoteCacheDirectory, "*.bin")) TryDelete(staleFile);
         _store = Load();
         _httpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = true })
         {
@@ -218,20 +235,20 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
             CreatedAt = now,
             UpdatedAt = now
         };
-        ProtectedContent? initialContent = null;
+        CachedFetch? initialContent = null;
         if (!isPattern)
         {
             var fetched = await FetchWebsiteAsync(website, path, cancellationToken);
-            initialContent = fetched.Content;
+            initialContent = fetched;
             resource.Url = fetched.Url;
-            resource.ContentType = fetched.Content.ContentType;
-            resource.BaselineHash = Hash(fetched.Content.Bytes);
+            resource.ContentType = fetched.ContentType;
+            resource.BaselineHash = fetched.Hash;
             resource.CurrentHash = resource.BaselineHash;
             resource.LastCheckedAt = now;
         }
         lock (_lock)
         {
-            if (initialContent != null) File.WriteAllBytes(ContentPath(resource.Id), initialContent.Bytes);
+            if (initialContent != null) File.Copy(initialContent.FilePath, ContentPath(resource.Id), true);
             _store.Resources.Add(resource);
             Save();
         }
@@ -306,15 +323,14 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
             if (concrete != null || !match.IsPattern)
             {
                 var path = ContentPath(resource.Id);
-                if (File.Exists(path)) baseline = new ProtectedContent(File.ReadAllBytes(path), resource.ContentType);
+                if (File.Exists(path)) baseline = new ProtectedContent(path, resource.ContentType, new FileInfo(path).Length);
             }
             return true;
         }
     }
 
-    public void RecordObservedContent(WebTamperResource resource, string requestPath, string contentType, ReadOnlySpan<byte> content)
+    public void RecordObservedContent(WebTamperResource resource, string requestPath, string contentType, string contentFilePath, string currentHash)
     {
-        var currentHash = Hash(content);
         lock (_lock)
         {
             var stored = _store.Resources.FirstOrDefault(item => item.Id == resource.Id);
@@ -342,7 +358,7 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
                     UpdatedAt = DateTime.UtcNow,
                     LastCheckedAt = DateTime.UtcNow
                 };
-                File.WriteAllBytes(ContentPath(child.Id), content.ToArray());
+                File.Copy(contentFilePath, ContentPath(child.Id), true);
                 _store.Resources.Add(child);
                 stored.CapturedCount++;
                 stored.UpdatedAt = DateTime.UtcNow;
@@ -404,6 +420,48 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
         }
     }
 
+    public bool TryQueueBackgroundCheck(string website, string requestPath)
+    {
+        string? resourceId;
+        lock (_lock)
+        {
+            resourceId = _store.Resources
+                .Where(item => item.Enabled && string.Equals(item.Website, website, StringComparison.OrdinalIgnoreCase)
+                    && (string.Equals(item.Path, requestPath, StringComparison.Ordinal)
+                        || (item.ParentResourceId != null && string.Equals(item.Path, requestPath, StringComparison.Ordinal))))
+                .OrderByDescending(item => item.ParentResourceId != null)
+                .Select(item => item.Id)
+                .FirstOrDefault();
+        }
+        if (resourceId == null) return false;
+
+        var now = DateTime.UtcNow;
+        lock (_queueLock)
+        {
+            if (_lastQueuedChecks.TryGetValue(resourceId, out var lastQueued)
+                && now - lastQueued < TimeSpan.FromMinutes(1)) return false;
+            if (!_checkQueue.Writer.TryWrite(resourceId)) return false;
+            _lastQueuedChecks[resourceId] = now;
+            if (_lastQueuedChecks.Count > 20_000)
+            {
+                var cutoff = now - TimeSpan.FromMinutes(2);
+                foreach (var staleId in _lastQueuedChecks.Where(item => item.Value < cutoff).Select(item => item.Key).ToList())
+                    _lastQueuedChecks.Remove(staleId);
+            }
+            return true;
+        }
+    }
+
+    public async Task ProcessBackgroundChecksAsync(CancellationToken cancellationToken)
+    {
+        await foreach (var resourceId in _checkQueue.Reader.ReadAllAsync(cancellationToken))
+        {
+            try { await CheckAsync(resourceId, cancellationToken); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
+            catch (Exception ex) { Logger.Warn(ex, "网页防篡改后台惰性检查失败: {ResourceId}", resourceId); }
+        }
+    }
+
     public async Task<ContentComparison?> CheckAsync(string id, CancellationToken cancellationToken)
     {
         WebTamperResource? resource;
@@ -424,10 +482,11 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
             return first;
         }
         var fetched = await FetchWebsiteAsync(resource.Website, resource.Path, cancellationToken);
-        RecordObservedContent(resource, resource.Path, fetched.Content.ContentType, fetched.Content.Bytes);
-        var baseline = await File.ReadAllBytesAsync(ContentPath(id), cancellationToken);
+        RecordObservedContent(resource, resource.Path, fetched.ContentType, fetched.FilePath, fetched.Hash);
         lock (_lock) resource = Clone(_store.Resources.First(item => item.Id == id));
-        return new ContentComparison(resource, resource.Changed, ToPreview(baseline), ToPreview(fetched.Content.Bytes));
+        return new ContentComparison(resource, resource.Changed,
+            await ToPreviewAsync(ContentPath(id), cancellationToken),
+            await ToPreviewAsync(fetched.FilePath, cancellationToken));
     }
 
     public async Task<ContentComparison?> AcceptCurrentAsync(string id, CancellationToken cancellationToken)
@@ -436,15 +495,15 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
         lock (_lock) resource = _store.Resources.FirstOrDefault(item => item.Id == id) is { } item ? Clone(item) : null;
         if (resource == null) return null;
         var fetched = await FetchWebsiteAsync(resource.Website, resource.Path, cancellationToken);
-        var hash = Hash(fetched.Content.Bytes);
+        var hash = fetched.Hash;
         lock (_lock)
         {
             var stored = _store.Resources.First(item => item.Id == id);
-            File.WriteAllBytes(ContentPath(id), fetched.Content.Bytes);
+            File.Copy(fetched.FilePath, ContentPath(id), true);
             stored.BaselineHash = hash;
             stored.CurrentHash = hash;
             stored.Url = fetched.Url;
-            stored.ContentType = fetched.Content.ContentType;
+            stored.ContentType = fetched.ContentType;
             stored.Changed = false;
             stored.UpdatedAt = DateTime.UtcNow;
             stored.LastCheckedAt = DateTime.UtcNow;
@@ -458,7 +517,8 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
             Save();
             resource = Clone(stored);
         }
-        return new ContentComparison(resource, false, ToPreview(fetched.Content.Bytes), ToPreview(fetched.Content.Bytes));
+        var preview = await ToPreviewAsync(fetched.FilePath, cancellationToken);
+        return new ContentComparison(resource, false, preview, preview);
     }
 
     public async Task CheckAllAsync(CancellationToken cancellationToken)
@@ -470,7 +530,7 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
         }
     }
 
-    private async Task<ProtectedContent> FetchAsync(string url, CancellationToken cancellationToken)
+    private async Task<CachedFetch> FetchAsync(string url, string cacheKey, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.TryAddWithoutValidation("X-LyWaf-Tamper-Check", _bypassToken);
@@ -479,35 +539,73 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
         var length = response.Content.Headers.ContentLength;
         if (length > MaxContentBytes) throw new ArgumentException("资源内容超过 2 MB 限制");
         await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var destination = new MemoryStream();
+        var destinationPath = Path.Combine(_remoteCacheDirectory, $"{CacheFileName(cacheKey)}-{Guid.NewGuid():N}.bin");
         var buffer = new byte[81920];
-        int read;
-        while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+        long total = 0;
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        try
         {
-            if (destination.Length + read > MaxContentBytes) throw new ArgumentException("资源内容超过 2 MB 限制");
-            destination.Write(buffer, 0, read);
+            await using var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write,
+                FileShare.Read, buffer.Length, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            int read;
+            while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+            {
+                total += read;
+                if (total > MaxContentBytes) throw new ArgumentException("资源内容超过 2 MB 限制");
+                hasher.AppendData(buffer, 0, read);
+                await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            }
+            await destination.FlushAsync(cancellationToken);
         }
-        return new ProtectedContent(destination.ToArray(), response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream");
+        catch
+        {
+            TryDelete(destinationPath);
+            throw;
+        }
+        return new CachedFetch(destinationPath,
+            response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream",
+            Convert.ToHexString(hasher.GetHashAndReset()), total, url, DateTime.UtcNow);
     }
 
-    private async Task<(ProtectedContent Content, string Url)> FetchWebsiteAsync(string domain, string path, CancellationToken cancellationToken)
+    private async Task<CachedFetch> FetchWebsiteAsync(string domain, string path, CancellationToken cancellationToken)
     {
-        Exception? httpsError = null;
-        foreach (var scheme in new[] { "https", "http" })
+        var cacheKey = $"{domain}\n{path}";
+        if (TryGetCachedFetch(cacheKey, out var cached)) return cached;
+        var gate = _fetchLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        try
         {
-            var url = $"{scheme}://{domain}{path}";
-            try
+            if (TryGetCachedFetch(cacheKey, out cached)) return cached;
+            Exception? httpsError = null;
+            foreach (var scheme in new[] { "https", "http" })
             {
-                return (await FetchAsync(url, cancellationToken), url);
+                var url = $"{scheme}://{domain}{path}";
+                try
+                {
+                    var fetched = await FetchAsync(url, cacheKey, cancellationToken);
+                    _fetchCache.AddOrUpdate(cacheKey, fetched, (_, _) => fetched);
+                    CleanupRemoteCache();
+                    return fetched;
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+                {
+                    if (scheme == "https") httpsError = ex;
+                    else throw new HttpRequestException(
+                        $"HTTPS 和 HTTP 均无法访问\nHTTPS：{httpsError?.Message}\nHTTP：{ex.Message}", ex);
+                }
             }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-            {
-                if (scheme == "https") httpsError = ex;
-                else throw new HttpRequestException(
-                    $"HTTPS 和 HTTP 均无法访问\nHTTPS：{httpsError?.Message}\nHTTP：{ex.Message}", ex);
-            }
+            throw new HttpRequestException("网站无法访问");
         }
-        throw new HttpRequestException("网站无法访问");
+        finally { gate.Release(); }
+    }
+
+    private bool TryGetCachedFetch(string key, out CachedFetch cached)
+    {
+        if (_fetchCache.TryGetValue(key, out cached!)
+            && DateTime.UtcNow - cached.FetchedAt < TimeSpan.FromMinutes(1)
+            && File.Exists(cached.FilePath)) return true;
+        cached = null!;
+        return false;
     }
 
     private static string NormalizeUrl(string value)
@@ -572,14 +670,55 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
     }
 
     private string ContentPath(string id) => Path.Combine(_contentDirectory, id + ".bin");
-    private static string Hash(ReadOnlySpan<byte> bytes) => Convert.ToHexString(SHA256.HashData(bytes));
-    private static string ToPreview(byte[] bytes) => System.Text.Encoding.UTF8.GetString(bytes.AsSpan(0, Math.Min(bytes.Length, 200_000)));
+    public static async Task<string> HashFileAsync(string path, CancellationToken cancellationToken = default)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken));
+    }
+
+    private static async Task<string> ToPreviewAsync(string path, CancellationToken cancellationToken)
+    {
+        const int maxPreviewBytes = 200_000;
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var length = (int)Math.Min(stream.Length, maxPreviewBytes);
+        var buffer = new byte[length];
+        var offset = 0;
+        while (offset < length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(offset, length - offset), cancellationToken);
+            if (read == 0) break;
+            offset += read;
+        }
+        return System.Text.Encoding.UTF8.GetString(buffer, 0, offset);
+    }
+
+    private static string CacheFileName(string key) => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)));
+    private static void TryDelete(string path) { try { if (File.Exists(path)) File.Delete(path); } catch { } }
+
+    private void CleanupRemoteCache()
+    {
+        var activeFiles = _fetchCache.Values.Select(item => item.FilePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var cutoff = DateTime.UtcNow - TimeSpan.FromMinutes(2);
+        foreach (var file in Directory.EnumerateFiles(_remoteCacheDirectory, "*.bin"))
+        {
+            if (!activeFiles.Contains(file) && File.GetLastWriteTimeUtc(file) < cutoff) TryDelete(file);
+        }
+    }
 
     private WebTamperStore Load()
     {
         try
         {
-            var store = File.Exists(_dataFile) ? JsonSerializer.Deserialize<WebTamperStore>(File.ReadAllText(_dataFile), JsonOptions) ?? new() : new();
+            WebTamperStore store;
+            if (File.Exists(_dataFile))
+            {
+                using var stream = new FileStream(_dataFile, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    81920, FileOptions.SequentialScan);
+                store = JsonSerializer.Deserialize<WebTamperStore>(stream, JsonOptions) ?? new();
+            }
+            else store = new();
             foreach (var resource in store.Resources)
             {
                 if (resource.Website.Length > 0) resource.Website = NormalizeDomain(resource.Website);
@@ -597,7 +736,12 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
     private void Save()
     {
         var temp = _dataFile + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(_store, JsonOptions));
+        using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None,
+            81920, FileOptions.SequentialScan))
+        {
+            JsonSerializer.Serialize(stream, _store, JsonOptions);
+            stream.Flush(true);
+        }
         File.Move(temp, _dataFile, true);
     }
 
@@ -623,8 +767,12 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
     public void Dispose()
     {
         _httpClient.Dispose();
+        foreach (var item in _fetchCache.Values) TryDelete(item.FilePath);
+        foreach (var gate in _fetchLocks.Values) gate.Dispose();
         GC.SuppressFinalize(this);
     }
+
+    private sealed record CachedFetch(string FilePath, string ContentType, string Hash, long Length, string Url, DateTime FetchedAt);
 
     private sealed class WebTamperStore
     {
@@ -638,7 +786,13 @@ public sealed class WebTamperMonitorService(IWebTamperService service, LyWaf.Plu
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await Task.Yield();
+        var queueTask = service.ProcessBackgroundChecksAsync(stoppingToken);
+        var dailyTask = RunDailyChecksAsync(stoppingToken);
+        await Task.WhenAll(queueTask, dailyTask);
+    }
+
+    private async Task RunDailyChecksAsync(CancellationToken stoppingToken)
+    {
         while (!stoppingToken.IsCancellationRequested)
         {
             try { await Task.Delay(TimeSpan.FromDays(1), stoppingToken); }
