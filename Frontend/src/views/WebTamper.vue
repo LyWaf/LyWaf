@@ -12,12 +12,13 @@ const loading = ref(true)
 const activeTab = ref<'resources' | 'events'>('resources')
 const search = ref('')
 const busyId = ref<string | null>(null)
+const checkingId = ref<string | null>(null)
 const showAdd = ref(false)
 const showAddWebsite = ref(false)
 const showDeleteWebsite = ref(false)
 const showRenameWebsite = ref(false)
 const websiteRemark = ref('')
-const websiteForm = ref({ name: '', domain: '' })
+const websiteForm = ref({ name: '', domain: '', port: '' })
 const websiteSaving = ref(false)
 const addPath = ref('/')
 const adding = ref(false)
@@ -86,6 +87,19 @@ const visibleEvents = computed(() => events.value.filter(item => {
 }))
 
 const unresolvedCount = computed(() => visibleEvents.value.filter(item => !item.resolved).length)
+const resourceForEvent = (event: WebTamperEvent) => {
+  const parent = resources.value.find(item => item.id === event.resourceId)
+  if (!parent) return undefined
+  return parent.isPattern
+    ? parent.capturedResources?.find(item => item.path === event.resourceName)
+    : parent
+}
+
+const inspectEvent = (event: WebTamperEvent) => {
+  const resource = resourceForEvent(event)
+  if (!resource) return showError('对应的保护资源已不存在')
+  return checkResource(resource)
+}
 const formatTime = (value?: string) => value ? new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'
 }).format(new Date(value)) : '尚未检查'
@@ -122,12 +136,14 @@ const addResource = async () => {
 
 const addWebsite = async () => {
   if (!websiteForm.value.name.trim() || !websiteForm.value.domain.trim()) return showError('请填写网站名称和域名')
+  const port = websiteForm.value.port ? Number(websiteForm.value.port) : undefined
+  if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) return showError('端口必须在 1 到 65535 之间')
   websiteSaving.value = true
   try {
-    const result = await webTamperApi.addWebsite(websiteForm.value.name.trim(), websiteForm.value.domain.trim())
+    const result = await webTamperApi.addWebsite(websiteForm.value.name.trim(), websiteForm.value.domain.trim(), port)
     if (!result.success) return showError(result.message || '添加网站失败')
-    const domain = websiteForm.value.domain.trim().toLowerCase()
-    websiteForm.value = { name: '', domain: '' }
+    const domain = result.website?.domain || `${websiteForm.value.domain.trim().toLowerCase()}${port ? `:${port}` : ''}`
+    websiteForm.value = { name: '', domain: '', port: '' }
     showAddWebsite.value = false
     await loadData()
     if (websites.value.some(item => item.domain === domain)) selectedWebsite.value = domain
@@ -181,14 +197,23 @@ const toggleResource = async (resource: WebTamperResource) => {
 
 const checkResource = async (resource: WebTamperResource) => {
   busyId.value = resource.id
+  checkingId.value = resource.id
   try {
     const result = await webTamperApi.check(resource.id)
-    if (!result.success || !result.comparison) return showError(result.message || '检查失败')
+    if (!result.success || !result.comparison) {
+      const message = result.message || '检查失败'
+      return showError(/超时|timed out|timeout|taskcanceled/i.test(message) ? '检查超时，请确认上游网站可访问后重试' : message)
+    }
     comparison.value = result.comparison
     showSuccess(result.comparison.changed ? '检测到内容变更，访客仍在使用安全基线' : '内容与安全基线一致')
     await loadData()
-  } catch { showError('检查失败') }
-  finally { busyId.value = null }
+  } catch (error: unknown) {
+    const requestError = error as { code?: string; message?: string }
+    showError(requestError.code === 'ECONNABORTED' || /timeout/i.test(requestError.message || '')
+      ? '检查超时，请确认上游网站可访问后重试'
+      : '检查失败，请稍后重试')
+  }
+  finally { busyId.value = null; checkingId.value = null }
 }
 
 const acceptCurrent = async () => {
@@ -274,11 +299,11 @@ onMounted(loadData)
                   </div>
                   <div class="text-xs text-gray-500 mt-1 ml-8 max-w-md truncate">{{ item.website }}<span v-if="item.isPattern"> · 已收集 {{ item.capturedCount }} 个 API/资源路径</span></div>
                 </td>
-                <td class="px-5 py-4"><span v-if="item.changed" class="badge badge-danger">发现变更</span><span v-else-if="item.enabled" class="badge badge-success">防护中</span><span v-else class="badge badge-warning">已暂停</span></td>
+                <td class="px-5 py-4"><span v-if="checkingId === item.id" class="inline-flex items-center gap-2 text-xs text-primary-400"><span class="w-3.5 h-3.5 border-2 border-primary-400/40 border-t-primary-400 rounded-full animate-spin"></span>正在检查</span><span v-else-if="item.changed" class="badge badge-danger">发现变更</span><span v-else-if="item.enabled" class="badge badge-success">防护中</span><span v-else class="badge badge-warning">已暂停</span></td>
                 <td class="px-5 py-4 font-mono text-xs text-gray-400">{{ item.isPattern ? `${item.capturedCount} 份独立基线` : shortHash(item.baselineHash) }}</td>
                 <td class="px-5 py-4 text-gray-400 whitespace-nowrap">{{ formatTime(item.lastCheckedAt) }}</td>
                 <td class="px-5 py-4 text-right whitespace-nowrap">
-                  <button class="text-primary-400 hover:text-primary-300 mr-4" :disabled="busyId === item.id" @click="checkResource(item)">检查</button>
+                  <button class="inline-flex items-center gap-1.5 text-primary-400 hover:text-primary-300 mr-4 disabled:opacity-70" :disabled="busyId === item.id" @click="checkResource(item)"><span v-if="checkingId === item.id" class="w-3.5 h-3.5 border-2 border-current/40 border-t-current rounded-full animate-spin"></span>{{ checkingId === item.id ? '检查中...' : '检查' }}</button>
                   <button class="text-gray-400 hover:text-gray-200 mr-4" :disabled="busyId === item.id" @click="toggleResource(item)">{{ item.enabled ? '暂停' : '启用' }}</button>
                   <button class="text-red-400 hover:text-red-300" @click="deleteTarget = item">删除</button>
                 </td>
@@ -292,9 +317,9 @@ onMounted(loadData)
                         <span v-if="row.kind === 'directory'" class="text-xs text-gray-500">目录</span>
                         <span class="font-mono text-xs truncate" :class="row.kind === 'directory' ? 'text-gray-400' : 'text-gray-200'">{{ row.label }}{{ row.kind === 'directory' ? '/' : '' }}</span>
                       </div>
-                      <div v-if="row.resource"><span v-if="!row.resource.enabled" class="badge badge-warning">已排除</span><span v-else-if="row.resource.changed" class="badge badge-danger">发现变更</span><span v-else class="badge badge-success">基线正常</span></div><div v-else></div>
+                      <div v-if="row.resource"><span v-if="checkingId === row.resource.id" class="inline-flex items-center gap-2 text-xs text-primary-400"><span class="w-3.5 h-3.5 border-2 border-primary-400/40 border-t-primary-400 rounded-full animate-spin"></span>正在检查</span><span v-else-if="!row.resource.enabled" class="badge badge-warning">已排除</span><span v-else-if="row.resource.changed" class="badge badge-danger">发现变更</span><span v-else class="badge badge-success">基线正常</span></div><div v-else></div>
                       <div class="font-mono text-xs text-gray-500">{{ row.resource ? shortHash(row.resource.baselineHash) : '' }}</div>
-                      <div v-if="row.resource" class="flex items-center justify-end gap-4 whitespace-nowrap"><span class="text-xs text-gray-500">{{ formatTime(row.resource.lastCheckedAt) }}</span><button class="text-xs text-primary-400 hover:text-primary-300" :disabled="busyId === row.resource.id" @click="checkResource(row.resource)">检查</button><button class="text-xs text-gray-400 hover:text-gray-200" :disabled="busyId === row.resource.id" @click="toggleResource(row.resource)">{{ row.resource.enabled ? '排除' : '恢复' }}</button><button class="text-xs text-red-400 hover:text-red-300" @click="deleteTarget = row.resource">删除</button></div>
+                      <div v-if="row.resource" class="flex items-center justify-end gap-4 whitespace-nowrap"><span class="text-xs text-gray-500">{{ formatTime(row.resource.lastCheckedAt) }}</span><button class="inline-flex items-center gap-1.5 text-xs text-primary-400 hover:text-primary-300 disabled:opacity-70" :disabled="busyId === row.resource.id" @click="checkResource(row.resource)"><span v-if="checkingId === row.resource.id" class="w-3 h-3 border-2 border-current/40 border-t-current rounded-full animate-spin"></span>{{ checkingId === row.resource.id ? '检查中...' : '检查' }}</button><button class="text-xs text-gray-400 hover:text-gray-200" :disabled="busyId === row.resource.id" @click="toggleResource(row.resource)">{{ row.resource.enabled ? '排除' : '恢复' }}</button><button class="text-xs text-red-400 hover:text-red-300" @click="deleteTarget = row.resource">删除</button></div>
                     </div>
                   </div>
                   <div v-else class="px-12 py-6 text-sm text-gray-500">尚未收集到实际路径。匹配该规则的请求首次经过 WAF 后会自动出现在这里。</div>
@@ -310,16 +335,16 @@ onMounted(loadData)
 
     <section v-else class="bg-dark-card border border-dark-border rounded-lg overflow-hidden">
       <div class="overflow-x-auto"><table class="w-full min-w-[780px] text-sm">
-        <thead class="bg-dark-card-hover text-gray-400"><tr><th class="text-left px-5 py-3 font-medium">资源</th><th class="text-left px-5 py-3 font-medium">检测时间</th><th class="text-left px-5 py-3 font-medium">指纹变化</th><th class="text-left px-5 py-3 font-medium">状态</th></tr></thead>
+        <thead class="bg-dark-card-hover text-gray-400"><tr><th class="text-left px-5 py-3 font-medium">资源</th><th class="text-left px-5 py-3 font-medium">检测时间</th><th class="text-left px-5 py-3 font-medium">指纹变化</th><th class="text-left px-5 py-3 font-medium">状态</th><th class="text-right px-5 py-3 font-medium">操作</th></tr></thead>
         <tbody class="divide-y divide-dark-border">
-          <tr v-for="event in visibleEvents" :key="event.id"><td class="px-5 py-4"><div class="text-gray-200 font-mono">{{ event.resourceName }}</div><div class="text-xs text-gray-500 truncate max-w-sm">{{ event.url }}</div></td><td class="px-5 py-4 text-gray-400">{{ formatTime(event.detectedAt) }}</td><td class="px-5 py-4 font-mono text-xs text-gray-500">{{ shortHash(event.baselineHash) }} → {{ shortHash(event.currentHash) }}</td><td class="px-5 py-4"><span :class="event.resolved ? 'badge badge-success' : 'badge badge-danger'">{{ event.resolved ? '已处理' : '待确认' }}</span></td></tr>
-          <tr v-if="!visibleEvents.length"><td colspan="4" class="py-14 text-center text-gray-500">当前网站暂无变更事件</td></tr>
+          <tr v-for="event in visibleEvents" :key="event.id"><td class="px-5 py-4"><div class="text-gray-200 font-mono">{{ event.resourceName }}</div><div class="text-xs text-gray-500 truncate max-w-sm">{{ event.url }}</div></td><td class="px-5 py-4 text-gray-400">{{ formatTime(event.detectedAt) }}</td><td class="px-5 py-4 font-mono text-xs text-gray-500">{{ shortHash(event.baselineHash) }} → {{ shortHash(event.currentHash) }}</td><td class="px-5 py-4"><span :class="event.resolved ? 'badge badge-success' : 'badge badge-danger'">{{ event.resolved ? '已处理' : '待确认' }}</span></td><td class="px-5 py-4 text-right"><button class="inline-flex items-center gap-1.5 text-primary-400 hover:text-primary-300 disabled:opacity-60 whitespace-nowrap" :disabled="busyId === resourceForEvent(event)?.id || !resourceForEvent(event)" @click="inspectEvent(event)"><span v-if="checkingId === resourceForEvent(event)?.id" class="w-3.5 h-3.5 border-2 border-current/40 border-t-current rounded-full animate-spin"></span>{{ checkingId === resourceForEvent(event)?.id ? '查看中...' : (event.resolved ? '查看内容' : '查看状态') }}</button></td></tr>
+          <tr v-if="!visibleEvents.length"><td colspan="5" class="py-14 text-center text-gray-500">当前网站暂无变更事件</td></tr>
         </tbody>
       </table></div>
     </section>
   </div>
 
-  <Teleport to="body"><div v-if="showAddWebsite" class="fixed inset-0 z-[100] flex items-center justify-center p-4"><div class="absolute inset-0 bg-black/60" @click="showAddWebsite = false"></div><div class="relative w-[500px] max-w-full bg-dark-card border border-dark-border rounded-lg shadow-2xl"><div class="flex items-center justify-between px-6 py-4 border-b border-dark-border"><h3 class="text-lg font-semibold">添加防护网站</h3><button class="text-xl text-gray-400" title="关闭" @click="showAddWebsite = false">×</button></div><div class="p-6 space-y-4"><div><label class="block text-sm text-gray-400 mb-1">网站名称</label><input v-model="websiteForm.name" class="input" placeholder="例如：企业官网" /></div><div><label class="block text-sm text-gray-400 mb-1">域名</label><input v-model="websiteForm.domain" class="input" placeholder="www.example.com" @keydown.enter="addWebsite" /></div><p class="text-xs text-gray-500">只填写域名。检查时优先访问 HTTPS，失败后自动尝试 HTTP。</p></div><div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border"><button class="btn btn-secondary" @click="showAddWebsite = false">取消</button><button class="btn btn-primary" :disabled="websiteSaving" @click="addWebsite">{{ websiteSaving ? '添加中...' : '添加网站' }}</button></div></div></div></Teleport>
+  <Teleport to="body"><div v-if="showAddWebsite" class="fixed inset-0 z-[100] flex items-center justify-center p-4"><div class="absolute inset-0 bg-black/60" @click="showAddWebsite = false"></div><div class="relative w-[500px] max-w-full bg-dark-card border border-dark-border rounded-lg shadow-2xl"><div class="flex items-center justify-between px-6 py-4 border-b border-dark-border"><h3 class="text-lg font-semibold">添加防护网站</h3><button class="text-xl text-gray-400" title="关闭" @click="showAddWebsite = false">×</button></div><div class="p-6 space-y-4"><div><label class="block text-sm text-gray-400 mb-1">网站名称</label><input v-model="websiteForm.name" class="input" placeholder="例如：企业官网" /></div><div class="grid grid-cols-[minmax(0,1fr)_120px] gap-3"><div><label class="block text-sm text-gray-400 mb-1">域名</label><input v-model="websiteForm.domain" class="input" placeholder="www.example.com" /></div><div><label class="block text-sm text-gray-400 mb-1">端口</label><input v-model="websiteForm.port" class="input" type="number" min="1" max="65535" placeholder="可选" @keydown.enter="addWebsite" /></div></div><p class="text-xs text-gray-500">无需填写 Scheme。检查时使用指定端口优先访问 HTTPS，失败后自动尝试 HTTP。</p></div><div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border"><button class="btn btn-secondary" @click="showAddWebsite = false">取消</button><button class="btn btn-primary" :disabled="websiteSaving" @click="addWebsite">{{ websiteSaving ? '添加中...' : '添加网站' }}</button></div></div></div></Teleport>
 
   <Teleport to="body"><div v-if="showRenameWebsite && currentWebsite" class="fixed inset-0 z-[100] flex items-center justify-center p-4"><div class="absolute inset-0 bg-black/60" @click="showRenameWebsite = false"></div><div class="relative w-[460px] max-w-full bg-dark-card border border-dark-border rounded-lg shadow-2xl"><div class="flex items-center justify-between px-6 py-4 border-b border-dark-border"><h3 class="text-lg font-semibold">修改网站备注</h3><button class="text-xl text-gray-400" title="关闭" @click="showRenameWebsite = false">×</button></div><div class="p-6 space-y-4"><div><label class="block text-sm text-gray-400 mb-1">备注名称</label><input v-model="websiteRemark" class="input" maxlength="80" placeholder="例如：企业官网" @keydown.enter="renameWebsite" /></div><div><label class="block text-sm text-gray-400 mb-1">域名</label><div class="px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-gray-500">{{ currentWebsite.domain }}</div></div></div><div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border"><button class="btn btn-secondary" @click="showRenameWebsite = false">取消</button><button class="btn btn-primary" :disabled="websiteSaving" @click="renameWebsite">{{ websiteSaving ? '保存中...' : '保存备注' }}</button></div></div></div></Teleport>
 

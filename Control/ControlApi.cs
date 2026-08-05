@@ -2214,7 +2214,9 @@ public static class ControlApi
                     }
 
                     host = host.Trim('[', ']').TrimEnd('.').ToLowerInvariant();
-                    sites[host] = new { id = $"config:{host}", name = host, host, domain = host, source = "config", removable = false };
+                    var authorityHost = host.Contains(':') ? $"[{host}]" : host;
+                    var authority = port.HasValue ? $"{authorityHost}:{port.Value}" : authorityHost;
+                    sites[authority] = new { id = $"config:{authority}", name = authority, host = authority, domain = authority, source = "config", removable = false };
                 }
             }
             foreach (var website in service.GetWebsites())
@@ -2257,7 +2259,7 @@ public static class ControlApi
             {
                 var request = await ctx.Request.ReadFromJsonAsync<CreateWebTamperWebsiteRequest>();
                 if (request == null) return Results.BadRequest(new { success = false, message = "请求内容不能为空" });
-                var website = service.AddWebsite(request.Name, request.Origin);
+                var website = service.AddWebsite(request.Name, request.Origin, request.Port);
                 ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
                     ctx.Items["Username"]?.ToString() ?? "unknown", $"添加防篡改网站: {website.Name} {website.Origin}",
                     ctx.Connection.RemoteIpAddress?.ToString() ?? "");
@@ -7904,6 +7906,7 @@ public class CreateWebTamperWebsiteRequest
 {
     public string Name { get; set; } = "";
     public string Origin { get; set; } = "";
+    public int? Port { get; set; }
 }
 
 public class RenameWebTamperWebsiteRequest

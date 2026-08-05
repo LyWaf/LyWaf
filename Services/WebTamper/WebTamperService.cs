@@ -58,7 +58,7 @@ public interface IWebTamperService
     IReadOnlyList<WebTamperResource> GetResources();
     IReadOnlyList<WebTamperEvent> GetEvents();
     IReadOnlyList<WebTamperWebsite> GetWebsites();
-    WebTamperWebsite AddWebsite(string name, string origin);
+    WebTamperWebsite AddWebsite(string name, string origin, int? port = null);
     WebTamperWebsite RenameWebsite(string name, string origin, string source);
     bool DeleteWebsite(string id);
     Task<WebTamperResource> AddAsync(string website, string path, CancellationToken cancellationToken);
@@ -126,7 +126,15 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
 
     public IReadOnlyList<WebTamperEvent> GetEvents()
     {
-        lock (_lock) return _store.Events.OrderByDescending(item => item.DetectedAt).Select(Clone).ToList();
+        lock (_lock)
+        {
+            return _store.Events
+                .GroupBy(item => $"{item.ResourceId}\n{item.ResourceName}", StringComparer.Ordinal)
+                .Select(group => group.OrderByDescending(item => item.DetectedAt).First())
+                .OrderByDescending(item => item.DetectedAt)
+                .Select(Clone)
+                .ToList();
+        }
     }
 
     public IReadOnlyList<WebTamperWebsite> GetWebsites()
@@ -134,11 +142,11 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
         lock (_lock) return _store.Websites.OrderBy(item => item.Name).Select(Clone).ToList();
     }
 
-    public WebTamperWebsite AddWebsite(string name, string origin)
+    public WebTamperWebsite AddWebsite(string name, string origin, int? port = null)
     {
         name = name.Trim();
         if (name.Length == 0 || name.Length > 80) throw new ArgumentException("网站名称不能为空且不能超过 80 个字符");
-        origin = NormalizeDomain(origin);
+        origin = NormalizeDomain(origin, port);
         lock (_lock)
         {
             if (_store.Websites.Any(item => string.Equals(item.Origin, origin, StringComparison.OrdinalIgnoreCase)))
@@ -283,7 +291,7 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
             var requestPath = $"{requestPathOnly}{request.QueryString}";
             var match = _store.Resources
                 .Where(item => item.ParentResourceId == null && item.Enabled
-                    && string.Equals(item.Website, request.Host.Host, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(item.Website, NormalizeRequestHost(request.Host), StringComparison.OrdinalIgnoreCase)
                     && ((!item.IsPattern && string.Equals(item.Path, requestPath, StringComparison.Ordinal))
                         || (item.IsPattern && PathMatches(item.Path, requestPathOnly))))
                 .OrderBy(item => item.IsPattern ? 1 : 0)
@@ -349,22 +357,50 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
             var shouldPersistCheckTime = !stored.LastCheckedAt.HasValue || now - stored.LastCheckedAt.Value >= TimeSpan.FromMinutes(5);
             stored.LastCheckedAt = now;
             stored.Changed = !string.Equals(stored.BaselineHash, currentHash, StringComparison.Ordinal);
-            var eventAdded = false;
-            if (stored.Changed && !_store.Events.Any(item => item.ResourceId == stored.Id && !item.Resolved && item.CurrentHash == currentHash))
+            var eventChanged = false;
+            if (stored.Changed)
             {
-                _store.Events.Add(new WebTamperEvent
+                var eventResourceId = stored.ParentResourceId ?? stored.Id;
+                var existingEvent = _store.Events
+                    .Where(item => item.ResourceId == eventResourceId && item.ResourceName == stored.Path && !item.Resolved)
+                    .OrderByDescending(item => item.DetectedAt)
+                    .FirstOrDefault();
+                if (existingEvent == null)
                 {
-                    ResourceId = stored.ParentResourceId ?? stored.Id,
-                    ResourceName = stored.Path,
-                    Url = stored.Url,
-                    BaselineHash = stored.BaselineHash,
-                    CurrentHash = currentHash
-                });
-                eventAdded = true;
+                    existingEvent = new WebTamperEvent
+                    {
+                        ResourceId = eventResourceId,
+                        ResourceName = stored.Path
+                    };
+                    _store.Events.Add(existingEvent);
+                }
+                existingEvent.Url = stored.Url;
+                existingEvent.BaselineHash = stored.BaselineHash;
+                existingEvent.CurrentHash = currentHash;
+                existingEvent.DetectedAt = now;
+                eventChanged = true;
+                _store.Events.RemoveAll(item => item.Id != existingEvent.Id && item.ResourceId == eventResourceId
+                    && item.ResourceName == stored.Path && !item.Resolved);
                 if (_store.Events.Count > 500) _store.Events.RemoveRange(0, _store.Events.Count - 500);
                 Logger.Warn("网页内容变更，已返回安全基线: {Name} {Url}", stored.Name, stored.Url);
             }
-            if (eventAdded || previousChanged != stored.Changed || shouldPersistCheckTime) Save();
+            else
+            {
+                var eventResourceId = stored.ParentResourceId ?? stored.Id;
+                var pendingEvents = _store.Events.Where(item => item.ResourceId == eventResourceId
+                    && item.ResourceName == stored.Path && !item.Resolved).ToList();
+                if (pendingEvents.Count > 0)
+                {
+                    foreach (var pendingEvent in pendingEvents)
+                    {
+                        pendingEvent.Resolved = true;
+                        pendingEvent.ResolvedAt = now;
+                    }
+                    eventChanged = true;
+                    Logger.Info("网页内容已恢复至安全基线，自动确认变更事件: {Name} {Url}", stored.Name, stored.Url);
+                }
+            }
+            if (eventChanged || previousChanged != stored.Changed || shouldPersistCheckTime) Save();
         }
     }
 
@@ -412,7 +448,9 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
             stored.Changed = false;
             stored.UpdatedAt = DateTime.UtcNow;
             stored.LastCheckedAt = DateTime.UtcNow;
-            foreach (var evt in _store.Events.Where(item => item.ResourceId == id && !item.Resolved))
+            foreach (var evt in _store.Events.Where(item => !item.Resolved
+                && (item.ResourceId == id
+                    || (stored.ParentResourceId != null && item.ResourceId == stored.ParentResourceId && item.ResourceName == stored.Path))))
             {
                 evt.Resolved = true;
                 evt.ResolvedAt = DateTime.UtcNow;
@@ -479,16 +517,27 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
         return uri.GetComponents(UriComponents.SchemeAndServer | UriComponents.PathAndQuery, UriFormat.UriEscaped).TrimEnd('/');
     }
 
-    private static string NormalizeDomain(string value)
+    private static string NormalizeDomain(string value, int? port = null)
     {
         value = value.Trim();
-        if (Uri.TryCreate(value, UriKind.Absolute, out var absolute)) value = absolute.Host;
-        else if (Uri.TryCreate("https://" + value, UriKind.Absolute, out var withScheme)) value = withScheme.Host;
-        else throw new ArgumentException("请输入有效的域名");
-        value = value.Trim().TrimEnd('.').ToLowerInvariant();
-        if (value.Length == 0 || (Uri.CheckHostName(value) == UriHostNameType.Unknown && !System.Net.IPAddress.TryParse(value, out _)))
+        if (port is < 1 or > 65535) throw new ArgumentException("端口必须在 1 到 65535 之间");
+        var candidate = value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? value : "https://" + value;
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri)) throw new ArgumentException("请输入有效的域名");
+        var host = uri.Host.Trim().TrimEnd('.').ToLowerInvariant();
+        if (host.Length == 0 || (Uri.CheckHostName(host) == UriHostNameType.Unknown && !System.Net.IPAddress.TryParse(host, out _)))
             throw new ArgumentException("请输入有效的域名");
-        return value;
+        var effectivePort = port ?? (uri.IsDefaultPort ? null : uri.Port);
+        return FormatAuthority(host, effectivePort);
+    }
+
+    private static string NormalizeRequestHost(HostString host) =>
+        FormatAuthority(host.Host.TrimEnd('.').ToLowerInvariant(), host.Port);
+
+    private static string FormatAuthority(string host, int? port)
+    {
+        var formattedHost = host.Contains(':') && !host.StartsWith('[') ? $"[{host}]" : host;
+        return port.HasValue ? $"{formattedHost}:{port.Value}" : formattedHost;
     }
 
     private static string NormalizePath(string value)

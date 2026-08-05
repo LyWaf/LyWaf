@@ -151,7 +151,7 @@ export interface WebTamperWebsite {
 
 export const webTamperApi = {
   getWebsites: () => api.get<{ success: boolean; websites: WebTamperWebsite[] }>('/web-tamper/websites'),
-  addWebsite: (name: string, domain: string) => api.post<{ success: boolean; message?: string }>('/web-tamper/websites', { name, origin: domain }),
+  addWebsite: (name: string, domain: string, port?: number) => api.post<{ success: boolean; website?: WebTamperWebsite; message?: string }>('/web-tamper/websites', { name, origin: domain, port }),
   renameWebsite: (name: string, domain: string, source: 'config' | 'manual') => api.put<{ success: boolean; message?: string }>('/web-tamper/websites/name', { name, origin: domain, source }),
   deleteWebsite: (id: string) => api.delete<{ success: boolean; message?: string }>(`/web-tamper/websites/${encodeURIComponent(id)}`),
   getResources: () => api.get<{ success: boolean; resources: WebTamperResource[] }>('/web-tamper/resources'),
@@ -159,7 +159,7 @@ export const webTamperApi = {
   add: (website: string, path: string) => api.post<{ success: boolean; resource?: WebTamperResource; message?: string }>('/web-tamper/resources', { website, path }),
   update: (id: string, name: string, enabled: boolean) => api.put<{ success: boolean; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}`, { name, enabled }),
   delete: (id: string) => api.delete<{ success: boolean; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}`),
-  check: (id: string) => api.post<{ success: boolean; comparison?: WebTamperComparison; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}/check`),
+  check: (id: string) => api.post<{ success: boolean; comparison?: WebTamperComparison; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}/check`, undefined, { timeout: 60000 }),
   accept: (id: string) => api.post<{ success: boolean; comparison?: WebTamperComparison; message?: string }>(`/web-tamper/resources/${encodeURIComponent(id)}/accept`),
 }
 
