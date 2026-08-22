@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { webTamperApi, type WebTamperComparison, type WebTamperEvent, type WebTamperResource, type WebTamperWebsite } from './api'
+import { createUnifiedDiff } from './diff'
 import { useToast } from '@/composables/useToast'
 import { useRouter } from 'vue-router'
 
@@ -25,6 +26,21 @@ const websiteSaving = ref(false)
 const addPath = ref('/')
 const adding = ref(false)
 const comparison = ref<WebTamperComparison | null>(null)
+const comparisonView = ref<'diff' | 'baseline' | 'current'>('diff')
+const expandedDiffSections = ref<string[]>([])
+const comparisonDiff = computed(() => comparison.value
+  ? createUnifiedDiff(comparison.value.baselineContent, comparison.value.currentContent)
+  : [])
+const visibleComparisonDiff = computed(() => comparisonDiff.value.flatMap(row =>
+  row.kind === 'skip' && row.sectionId && expandedDiffSections.value.includes(row.sectionId)
+    ? [row, ...(row.collapsedRows || [])]
+    : [row]))
+const toggleDiffSection = (sectionId?: string) => {
+  if (!sectionId) return
+  expandedDiffSections.value = expandedDiffSections.value.includes(sectionId)
+    ? expandedDiffSections.value.filter(item => item !== sectionId)
+    : [...expandedDiffSections.value, sectionId]
+}
 const deleteTarget = ref<WebTamperResource | null>(null)
 const expandedPatterns = ref<string[]>([])
 
@@ -207,6 +223,8 @@ const checkResource = async (resource: WebTamperResource) => {
       return showError(/超时|timed out|timeout|taskcanceled/i.test(message) ? '检查超时，请确认上游网站可访问后重试' : message)
     }
     comparison.value = result.comparison
+    comparisonView.value = 'diff'
+    expandedDiffSections.value = []
     showSuccess(result.comparison.changed ? '检测到内容变更，访客仍在使用安全基线' : '内容与安全基线一致')
     await loadData()
   } catch (error: unknown) {
@@ -355,7 +373,55 @@ onMounted(loadData)
 
   <Teleport to="body"><div v-if="showAdd" class="fixed inset-0 z-[100] flex items-center justify-center p-4"><div class="absolute inset-0 bg-black/60" @click="showAdd = false"></div><div class="relative w-[520px] max-w-full bg-dark-card border border-dark-border rounded-lg shadow-2xl"><div class="flex items-center justify-between px-6 py-4 border-b border-dark-border"><h3 class="text-lg font-semibold">添加保护资源</h3><button class="text-xl text-gray-400" title="关闭" @click="showAdd = false">×</button></div><div class="p-6 space-y-4"><div><label class="block text-sm text-gray-400 mb-1">防护网站</label><div class="px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-gray-300">{{ selectedWebsite }}</div></div><div><label class="block text-sm text-gray-400 mb-1">资源路径或规则</label><input v-model="addPath" class="input font-mono" placeholder="/api/* 或 /static/{**match}" @keydown.enter="addResource" /></div><p class="text-xs text-gray-500">支持精确 Path、/*、/static/*、/static/{**match} 和 /static/{**match**}。通配规则会在实际路径首次访问时分别建立基线。</p></div><div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border"><button class="btn btn-secondary" @click="showAdd = false">取消</button><button class="btn btn-primary" :disabled="adding" @click="addResource">{{ adding ? '处理中...' : '添加保护资源' }}</button></div></div></div></Teleport>
 
-  <Teleport to="body"><div v-if="comparison" class="fixed inset-0 z-[100] flex items-center justify-center p-4"><div class="absolute inset-0 bg-black/70" @click="comparison = null"></div><div class="relative w-[1100px] max-w-full max-h-[90vh] flex flex-col bg-dark-card border border-dark-border rounded-lg shadow-2xl"><div class="flex items-center justify-between px-6 py-4 border-b border-dark-border"><div><h3 class="text-lg font-semibold">内容对比</h3><p class="text-xs text-gray-500 mt-1">{{ comparison.resource.url }}</p></div><button class="text-xl text-gray-400" title="关闭" @click="comparison = null">×</button></div><div class="grid grid-cols-1 md:grid-cols-2 gap-px bg-dark-border min-h-0 overflow-hidden"><div class="bg-dark-card p-4 min-h-0"><div class="text-sm text-green-400 mb-2">已确认的安全基线</div><pre class="h-[55vh] overflow-auto p-3 bg-dark-bg text-xs text-gray-300 whitespace-pre-wrap break-all">{{ comparison.baselineContent }}</pre></div><div class="bg-dark-card p-4 min-h-0"><div class="text-sm" :class="comparison.changed ? 'text-red-400' : 'text-green-400'">当前上游内容</div><pre class="h-[55vh] overflow-auto p-3 mt-2 bg-dark-bg text-xs text-gray-300 whitespace-pre-wrap break-all">{{ comparison.currentContent }}</pre></div></div><div class="flex flex-col sm:flex-row justify-end gap-3 px-6 py-4 border-t border-dark-border"><button class="btn btn-secondary" @click="comparison = null">继续使用安全基线</button><button v-if="comparison.changed" class="btn btn-warning" @click="acceptCurrent">确认正常，更新基线</button></div></div></div></Teleport>
+  <Teleport to="body">
+    <div v-if="comparison" class="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div class="absolute inset-0 bg-black/70" @click="comparison = null"></div>
+      <div class="relative w-[1400px] max-w-full max-h-[90vh] flex flex-col bg-dark-card border border-dark-border rounded-lg shadow-2xl">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
+          <div class="min-w-0">
+            <h3 class="text-lg font-semibold">内容差异</h3>
+            <p class="text-xs text-gray-500 mt-1 truncate">{{ comparison.resource.url }}</p>
+          </div>
+          <button class="text-xl text-gray-400" title="关闭" @click="comparison = null">×</button>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-3 px-5 py-2 border-b border-dark-border bg-dark-bg/40">
+          <div class="inline-flex overflow-hidden rounded border border-dark-border text-xs">
+            <button class="px-3 py-1.5" :class="comparisonView === 'diff' ? 'bg-primary-500 text-dark-bg' : 'text-gray-400 hover:bg-white/5'" @click="comparisonView = 'diff'">差异</button>
+            <button class="border-l border-dark-border px-3 py-1.5" :class="comparisonView === 'baseline' ? 'bg-primary-500 text-dark-bg' : 'text-gray-400 hover:bg-white/5'" @click="comparisonView = 'baseline'">本地安全基线</button>
+            <button class="border-l border-dark-border px-3 py-1.5" :class="comparisonView === 'current' ? 'bg-primary-500 text-dark-bg' : 'text-gray-400 hover:bg-white/5'" @click="comparisonView = 'current'">线上当前内容</button>
+          </div>
+          <div v-if="comparisonView === 'diff'" class="flex items-center gap-5 text-xs">
+            <span class="text-red-400">− 安全基线</span>
+            <span class="text-green-400">+ 当前上游</span>
+          </div>
+        </div>
+        <div v-if="comparisonView === 'diff'" class="h-[58vh] min-h-0 overflow-auto bg-[#0d1117] font-mono text-xs leading-5">
+          <div v-for="(row, index) in visibleComparisonDiff" :key="`${row.sectionId || 'line'}-${row.oldLine || 0}-${row.newLine || 0}-${index}`"
+            class="grid min-w-max grid-cols-[3.5rem_3.5rem_1.5rem_minmax(40rem,1fr)] border-l-2"
+            :class="row.kind === 'removed' ? 'bg-red-950/40 border-red-500' : row.kind === 'added' ? 'bg-green-950/40 border-green-500' : row.kind === 'skip' ? 'bg-blue-950/30 border-blue-500' : 'border-transparent hover:bg-white/[0.03]'">
+            <template v-if="row.kind === 'skip'">
+              <button class="col-span-4 px-4 py-1 text-left text-blue-400 hover:bg-blue-500/10 hover:text-blue-300" @click="toggleDiffSection(row.sectionId)">
+                {{ row.sectionId && expandedDiffSections.includes(row.sectionId) ? '收起' : '展开' }} {{ row.skipped }} 行未变内容
+              </button>
+            </template>
+            <template v-else>
+              <span class="select-none border-r border-white/5 px-2 text-right text-gray-600">{{ row.oldLine ?? '' }}</span>
+              <span class="select-none border-r border-white/5 px-2 text-right text-gray-600">{{ row.newLine ?? '' }}</span>
+              <span class="select-none text-center" :class="row.kind === 'removed' ? 'text-red-400' : row.kind === 'added' ? 'text-green-400' : 'text-gray-600'">{{ row.kind === 'removed' ? '−' : row.kind === 'added' ? '+' : ' ' }}</span>
+              <code class="pr-5 whitespace-pre text-gray-300">{{ row.text || ' ' }}</code>
+            </template>
+          </div>
+        </div>
+        <div v-else class="h-[58vh] min-h-0 overflow-auto bg-[#0d1117]">
+          <pre class="min-w-max p-4 font-mono text-xs leading-5 text-gray-300 whitespace-pre">{{ comparisonView === 'baseline' ? comparison.baselineContent : comparison.currentContent }}</pre>
+        </div>
+        <div class="flex flex-col sm:flex-row justify-end gap-3 px-6 py-4 border-t border-dark-border">
+          <button class="btn btn-secondary" @click="comparison = null">继续使用安全基线</button>
+          <button v-if="comparison.changed" class="btn btn-warning" @click="acceptCurrent">确认正常，更新基线</button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 
   <Teleport to="body"><div v-if="deleteTarget" class="fixed inset-0 z-[100] flex items-center justify-center p-4"><div class="absolute inset-0 bg-black/60" @click="deleteTarget = null"></div><div class="relative w-[440px] max-w-full bg-dark-card border border-dark-border rounded-lg"><div class="p-6"><h3 class="text-lg font-semibold mb-2">删除保护资源</h3><p class="text-gray-400">删除“{{ deleteTarget.name }}”及其安全基线和事件记录？</p><p v-if="deleteTarget.parentResourceId" class="text-xs text-yellow-400 mt-3">该路径仍匹配上级目录规则，下次收到请求时会重新收集并建立基线。需要长期忽略时请使用“排除”。</p></div><div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border"><button class="btn btn-secondary" @click="deleteTarget = null">取消</button><button class="btn btn-danger" @click="removeResource">删除</button></div></div></div></Teleport>
 </template>

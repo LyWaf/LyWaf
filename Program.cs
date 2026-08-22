@@ -1327,6 +1327,8 @@ public class Program
         {
             // 精确统计入站/出站字节（必须放在最外层）
             proxyApp.UseMiddleware<BandwidthCountingMiddleware>();
+            // 路由级 CORS 及 OPTIONS 预检
+            proxyApp.UseMiddleware<CorsMiddleware>();
             // 启用响应压缩（必须放在其他中间件之前）
             proxyApp.UseMiddleware<ResponseCompressMiddleware>();
             // 高优先级插件（Highest, High）- 在核心中间件之前

@@ -690,6 +690,7 @@ public static class LyToAppSettingsConverter
             var defaultRespondConfig = new Dictionary<string, object>();
             var siteHeaderUps = new Dictionary<string, object>();
             var siteHeaderDowns = new Dictionary<string, object>();
+            Dictionary<string, object>? siteCors = null;
 
             foreach (var directive in siteContent)
             {
@@ -832,6 +833,10 @@ public static class LyToAppSettingsConverter
                             if (directive.Value is Dictionary<string, object> hdrDowns)
                                 foreach (var kv in hdrDowns) siteHeaderDowns[kv.Key] = kv.Value;
                             break;
+
+                        case "cors":
+                            siteCors = ParseCorsConfig(directive.Value);
+                            break;
                     }
                 }
             }
@@ -846,6 +851,7 @@ public static class LyToAppSettingsConverter
 
                 var blockHasRespond = false;
                 var blockRespondConfig = new Dictionary<string, object>();
+                var blockCors = siteCors;
 
                 // 解析 handle 块内的配置
                 foreach (var kv in config)
@@ -915,6 +921,9 @@ public static class LyToAppSettingsConverter
                         case "showreq":
                             blockRespondConfig["show_req"] = kv.Value;
                             break;
+                        case "cors":
+                            blockCors = ParseCorsConfig(kv.Value);
+                            break;
                     }
                 }
 
@@ -942,6 +951,7 @@ public static class LyToAppSettingsConverter
                         match["Hosts"] = hosts;
                     }
                     AddMethodsToMatch(match, methods);
+                    AddCorsPreflightMethod(match, methods, blockCors);
 
                     var routeConfig = new Dictionary<string, object>
                     {
@@ -950,6 +960,7 @@ public static class LyToAppSettingsConverter
                         ["Order"] = ctx.NextRouteOrder(normalizedPath, hosts.Count > 0)
                     };
                     ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
+                    ApplyCorsMetadata(routeConfig, blockCors);
 
                     ctx.Routes[routeId] = routeConfig;
                 }
@@ -973,6 +984,7 @@ public static class LyToAppSettingsConverter
                         match["Hosts"] = hosts;
                     }
                     AddMethodsToMatch(match, methods);
+                    AddCorsPreflightMethod(match, methods, blockCors);
 
                     // 使用 cluster1，如果不存在会在后面创建假的
                     var routeConfig = new Dictionary<string, object>
@@ -982,6 +994,7 @@ public static class LyToAppSettingsConverter
                         ["Order"] = ctx.NextRouteOrder(matchPath, hosts.Count > 0)
                     };
                     ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
+                    ApplyCorsMetadata(routeConfig, blockCors);
 
                     ctx.Routes[fileServerId] = routeConfig;
                 }
@@ -999,6 +1012,7 @@ public static class LyToAppSettingsConverter
                         match["Hosts"] = hosts;
                     }
                     AddMethodsToMatch(match, methods);
+                    AddCorsPreflightMethod(match, methods, blockCors);
 
                     var routeConfig = new Dictionary<string, object>
                     {
@@ -1007,6 +1021,7 @@ public static class LyToAppSettingsConverter
                         ["Order"] = ctx.NextRouteOrder(normalizedPath, hosts.Count > 0)
                     };
                     ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
+                    ApplyCorsMetadata(routeConfig, blockCors);
 
                     ctx.Routes[routeId] = routeConfig;
                     ctx.HasFileServerRoute = true; // 确保 cluster1 存在
@@ -1045,6 +1060,7 @@ public static class LyToAppSettingsConverter
                     ["Order"] = ctx.NextRouteOrder("/{**catch-all}", hosts.Count > 0)
                 };
                 ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
+                ApplyCorsMetadata(routeConfig, siteCors);
 
                 ctx.Routes[routeId] = routeConfig;
             }
@@ -1068,6 +1084,7 @@ public static class LyToAppSettingsConverter
                     ["Order"] = ctx.NextRouteOrder("/{**catch-all}", hosts.Count > 0)
                 };
                 ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
+                ApplyCorsMetadata(routeConfig, siteCors);
 
                 ctx.Routes[routeId] = routeConfig;
                 ctx.HasFileServerRoute = true; // 确保 cluster1 存在
@@ -1096,6 +1113,7 @@ public static class LyToAppSettingsConverter
                     ["Order"] = ctx.NextRouteOrder("/{**file-all}", hosts.Count > 0)
                 };
                 ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
+                ApplyCorsMetadata(routeConfig, siteCors);
 
                 ctx.Routes[fileServerId] = routeConfig;
             }
@@ -1958,6 +1976,66 @@ public static class LyToAppSettingsConverter
         if (headerDowns.Count > 0)
             metadata["_HeaderDowns"] = System.Text.Json.JsonSerializer.Serialize(
                 headerDowns.ToDictionary(kv => kv.Key, kv => kv.Value?.ToString() ?? ""));
+    }
+
+    private static Dictionary<string, object>? ParseCorsConfig(object value)
+    {
+        if (value is bool enabled) return enabled ? new Dictionary<string, object>() : null;
+        if (value is not Dictionary<string, object> source)
+            throw new LyConfigException("Cors 必须配置为 true、false 或配置块");
+
+        var cors = new Dictionary<string, object>();
+        foreach (var (rawKey, rawValue) in source)
+        {
+            var key = rawKey.Replace("_", "", StringComparison.Ordinal).Replace("-", "", StringComparison.Ordinal).ToLowerInvariant();
+            switch (key)
+            {
+                case "allowedorigins": case "alloworigins": case "origins": case "origin":
+                    cors["AllowedOrigins"] = ParseStringList(rawValue);
+                    break;
+                case "allowedmethods": case "allowmethods": case "methods":
+                    cors["AllowedMethods"] = ParseStringList(rawValue).Select(x => x.ToUpperInvariant()).ToList();
+                    break;
+                case "allowedheaders": case "allowheaders": case "headers":
+                    cors["AllowedHeaders"] = ParseStringList(rawValue);
+                    break;
+                case "exposedheaders": case "exposeheaders":
+                    cors["ExposedHeaders"] = ParseStringList(rawValue);
+                    break;
+                case "allowcredentials": case "credentials":
+                    cors["AllowCredentials"] = System.Convert.ToBoolean(rawValue);
+                    break;
+                case "maxage":
+                    cors["MaxAge"] = System.Convert.ToInt32(rawValue);
+                    break;
+                default:
+                    throw new LyConfigException($"不支持的 Cors 配置项: {rawKey}");
+            }
+        }
+        return cors;
+    }
+
+    private static void ApplyCorsMetadata(Dictionary<string, object> routeConfig, Dictionary<string, object>? cors)
+    {
+        if (cors is null) return;
+        var normalized = new Dictionary<string, object>(cors)
+        {
+            ["AllowedOrigins"] = cors.TryGetValue("AllowedOrigins", out var origins) ? origins : new List<string> { "*" },
+            ["AllowedMethods"] = cors.TryGetValue("AllowedMethods", out var methods) ? methods : new List<string> { "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS" },
+            ["AllowedHeaders"] = cors.TryGetValue("AllowedHeaders", out var headers) ? headers : new List<string> { "*" },
+            ["ExposedHeaders"] = cors.TryGetValue("ExposedHeaders", out var exposed) ? exposed : new List<string>(),
+            ["AllowCredentials"] = cors.TryGetValue("AllowCredentials", out var credentials) && System.Convert.ToBoolean(credentials),
+            ["MaxAge"] = cors.TryGetValue("MaxAge", out var maxAge) ? System.Convert.ToInt32(maxAge) : 600
+        };
+        EnsureDict(routeConfig, "Metadata")["_Cors"] = System.Text.Json.JsonSerializer.Serialize(normalized);
+    }
+
+    private static void AddCorsPreflightMethod(Dictionary<string, object> match, List<string>? configuredMethods, Dictionary<string, object>? cors)
+    {
+        if (cors is null || configuredMethods is null || configuredMethods.Count == 0) return;
+        var methods = configuredMethods.Select(x => x.ToUpperInvariant()).Distinct().ToList();
+        if (!methods.Contains("OPTIONS")) methods.Add("OPTIONS");
+        match["Methods"] = methods;
     }
 
     private static Dictionary<string, object> EnsureDict(Dictionary<string, object> parent, string key)
