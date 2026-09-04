@@ -6,6 +6,7 @@ using LyWaf.Services.WafInfo;
 using Yarp.ReverseProxy.Forwarder;
 using Yarp.ReverseProxy.Transforms;
 using Yarp.ReverseProxy.Transforms.Builder;
+using LyWaf.Services.Retry;
 
 namespace LyWaf.Transformer
 {
@@ -230,6 +231,12 @@ namespace LyWaf.Transformer
                 // 路由级 HeaderUps（通过 Metadata 按域名配置，覆盖全局）
                 var routeModel = transformContext.HttpContext.GetEndpoint()?.Metadata.GetMetadata<Yarp.ReverseProxy.Model.RouteModel>();
                 var routeMetadata = routeModel?.Config?.Metadata;
+                if (routeMetadata?.Keys.Any(static key =>
+                        key.StartsWith("Retry.", StringComparison.OrdinalIgnoreCase)
+                        || key.StartsWith("_Retry.", StringComparison.OrdinalIgnoreCase)) == true)
+                    transformContext.ProxyRequest.Options.Set(
+                        RetryRequestOptions.Policy,
+                        RetryPolicy.FromMetadata(routeMetadata));
                 if (routeMetadata?.TryGetValue("_HeaderUps", out var headerUpsJson) == true && !string.IsNullOrEmpty(headerUpsJson))
                 {
                     foreach (var (hk, hv) in ParseHeaderMetadata(headerUpsJson))

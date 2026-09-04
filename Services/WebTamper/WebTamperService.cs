@@ -1,13 +1,17 @@
 using System.Net.Http.Headers;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using NLog;
+using LyWaf.Services.Metrics;
+using LyWaf.Services.RuntimeState;
 
 namespace LyWaf.Services.WebTamper;
 
+/// <summary>一个受保护资源或目录规则，以及其本地安全基线和最近检查状态。</summary>
 public sealed class WebTamperResource
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -30,6 +34,7 @@ public sealed class WebTamperResource
     public List<WebTamperResource>? CapturedResources { get; set; }
 }
 
+/// <summary>防篡改插件管理的网站维度，Origin 只保存域名及可选非标准端口。</summary>
 public sealed class WebTamperWebsite
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -39,6 +44,7 @@ public sealed class WebTamperWebsite
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
+/// <summary>资源内容指纹发生变化后生成的事件；Resolved 表示变化已恢复或已被接受为新基线。</summary>
 public sealed class WebTamperEvent
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -52,9 +58,12 @@ public sealed class WebTamperEvent
     public DateTime? ResolvedAt { get; set; }
 }
 
+/// <summary>中间件可直接返回的磁盘基线句柄和响应元数据，正文不会被完整加载到内存。</summary>
 public sealed record ProtectedContent(string FilePath, string ContentType, long Length);
+/// <summary>单次检查的资源状态及用于控制台差异视图的基线、线上内容预览。</summary>
 public sealed record ContentComparison(WebTamperResource Resource, bool Changed, string BaselineContent, string CurrentContent);
 
+/// <summary>网页防篡改插件的站点、资源、检查、基线接受和事件查询契约。</summary>
 public interface IWebTamperService
 {
     IReadOnlyList<WebTamperResource> GetResources();
@@ -76,8 +85,10 @@ public interface IWebTamperService
     Task CheckAllAsync(CancellationToken cancellationToken);
 }
 
+/// <summary>以文件句柄流式抓取内容、维护磁盘基线并把变更事件同步到运行状态层。</summary>
 public sealed class WebTamperService : IWebTamperService, IDisposable
 {
+    private const string EventStateDomain = "web-tamper.event";
     public const int MaxContentBytes = 2 * 1024 * 1024;
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -98,8 +109,13 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
     private readonly string _bypassToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
     private WebTamperStore _store;
 
-    public WebTamperService()
+    private readonly PrometheusMetrics _metrics;
+    private readonly IRuntimeStateStore _runtimeState;
+
+    public WebTamperService(PrometheusMetrics metrics, IRuntimeStateStore runtimeState)
     {
+        _metrics = metrics;
+        _runtimeState = runtimeState;
         var directory = Path.Combine(AppContext.BaseDirectory, "datas", "web-tamper");
         Directory.CreateDirectory(directory);
         _dataFile = Path.Combine(directory, "resources.json");
@@ -109,6 +125,7 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
         Directory.CreateDirectory(_remoteCacheDirectory);
         foreach (var staleFile in Directory.EnumerateFiles(_remoteCacheDirectory, "*.bin")) TryDelete(staleFile);
         _store = Load();
+        foreach (var item in _store.Events) SyncEvent(item);
         _httpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = true })
         {
             Timeout = TimeSpan.FromSeconds(20)
@@ -145,9 +162,12 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
     {
         lock (_lock)
         {
-            return _store.Events
-                .GroupBy(item => $"{item.ResourceId}\n{item.ResourceName}", StringComparer.Ordinal)
-                .Select(group => group.OrderByDescending(item => item.DetectedAt).First())
+            var events = _store.Events
+                .GroupBy(EventKey, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => Clone(group.OrderByDescending(item => item.DetectedAt).First()), StringComparer.Ordinal);
+            foreach (var (key, distributed) in _runtimeState.GetValues<WebTamperEvent>(EventStateDomain))
+                events[key] = Clone(distributed);
+            return events.Values
                 .OrderByDescending(item => item.DetectedAt)
                 .Select(Clone)
                 .ToList();
@@ -394,6 +414,7 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
                 existingEvent.BaselineHash = stored.BaselineHash;
                 existingEvent.CurrentHash = currentHash;
                 existingEvent.DetectedAt = now;
+                SyncEvent(existingEvent);
                 eventChanged = true;
                 _store.Events.RemoveAll(item => item.Id != existingEvent.Id && item.ResourceId == eventResourceId
                     && item.ResourceName == stored.Path && !item.Resolved);
@@ -411,6 +432,7 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
                     {
                         pendingEvent.Resolved = true;
                         pendingEvent.ResolvedAt = now;
+                        SyncEvent(pendingEvent);
                     }
                     eventChanged = true;
                     Logger.Info("网页内容已恢复至安全基线，自动确认变更事件: {Name} {Url}", stored.Name, stored.Url);
@@ -440,7 +462,12 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
         {
             if (_lastQueuedChecks.TryGetValue(resourceId, out var lastQueued)
                 && now - lastQueued < TimeSpan.FromMinutes(1)) return false;
-            if (!_checkQueue.Writer.TryWrite(resourceId)) return false;
+            if (!_checkQueue.Writer.TryWrite(resourceId))
+            {
+                _metrics.WebTamperQueueDropped();
+                return false;
+            }
+            _metrics.WebTamperQueued();
             _lastQueuedChecks[resourceId] = now;
             if (_lastQueuedChecks.Count > 20_000)
             {
@@ -456,6 +483,7 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
     {
         await foreach (var resourceId in _checkQueue.Reader.ReadAllAsync(cancellationToken))
         {
+            _metrics.WebTamperDequeued();
             try { await CheckAsync(resourceId, cancellationToken); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             catch (Exception ex) { Logger.Warn(ex, "网页防篡改后台惰性检查失败: {ResourceId}", resourceId); }
@@ -463,6 +491,32 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
     }
 
     public async Task<ContentComparison?> CheckAsync(string id, CancellationToken cancellationToken)
+    {
+        var startedAt = Stopwatch.GetTimestamp();
+        var outcome = "failed";
+        try
+        {
+            var comparison = await CheckCoreAsync(id, cancellationToken);
+            outcome = comparison == null ? "not_found" : comparison.Changed ? "changed" : "unchanged";
+            return comparison;
+        }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            outcome = "timeout";
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            outcome = "cancelled";
+            throw;
+        }
+        finally
+        {
+            _metrics.ObserveWebTamperCheck(outcome, Stopwatch.GetElapsedTime(startedAt));
+        }
+    }
+
+    private async Task<ContentComparison?> CheckCoreAsync(string id, CancellationToken cancellationToken)
     {
         WebTamperResource? resource;
         lock (_lock) resource = _store.Resources.FirstOrDefault(item => item.Id == id) is { } item ? Clone(item) : null;
@@ -513,6 +567,7 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
             {
                 evt.Resolved = true;
                 evt.ResolvedAt = DateTime.UtcNow;
+                SyncEvent(evt);
             }
             Save();
             resource = Clone(stored);
@@ -759,6 +814,11 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
         BaselineHash = item.BaselineHash, CurrentHash = item.CurrentHash, DetectedAt = item.DetectedAt,
         Resolved = item.Resolved, ResolvedAt = item.ResolvedAt
     };
+
+    private void SyncEvent(WebTamperEvent item)
+        => _runtimeState.Set(EventStateDomain, EventKey(item), Clone(item), TimeSpan.FromDays(30));
+
+    private static string EventKey(WebTamperEvent item) => $"{item.ResourceId}:{item.ResourceName}";
     private static WebTamperWebsite Clone(WebTamperWebsite item) => new()
     {
         Id = item.Id, Name = item.Name, Origin = item.Origin, Source = item.Source, CreatedAt = item.CreatedAt
@@ -782,6 +842,7 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
     }
 }
 
+/// <summary>消费防篡改惰性检查队列；仅在插件运行时执行后台远程检查。</summary>
 public sealed class WebTamperMonitorService(IWebTamperService service, LyWaf.Plugins.Core.IPluginManager pluginManager) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

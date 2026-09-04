@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using LyWaf.Utils;
+using LyWaf.Services.Metrics;
 using Newtonsoft.Json.Linq;
 using NLog;
 using Yarp.ReverseProxy.Configuration;
@@ -54,7 +55,9 @@ namespace LyWaf.Policy
         }
     }
 
-    public class LyxActiveHealthPolicy(IDestinationHealthUpdater healthUpdater) : IActiveHealthCheckPolicy
+    public class LyxActiveHealthPolicy(
+        IDestinationHealthUpdater healthUpdater,
+        PrometheusMetrics metrics) : IActiveHealthCheckPolicy
     {
         public string Name => "LyxActiveHealth";
 
@@ -63,6 +66,7 @@ namespace LyWaf.Policy
         private readonly Dictionary<string, int> PassTimes = [];
         private readonly Dictionary<string, HashSet<int>> CacheStatusCodes = [];
         private readonly IDestinationHealthUpdater _healthUpdater = healthUpdater;
+        private readonly PrometheusMetrics _metrics = metrics;
 
         private const int DEFAULT_PASS_TIMES = 2;
         private const int DEFAULT_FAIL_TIMES = 2;
@@ -294,14 +298,17 @@ namespace LyWaf.Policy
                 if (PassTimes[address] >= passTimes)
                 {
                     newHealthStates[i] = new NewActiveDestinationHealth(probingResults[i].Destination, DestinationHealth.Healthy);
+                    _metrics.SetUpstreamHealth(cluster.Model.Config.ClusterId, address, 1);
                 }
                 else if (FailTimes[address] >= failTimes)
                 {
                     newHealthStates[i] = new NewActiveDestinationHealth(probingResults[i].Destination, DestinationHealth.Unhealthy);
+                    _metrics.SetUpstreamHealth(cluster.Model.Config.ClusterId, address, 0);
                 }
                 else
                 {
                     newHealthStates[i] = new NewActiveDestinationHealth(probingResults[i].Destination, DestinationHealth.Unknown);
+                    _metrics.SetUpstreamHealth(cluster.Model.Config.ClusterId, address, -1);
                 }
             }
 

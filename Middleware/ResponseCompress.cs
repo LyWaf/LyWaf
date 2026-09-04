@@ -55,85 +55,64 @@ public class ResponseCompressMiddleware : IMiddleware
             return;
         }
 
-        // 使用缓冲方式进行压缩
+        // 使用磁盘文件缓冲，避免大响应完整驻留托管堆。
         var originalBodyStream = context.Response.Body;
-        using var bufferStream = new MemoryStream();
+        var sourcePath = Path.Combine(Path.GetTempPath(), $"lywaf-compress-{Guid.NewGuid():N}.tmp");
+        var compressedPath = Path.Combine(Path.GetTempPath(), $"lywaf-compress-{Guid.NewGuid():N}.tmp");
+        await using var bufferStream = new FileStream(sourcePath, FileMode.CreateNew, FileAccess.ReadWrite,
+            FileShare.Read | FileShare.Delete, 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
         context.Response.Body = bufferStream;
 
         try
         {
             await next(context);
-
-            // 重置流位置准备读取
-            bufferStream.Seek(0, SeekOrigin.Begin);
+            await bufferStream.FlushAsync(context.RequestAborted);
             var originalLength = bufferStream.Length;
-
-            // 恢复原始流
             context.Response.Body = originalBodyStream;
 
-            // 检查是否应该压缩
             if (originalLength > 0 && ShouldCompress(context, originalLength))
             {
-                // 压缩响应
-                using var compressedStream = new MemoryStream();
+                await using var compressedStream = new FileStream(compressedPath, FileMode.CreateNew,
+                    FileAccess.ReadWrite, FileShare.Read | FileShare.Delete, 81920,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+                bufferStream.Position = 0;
                 await CompressAsync(bufferStream, compressedStream, algorithm);
-
+                await compressedStream.FlushAsync(context.RequestAborted);
                 var compressedLength = compressedStream.Length;
 
-                // 只有压缩后确实更小才使用压缩版本
                 if (compressedLength < originalLength)
                 {
-                    compressedStream.Seek(0, SeekOrigin.Begin);
-
-                    // 修改响应头（必须在写入内容之前）
+                    compressedStream.Position = 0;
                     context.Response.Headers.Remove("Content-Length");
                     context.Response.Headers.ContentEncoding = GetEncodingName(algorithm);
                     context.Response.ContentLength = compressedLength;
-
-                    // 添加 Vary 头
                     var vary = context.Response.Headers.Vary.ToString();
                     if (!vary.Contains("Accept-Encoding", StringComparison.OrdinalIgnoreCase))
-                    {
                         context.Response.Headers.Append("Vary", "Accept-Encoding");
-                    }
-
-                    // 写入压缩内容
-                    await compressedStream.CopyToAsync(originalBodyStream);
+                    await compressedStream.CopyToAsync(originalBodyStream, context.RequestAborted);
 
                     _logger.Debug("响应已压缩 ({Algorithm}): {Path}, {Original} -> {Compressed} bytes ({Ratio:P1})",
                         algorithm, context.Request.Path, originalLength, compressedLength,
                         1.0 - (double)compressedLength / originalLength);
                     return;
                 }
-                else
-                {
-                    bufferStream.Seek(0, SeekOrigin.Begin);
-                }
             }
 
-            // 不压缩，写入原始内容
-            await bufferStream.CopyToAsync(originalBodyStream);
+            bufferStream.Position = 0;
+            await bufferStream.CopyToAsync(originalBodyStream, context.RequestAborted);
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "响应压缩失败: {Path}", context.Request.Path);
-
-            // 确保恢复原始流
             context.Response.Body = originalBodyStream;
-
-            // 尝试写入原始内容（如果可能）
-            try
-            {
-                if (bufferStream.Length > 0 && bufferStream.CanSeek)
-                {
-                    bufferStream.Seek(0, SeekOrigin.Begin);
-                    await bufferStream.CopyToAsync(originalBodyStream);
-                }
-            }
-            catch
-            {
-                // 忽略，可能响应已经开始
-            }
+            throw;
+        }
+        finally
+        {
+            context.Response.Body = originalBodyStream;
+            await bufferStream.DisposeAsync();
+            try { File.Delete(sourcePath); } catch { }
+            try { File.Delete(compressedPath); } catch { }
         }
     }
 

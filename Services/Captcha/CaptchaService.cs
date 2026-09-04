@@ -2,7 +2,9 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using LyWaf.Services.Statistic;
 using LyWaf.Shared;
+using LyWaf.Services.Metrics;
 using Microsoft.Extensions.DependencyInjection;
+using LyWaf.Services.RuntimeState;
 using NLog;
 
 namespace LyWaf.Services.Captcha;
@@ -104,15 +106,21 @@ public class BehaviorData
 /// </summary>
 public class CaptchaService : ICaptchaService
 {
+    private const string PendingDomain = "captcha.pending";
+    private const string ChallengeDomain = "captcha.challenge";
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly IServiceProvider _serviceProvider;
+    private readonly PrometheusMetrics _metrics;
+    private readonly IRuntimeStateStore _runtimeState;
 
     // 存储验证码挑战: Key = token, Value = (正确答案, IP, 过期时间)
     private static readonly ConcurrentDictionary<string, CaptchaEntry> _challenges = new();
 
-    public CaptchaService(IServiceProvider serviceProvider)
+    public CaptchaService(IServiceProvider serviceProvider, PrometheusMetrics metrics, IRuntimeStateStore runtimeState)
     {
         _serviceProvider = serviceProvider;
+        _metrics = metrics;
+        _runtimeState = runtimeState;
     }
 
     public void SetPending(string clientIp, string ruleName, int actionSeconds)
@@ -123,17 +131,20 @@ public class CaptchaService : ICaptchaService
             ActionSeconds = actionSeconds
         };
         SharedData.CaptchaPending.Set(clientIp, info, TimeSpan.FromSeconds(actionSeconds));
+        _runtimeState.Set(PendingDomain, clientIp, info, TimeSpan.FromSeconds(actionSeconds));
         _logger.Info("设置验证码验证: IP={Ip}, Rule={Rule}, Duration={Duration}秒", clientIp, ruleName, actionSeconds);
     }
 
     public bool IsPending(string clientIp)
     {
-        return SharedData.CaptchaPending.TryGetValue(clientIp, out _);
+        return SharedData.CaptchaPending.TryGetValue(clientIp, out _)
+            || _runtimeState.TryGet<CaptchaPendingInfo>(PendingDomain, clientIp, out _);
     }
 
     public void RemovePending(string clientIp)
     {
         SharedData.CaptchaPending.Remove(clientIp);
+        _runtimeState.Remove(PendingDomain, clientIp);
 
         // 清除该 IP 的 CC 触发记录和计数器，避免验证通过后重复触发
         var ccRuleChecker = _serviceProvider.GetService<ICcRuleChecker>();
@@ -180,6 +191,8 @@ public class CaptchaService : ICaptchaService
         }
 
         _challenges[token] = entry;
+        _runtimeState.Set(ChallengeDomain, token, entry, TimeSpan.FromMinutes(5));
+        _metrics.RecordCaptcha("generated", mode);
         return challenge;
     }
 
@@ -187,41 +200,59 @@ public class CaptchaService : ICaptchaService
     {
         if (string.IsNullOrWhiteSpace(token))
         {
+            _metrics.RecordCaptcha("verified", "invalid");
             return new CaptchaVerifyResult { Success = false, Message = "参数不完整" };
         }
 
-        if (!_challenges.TryRemove(token, out var entry))
+        CaptchaEntry? entry;
+        if (_challenges.TryRemove(token, out var localEntry))
         {
+            entry = localEntry;
+            _runtimeState.Remove(ChallengeDomain, token);
+        }
+        else if (!_runtimeState.TryTake<CaptchaEntry>(ChallengeDomain, token, out entry))
+        {
+            _metrics.RecordCaptcha("verified", "invalid");
+            return new CaptchaVerifyResult { Success = false, Message = "验证码已过期或无效" };
+        }
+        if (entry is null)
+        {
+            _metrics.RecordCaptcha("verified", "invalid");
             return new CaptchaVerifyResult { Success = false, Message = "验证码已过期或无效" };
         }
 
         // 检查过期
         if (DateTime.UtcNow > entry.ExpiryTime)
         {
+            _metrics.RecordCaptcha("verified", "expired");
             return new CaptchaVerifyResult { Success = false, Message = "验证码已过期" };
         }
 
         // 检查 IP 是否匹配
         if (entry.ClientIp != clientIp)
         {
+            _metrics.RecordCaptcha("verified", "invalid");
             return new CaptchaVerifyResult { Success = false, Message = "验证失败" };
         }
 
         // 鼠标行为检测（两种模式都需要）
         if (behavior == null)
         {
+            _metrics.RecordCaptcha("verified", "behavior");
             return new CaptchaVerifyResult { Success = false, Message = "缺少行为数据" };
         }
 
         if (behavior.Duration < 1000)
         {
             _logger.Warn("行为验证失败: IP={Ip}, 提交过快 ({Duration}ms)", clientIp, behavior.Duration);
+            _metrics.RecordCaptcha("verified", "behavior");
             return new CaptchaVerifyResult { Success = false, Message = "验证失败，请重试" };
         }
 
         if (behavior.MouseTrackCount < 3)
         {
             _logger.Warn("行为验证失败: IP={Ip}, 鼠标活动过少 ({Count})", clientIp, behavior.MouseTrackCount);
+            _metrics.RecordCaptcha("verified", "behavior");
             return new CaptchaVerifyResult { Success = false, Message = "验证失败，请重试" };
         }
 
@@ -231,6 +262,7 @@ public class CaptchaService : ICaptchaService
             // 算术模式：验证答案
             if (string.IsNullOrWhiteSpace(answer) || !answer.Trim().Equals(entry.Answer, StringComparison.OrdinalIgnoreCase))
             {
+                _metrics.RecordCaptcha("verified", "invalid");
                 return new CaptchaVerifyResult { Success = false, Message = "验证码答案错误" };
             }
         }
@@ -239,12 +271,14 @@ public class CaptchaService : ICaptchaService
             // 滑块模式：验证滑块位置（允许 ±10% 误差）
             if (Math.Abs(behavior.SliderOffset - entry.SliderTarget) > 10)
             {
+                _metrics.RecordCaptcha("verified", "invalid");
                 return new CaptchaVerifyResult { Success = false, Message = "滑块验证失败" };
             }
         }
 
         // 验证通过，移除 pending 状态
         RemovePending(clientIp);
+        _metrics.RecordCaptcha("verified", "success");
 
         return new CaptchaVerifyResult { Success = true, Message = "验证通过" };
     }
@@ -301,7 +335,8 @@ public class CaptchaService : ICaptchaService
         }
     }
 
-    private class CaptchaEntry
+    /// <summary>验证码一次性 token 对应的服务端答案、客户端绑定和过期信息。</summary>
+    internal sealed class CaptchaEntry
     {
         public string Mode { get; set; } = "math";
         public string Answer { get; set; } = "";

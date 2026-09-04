@@ -3,22 +3,29 @@ using System.Net.Sockets;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using NLog;
+using LyWaf.Services.Metrics;
+using System.Collections.Concurrent;
 
 namespace LyWaf.Services.StreamServer;
 
 /// <summary>
-/// TCP 流代理服务
-/// 作为后台服务运行，监听 TCP 端口并转发到上游服务器
+/// TCP/UDP 四层代理服务，负责监听、会话准入及上游转发。
 /// </summary>
 public class StreamService : BackgroundService
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private StreamServerOptions _options;
     private readonly List<(TcpListener listener, string key, StreamHandler handler)> _listeners = [];
+    private readonly List<UdpStreamProxy> _udpProxies = [];
+    private readonly List<Task> _runningTasks = [];
+    private readonly ConcurrentDictionary<long, Task> _connections = new();
+    private long _connectionId;
     private StreamHealthChecker? _healthChecker;
+    private readonly PrometheusMetrics? _metrics;
 
-    public StreamService(IOptionsMonitor<StreamServerOptions> optionsMonitor)
+    public StreamService(IOptionsMonitor<StreamServerOptions> optionsMonitor, PrometheusMetrics? metrics = null)
     {
+        _metrics = metrics;
         _options = optionsMonitor.CurrentValue;
         optionsMonitor.OnChange(newConfig =>
         {
@@ -67,18 +74,23 @@ public class StreamService : BackgroundService
 
             try
             {
-                var listener = new TcpListener(host, port);
-                listener.Start();
-
-                var handler = new StreamHandler(_options, config, key, _healthChecker);
-                _listeners.Add((listener, key, handler));
-
                 var upstreams = string.Join(", ", config.Upstreams);
-                _logger.Info("Stream 代理启动: {Host}:{Port} -> [{Upstreams}] ({Policy})", 
-                    host, port, upstreams, config.Policy);
-
-                // 启动接受连接的任务
-                _ = AcceptConnectionsAsync(listener, key, handler, stoppingToken);
+                if (config.Protocol == StreamProtocol.Udp)
+                {
+                    var proxy = new UdpStreamProxy(new IPEndPoint(host, port), key, config, _healthChecker, _metrics);
+                    _udpProxies.Add(proxy);
+                    _runningTasks.Add(proxy.RunAsync(stoppingToken));
+                }
+                else
+                {
+                    var listener = new TcpListener(host, port);
+                    listener.Start();
+                    var handler = new StreamHandler(_options, config, key, _healthChecker, _metrics);
+                    _listeners.Add((listener, key, handler));
+                    _runningTasks.Add(AcceptConnectionsAsync(listener, key, handler, config, stoppingToken));
+                }
+                _logger.Info("Stream {Protocol} 代理启动: {Host}:{Port} -> [{Upstreams}] ({Policy})",
+                    config.Protocol, host, port, upstreams, config.Policy);
             }
             catch (Exception ex)
             {
@@ -105,47 +117,48 @@ public class StreamService : BackgroundService
         {
             listener.Stop();
         }
+        foreach (var proxy in _udpProxies) proxy.Dispose();
+        try { await Task.WhenAll(_runningTasks); } catch (OperationCanceledException) { }
+        try { await Task.WhenAll(_connections.Values); } catch (OperationCanceledException) { }
 
         _logger.Info("Stream 代理服务已停止");
     }
 
     /// <summary>
     /// 解析端点配置
-    /// 支持格式: "8080", "127.0.0.1:8080", "0.0.0.0:3306"
+    /// 支持格式: "8080", "127.0.0.1:8080", "0.0.0.0:3306", "[::1]:8443"
     /// </summary>
     private static (IPAddress host, int port)? ParseEndpoint(string key)
     {
-        // 尝试解析 host:port 格式
-        if (key.Contains(':'))
-        {
-            var lastColon = key.LastIndexOf(':');
-            var hostPart = key[..lastColon];
-            var portPart = key[(lastColon + 1)..];
-
-            if (int.TryParse(portPart, out var port) && IPAddress.TryParse(hostPart, out var ip))
-            {
-                return (ip, port);
-            }
-        }
-        // 尝试解析纯端口号
-        else if (int.TryParse(key, out var port))
-        {
+        if (int.TryParse(key, out var port) && port is >= 1 and <= 65535)
             return (IPAddress.Any, port);
-        }
-
-        return null;
+        return StreamPrimitives.TryParseEndpoint(key, out var endpoint) &&
+               IPAddress.TryParse(endpoint!.Host, out var address)
+            ? (address, endpoint.Port)
+            : null;
     }
 
-    private async Task AcceptConnectionsAsync(TcpListener listener, string key, StreamHandler handler, CancellationToken stoppingToken)
+    private async Task AcceptConnectionsAsync(TcpListener listener, string key, StreamHandler handler,
+        StreamConfig config, CancellationToken stoppingToken)
     {
+        var connections = new ConnectionCounter(config.MaxConnections);
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 var client = await listener.AcceptTcpClientAsync(stoppingToken);
-
-                // 异步处理连接
-                _ = HandleClientAsync(client, handler, stoppingToken);
+                if (!connections.TryEnter())
+                {
+                    _metrics?.RecordStreamEvent(key, "tcp", "rejected");
+                    client.Dispose();
+                    continue;
+                }
+                _metrics?.RecordStreamEvent(key, "tcp", "accepted");
+                var id = Interlocked.Increment(ref _connectionId);
+                var task = HandleClientAsync(client, key, handler, connections, stoppingToken);
+                _connections[id] = task;
+                _ = task.ContinueWith(completed => _connections.TryRemove(id, out var removed), CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             }
             catch (OperationCanceledException)
             {
@@ -158,7 +171,8 @@ public class StreamService : BackgroundService
         }
     }
 
-    private static async Task HandleClientAsync(TcpClient client, StreamHandler handler, CancellationToken stoppingToken)
+    private async Task HandleClientAsync(TcpClient client, string key, StreamHandler handler,
+        ConnectionCounter connections, CancellationToken stoppingToken)
     {
         using (client)
         {
@@ -170,6 +184,24 @@ public class StreamService : BackgroundService
             {
                 _logger.Error(ex, "Stream 处理连接失败");
             }
+            finally
+            {
+                connections.Exit();
+                _metrics?.RecordStreamEvent(key, "tcp", "closed");
+            }
         }
+    }
+
+    private sealed class ConnectionCounter(int limit)
+    {
+        private int _active;
+        public bool TryEnter()
+        {
+            var value = Interlocked.Increment(ref _active);
+            if (limit <= 0 || value <= limit) return true;
+            Interlocked.Decrement(ref _active);
+            return false;
+        }
+        public void Exit() => Interlocked.Decrement(ref _active);
     }
 }

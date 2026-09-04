@@ -2,6 +2,10 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
+using LyWaf.Services.AuditLog;
+using LyWaf.Services.ManagementApi;
+using LyWaf.Plugins.Packaging;
 
 namespace LyWaf.Plugins.Core;
 
@@ -40,6 +44,9 @@ public static class PluginExtensions
 
         // 注册插件基础中间件（用于发布请求事件）
         services.AddSingleton<BasePluginMiddleware>();
+        services.AddSingleton<PluginApiAdmissionGate>();
+        services.AddSingleton<IPluginTaskCoordinator, PluginTaskCoordinator>();
+        services.AddSingleton<PluginPackageManager>();
 
         return services;
     }
@@ -60,18 +67,66 @@ public static class PluginExtensions
     public static WebApplication MapLyWafPluginApi(this WebApplication app, int controlPort)
     {
         app.MapMethods("/api/plugins/{pluginId}/proxy/{**pluginPath}", PluginApiMethods,
-            async (string pluginId, string? pluginPath, HttpContext context, IPluginManager manager) =>
+            async (string pluginId, string? pluginPath, HttpContext context, IPluginManager manager, PluginApiAdmissionGate gate) =>
             {
+                var username = context.Items["Username"]?.ToString() ?? "unknown";
+                var admission = gate.TryAcquire(username, pluginId, context.Request.ContentLength);
+                if (!admission.Allowed)
+                {
+                    if (admission.RetryAfterSeconds.HasValue) context.Response.Headers.RetryAfter = admission.RetryAfterSeconds.Value.ToString();
+                    AuditProxy(context, pluginId, pluginPath, false, admission.ErrorCode!);
+                    return ManagementApiContract.Error(context,
+                        admission.ErrorCode == "plugin_request_too_large" ? StatusCodes.Status413PayloadTooLarge : StatusCodes.Status429TooManyRequests,
+                        admission.ErrorCode!, admission.Message!, new { admission.RetryAfterSeconds });
+                }
+
+                using var lease = admission.Lease;
+                var stopwatch = Stopwatch.StartNew();
+                var outcome = "ok";
+                try
+                {
                 var plugin = manager.GetPlugin(pluginId);
                 if (plugin == null)
-                    return Results.NotFound(new { success = false, message = $"插件 {pluginId} 不存在" });
+                {
+                    outcome = "plugin_not_found";
+                    return ManagementApiContract.Error(context, 404, outcome, $"插件 {pluginId} 不存在");
+                }
                 if (manager.GetPluginState(pluginId) is not (PluginState.Running or PluginState.Initialized))
-                    return Results.Json(new { success = false, message = $"插件 {pluginId} 未启用" }, statusCode: 503);
+                {
+                    outcome = "plugin_disabled";
+                    return ManagementApiContract.Error(context, 503, outcome, $"插件 {pluginId} 未启用");
+                }
                 if (plugin is not IPluginApiHandler handler)
-                    return Results.NotFound(new { success = false, message = $"插件 {pluginId} 未提供控制台 API" });
+                {
+                    outcome = "plugin_api_unavailable";
+                    return ManagementApiContract.Error(context, 404, outcome, $"插件 {pluginId} 未提供控制台 API");
+                }
+                if (!manager.IsPermissionGranted(pluginId, PluginPermission.ConsoleApi))
+                {
+                    outcome = "plugin_permission_denied";
+                    return ManagementApiContract.Error(context, 403, outcome, $"插件 {pluginId} 未获控制台 API 权限");
+                }
                 return await handler.HandleApiAsync(pluginPath ?? "", context);
+                }
+                catch
+                {
+                    outcome = "unhandled_error";
+                    throw;
+                }
+                finally
+                {
+                    AuditProxy(context, pluginId, pluginPath, outcome == "ok", $"{outcome}, {stopwatch.ElapsedMilliseconds}ms");
+                }
             }).RequireHost($"*:{controlPort}");
         return app;
+    }
+
+    private static void AuditProxy(HttpContext context, string pluginId, string? pluginPath, bool success, string outcome)
+    {
+        context.RequestServices.GetRequiredService<IAuditLogService>().Log(
+            context.Items["Username"]?.ToString() ?? "unknown",
+            $"插件 API {(success ? "调用" : "拒绝")}: {pluginId}/{pluginPath ?? ""} [{outcome}]",
+            context.Connection.RemoteIpAddress?.ToString() ?? "");
     }
     
     /// <summary>

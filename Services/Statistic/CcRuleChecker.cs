@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using LyWaf.Services.Captcha;
 using LyWaf.Shared;
 using LyWaf.Utils;
+using LyWaf.Services.RuntimeState;
 using NLog;
 
 namespace LyWaf.Services.Statistic;
@@ -55,6 +56,7 @@ public class CcRuleChecker : ICcRuleChecker
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly IStatisticService _statisticService;
     private readonly ICaptchaService _captchaService;
+    private readonly IRuntimeStateStore _runtimeState;
 
     // CC 计数器存储: Key = "{ruleId}:{clientIp}", Value = 请求计数信息
     private static readonly ConcurrentDictionary<string, CcCounter> _counters = new();
@@ -71,10 +73,11 @@ public class CcRuleChecker : ICcRuleChecker
     // 编译后的正则表达式缓存
     private static readonly ConcurrentDictionary<string, Regex> _regexCache = new();
 
-    public CcRuleChecker(IStatisticService statisticService, ICaptchaService captchaService)
+    public CcRuleChecker(IStatisticService statisticService, ICaptchaService captchaService, IRuntimeStateStore runtimeState)
     {
         _statisticService = statisticService;
         _captchaService = captchaService;
+        _runtimeState = runtimeState;
 
         // 启动清理任务
         _ = Task.Run(CleanupLoop);
@@ -95,6 +98,16 @@ public class CcRuleChecker : ICcRuleChecker
         {
             // 检查是否已经在处罚期内
             var triggeredKey = $"{rule.Id}:{clientIp}";
+            if (_runtimeState.TryGet<DateTimeOffset>("cc.triggered", triggeredKey, out var distributedUntil)
+                && distributedUntil > DateTimeOffset.UtcNow)
+            {
+                result.IsTriggered = true;
+                result.TriggeredRule = rule;
+                result.Action = rule.Action;
+                result.ActionSeconds = rule.ActionSeconds;
+                result.Message = $"IP {clientIp} 仍在 CC 规则 [{rule.Name}] 处罚期内";
+                return result;
+            }
             if (_triggeredIps.TryGetValue(triggeredKey, out var triggeredTime))
             {
                 if (DateTime.UtcNow < triggeredTime)
@@ -125,38 +138,29 @@ public class CcRuleChecker : ICcRuleChecker
             
             if (!conditionsMatch) continue;
             
-            // 获取或创建计数器
             var counterKey = $"{rule.Id}:{clientIp}";
-            var counter = rule.Type switch
+            var windowStart = GetWindowStart(rule.Period);
+            var count = rule.Type switch
             {
-                CcRuleType.FrequentAccess => GetOrCreateCounter(_counters, counterKey, rule.Period),
-                CcRuleType.FrequentAttack => GetOrCreateCounter(_attackCounters, clientIp, rule.Period),
-                CcRuleType.FrequentError => GetOrCreateCounter(_errorCounters, clientIp, rule.Period),
-                _ => null
+                CcRuleType.FrequentAccess => _runtimeState.IncrementWindow("cc.access", counterKey, windowStart, TimeSpan.FromSeconds(rule.Period)),
+                CcRuleType.FrequentAttack => _runtimeState.GetWindowValue("cc.attack", counterKey, windowStart),
+                CcRuleType.FrequentError => _runtimeState.GetWindowValue("cc.error", counterKey, windowStart),
+                _ => 0
             };
             
-            if (counter == null) continue;
-            
-            // 仅对 FrequentAccess 增加计数，其他类型在专门的事件中记录
-            if (rule.Type == CcRuleType.FrequentAccess)
-            {
-                counter.Increment();
-            }
-            
             // 检查是否达到阈值
-            if (counter.Count >= rule.Threshold)
+            if (count >= rule.Threshold)
             {
                 result.IsTriggered = true;
                 result.TriggeredRule = rule;
                 result.Action = rule.Action;
                 result.ActionSeconds = rule.ActionSeconds;
-                result.Message = $"IP {clientIp} 触发 CC 规则 [{rule.Name}]: {rule.Period}秒内请求{counter.Count}次，超过阈值{rule.Threshold}";
+                result.Message = $"IP {clientIp} 触发 CC 规则 [{rule.Name}]: {rule.Period}秒内请求{count}次，超过阈值{rule.Threshold}";
                 
                 // 标记为已触发，设置处罚结束时间
                 _triggeredIps[triggeredKey] = DateTime.UtcNow.AddSeconds(rule.ActionSeconds);
-                
-                // 重置计数器
-                counter.Reset();
+                _runtimeState.Set("cc.triggered", triggeredKey, DateTimeOffset.UtcNow.AddSeconds(rule.ActionSeconds),
+                    TimeSpan.FromSeconds(rule.ActionSeconds));
                 
                 _logger.Warn("CC 规则触发: {Message}", result.Message);
                 return result;
@@ -177,8 +181,8 @@ public class CcRuleChecker : ICcRuleChecker
         
         foreach (var rule in rules)
         {
-            var counter = GetOrCreateCounter(_attackCounters, clientIp, rule.Period);
-            counter.Increment();
+            var key = $"{rule.Id}:{clientIp}";
+            _runtimeState.IncrementWindow("cc.attack", key, GetWindowStart(rule.Period), TimeSpan.FromSeconds(rule.Period));
         }
     }
     
@@ -201,8 +205,8 @@ public class CcRuleChecker : ICcRuleChecker
                     continue;
             }
             
-            var counter = GetOrCreateCounter(_errorCounters, clientIp, rule.Period);
-            counter.Increment();
+            var key = $"{rule.Id}:{clientIp}";
+            _runtimeState.IncrementWindow("cc.error", key, GetWindowStart(rule.Period), TimeSpan.FromSeconds(rule.Period));
         }
     }
     
@@ -221,6 +225,7 @@ public class CcRuleChecker : ICcRuleChecker
                 // 封禁 IP
                 var blockDuration = TimeSpan.FromSeconds(result.ActionSeconds);
                 SharedData.ClientFb.Set(clientIp, $"CC 规则触发: {rule.Name}", blockDuration);
+                _runtimeState.Set("ip.blocked", clientIp, $"CC 规则触发: {rule.Name}", blockDuration);
                 _logger.Info("CC 封禁: IP={ClientIp}, Rule={Rule}, Duration={Duration}秒",
                     clientIp, rule.Name, result.ActionSeconds);
 
@@ -287,6 +292,9 @@ public class CcRuleChecker : ICcRuleChecker
         {
             _triggeredIps.TryRemove(key, out _);
         }
+
+        foreach (var state in _runtimeState.GetSnapshots("cc.triggered").Where(x => x.Key.EndsWith($":{clientIp}", StringComparison.Ordinal)))
+            _runtimeState.Remove("cc.triggered", state.Key);
 
         // 清除计数器
         var counterKeys = _counters.Keys.Where(k => k.EndsWith($":{clientIp}")).ToList();
@@ -427,6 +435,13 @@ public class CcRuleChecker : ICcRuleChecker
     {
         if (string.IsNullOrEmpty(cookieName)) return null;
         return request.Cookies.TryGetValue(cookieName, out var value) ? value : null;
+    }
+
+    private static DateTimeOffset GetWindowStart(int periodSeconds)
+    {
+        var period = Math.Max(1, periodSeconds);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        return DateTimeOffset.FromUnixTimeSeconds(now - now % period);
     }
     
     /// <summary>

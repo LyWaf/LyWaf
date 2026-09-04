@@ -5,6 +5,7 @@ using LyWaf.Services.Files;
 using NLog;
 using System.Text.Unicode;
 using System.Text;
+using System.Text.Encodings.Web;
 using LyWaf.Utils;
 using Yarp.ReverseProxy.Model;
 
@@ -326,6 +327,13 @@ public class FileProviderMiddleware
             return;
         }
 
+        if (!HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method))
+        {
+            context.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
+            context.Response.Headers.Allow = "GET, HEAD";
+            return;
+        }
+
         var fileService = context.RequestServices.GetRequiredService<IFileService>();
         var path = context.Request.RouteValues["file-all"]?.ToString() ?? "";
         
@@ -384,45 +392,61 @@ public class FileProviderMiddleware
             sb.Append($"<h1>Index Of {uri}</h1><table>");
             
             var realPath = Path.GetFullPath(real.Path);
-            foreach (var file in Directory.GetDirectories(real.Path))
+            var remainingEntries = Math.Clamp(fileConfig.MaxBrowseEntries, 1, 10000);
+            foreach (var file in Directory.EnumerateDirectories(real.Path).Where(path => fileService.IsVisible(fileConfig, path)).Take(remainingEntries))
             {
-                var name = file[realPath.Length..].TrimStart('\\');
+                var name = Path.GetFileName(file);
+                var encodedName = HtmlEncoder.Default.Encode(name);
                 sb.Append("<tr><td><i class=\"icon icon-_blank\"></i></td>");
                 sb.Append($"<td class=\"last-modified\">{Directory.GetLastAccessTime(file)}</td>");
                 sb.Append($"<td class=\"file-size\"><code></code></td>");
-                sb.Append($"<td class=\"display-name\"><a href=\"./{name}\">{name}</a></td></tr>");
+                sb.Append($"<td class=\"display-name\"><a href=\"./{Uri.EscapeDataString(name)}/\">{encodedName}</a></td></tr>");
+                remainingEntries--;
             }
 
-            foreach (var file in Directory.GetFiles(real.Path))
+            foreach (var file in Directory.EnumerateFiles(real.Path).Where(path => fileService.IsVisible(fileConfig, path)).Take(remainingEntries))
             {
-                var name = file[realPath.Length..].TrimStart('\\');
+                var name = Path.GetFileName(file);
+                var encodedName = HtmlEncoder.Default.Encode(name);
                 sb.Append("<tr><td><i class=\"icon icon-_blank\"></i></td>");
                 sb.Append($"<td class=\"last-modified\">{File.GetLastAccessTime(file)}</td>");
                 var fileInfo = new FileInfo(file);
                 sb.Append($"<td class=\"file-size\"><code>{CommonUtil.LengthToBytesSize(fileInfo.Length)}</code></td>");
-                sb.Append($"<td class=\"display-name\"><a href=\"./{name}\">{name}</a></td></tr>");
+                sb.Append($"<td class=\"display-name\"><a href=\"./{Uri.EscapeDataString(name)}\">{encodedName}</a></td></tr>");
             }
             sb.Append("</table>");
             sb.Append("<br/><br/><address>LyWaf</address> </body></html>");
-            await context.Response.WriteAsync(sb.ToString());
+            context.Response.ContentType = "text/html; charset=utf-8";
+            context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+            if (!HttpMethods.IsHead(context.Request.Method))
+                await context.Response.WriteAsync(sb.ToString(), context.RequestAborted);
             return;
         }
 
-        if (await HandleConditionalRequest(context, prefix, real.Path, fileService))
+        var metadata = await fileService.GetFileMetadataAsync(real.Path);
+        if (HandleConditionalRequest(context, metadata, fileConfig.CacheControl))
             return;
 
         RangeHeaderValue? rangeHeader = null;
         if (context.Request.Headers.TryGetValue("Range", out var value))
         {
-            _ = RangeHeaderValue.TryParse(value.ToString(), out rangeHeader);
+            if (!RangeHeaderValue.TryParse(value.ToString(), out rangeHeader))
+            {
+                context.Response.StatusCode = StatusCodes.Status416RangeNotSatisfiable;
+                context.Response.Headers.ContentRange = $"bytes */{metadata.Size}";
+                return;
+            }
+            if (!IfRangeMatches(context.Request, metadata)) rangeHeader = null;
         }
 
         var result = await fileService.GetFileAsync(fileConfig, path, real.Path, rangeHeader);
 
-        SetResponseHeaders(context, result, real.PreCompressed);
+        SetResponseHeaders(context, result, real.PreCompressed, fileConfig.CacheControl);
         context.Response.StatusCode = result.StatusCode;
-        if (result.StatusCode > 300)
+        if (result.StatusCode >= 300)
         {
+            if (result.StatusCode == StatusCodes.Status416RangeNotSatisfiable)
+                context.Response.Headers.ContentRange = $"bytes */{result.TotalLength}";
             if (result.ErrMsg != null)
             {
                 await context.Response.WriteAsync(result.ErrMsg);
@@ -430,44 +454,48 @@ public class FileProviderMiddleware
             return;
         }
 
-        if (result.Stream != null)
+        if (HttpMethods.IsHead(context.Request.Method) || result.PhysicalPath is null) return;
+        try
         {
-            try
+            if (result.Ranges.Count <= 1)
             {
-                await using (result.Stream)
-                {
-                    await result.Stream.CopyToAsync(context.Response.Body);
-                }
+                var range = result.Ranges.FirstOrDefault();
+                await context.Response.SendFileAsync(result.PhysicalPath, range?.Start ?? 0,
+                    range?.Length ?? result.TotalLength, context.RequestAborted);
             }
-            catch (Exception ex)
+            else
             {
-                context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-                await context.Response.WriteAsync($"Error reading file: {ex.Message}");
+                await SendMultipartRangesAsync(context, result, metadata.ContentType);
             }
+        }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "发送静态文件失败: {Path}", result.PhysicalPath);
+            if (!context.Response.HasStarted) context.Response.StatusCode = StatusCodes.Status500InternalServerError;
         }
     }
 
-    static async Task<bool> HandleConditionalRequest(HttpContext context, string prefix, string path, IFileService fileService)
+    internal static bool HandleConditionalRequest(HttpContext context, FileMetadata metadata, string cacheControl)
     {
-        var metadata = await fileService.GetFileMetadataAsync(path);
-
         if (context.Request.Headers.ContainsKey("If-None-Match"))
         {
             var clientETag = context.Request.Headers.IfNoneMatch.ToString();
-            if (clientETag == metadata.ETag)
+            if (clientETag.Split(',').Any(tag => WeakEtagEquals(tag.Trim(), metadata.ETag)))
             {
-                context.Response.StatusCode = StatusCodes.Status304NotModified;
+                SetNotModified(context, metadata, cacheControl);
                 return true;
             }
+            return false;
         }
 
         if (context.Request.Headers.ContainsKey("If-Modified-Since"))
         {
             if (DateTime.TryParse(context.Request.Headers.IfModifiedSince, out var ifModifiedSince))
             {
-                if (metadata.LastModified <= ifModifiedSince.ToUniversalTime())
+                if (metadata.LastModified <= ifModifiedSince.ToUniversalTime().AddSeconds(1))
                 {
-                    context.Response.StatusCode = StatusCodes.Status304NotModified;
+                    SetNotModified(context, metadata, cacheControl);
                     return true;
                 }
             }
@@ -475,13 +503,15 @@ public class FileProviderMiddleware
         return false;
     }
 
-    static void SetResponseHeaders(HttpContext context, FileServiceResult result, string? compress)
+    static void SetResponseHeaders(HttpContext context, FileServiceResult result, string? compress, string cacheControl)
     {
         context.Response.Headers.ContentType = result.ContentType;
-        context.Response.Headers.ContentLength = result.FileLength;
+        context.Response.ContentLength = result.ContentLength;
         context.Response.Headers.LastModified = result.LastModified.ToString("R");
-        context.Response.Headers.ETag = $"\"{result.ETag}\"";
+        context.Response.Headers.ETag = result.ETag;
         context.Response.Headers.AcceptRanges = "bytes";
+        context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        if (!string.IsNullOrWhiteSpace(cacheControl)) context.Response.Headers.CacheControl = cacheControl;
         if(compress != null) {
             context.Response.Headers.ContentEncoding = compress;
             context.Response.Headers.Vary = "Accept-Encoding";
@@ -489,8 +519,39 @@ public class FileProviderMiddleware
 
         if (result.StatusCode == StatusCodes.Status206PartialContent)
         {
-            context.Response.Headers.ContentRange =
-                $"bytes {result.RangeStart}-{result.RangeEnd}/{result.TotalLength}";
+            if (result.Ranges.Count == 1)
+                context.Response.Headers.ContentRange = $"bytes {result.Ranges[0].Start}-{result.Ranges[0].End}/{result.TotalLength}";
         }
+    }
+
+    internal static bool IfRangeMatches(HttpRequest request, FileMetadata metadata)
+    {
+        var value = request.Headers.IfRange.ToString();
+        if (string.IsNullOrWhiteSpace(value)) return true;
+        if (value.StartsWith('"') || value.StartsWith("W/", StringComparison.OrdinalIgnoreCase))
+            return value == metadata.ETag;
+        return DateTime.TryParse(value, out var date) && metadata.LastModified <= date.ToUniversalTime().AddSeconds(1);
+    }
+
+    private static bool WeakEtagEquals(string left, string right) => left == "*" ||
+        left.TrimStart('W', '/').Equals(right.TrimStart('W', '/'), StringComparison.Ordinal);
+
+    private static void SetNotModified(HttpContext context, FileMetadata metadata, string cacheControl)
+    {
+        context.Response.StatusCode = StatusCodes.Status304NotModified;
+        context.Response.Headers.ETag = metadata.ETag;
+        context.Response.Headers.LastModified = metadata.LastModified.ToString("R");
+        if (!string.IsNullOrWhiteSpace(cacheControl)) context.Response.Headers.CacheControl = cacheControl;
+    }
+
+    private static async Task SendMultipartRangesAsync(HttpContext context, FileServiceResult result, string partContentType)
+    {
+        foreach (var range in result.Ranges)
+        {
+            await context.Response.WriteAsync($"--{result.Boundary}\r\nContent-Type: {partContentType}\r\nContent-Range: bytes {range.Start}-{range.End}/{result.TotalLength}\r\n\r\n", context.RequestAborted);
+            await context.Response.SendFileAsync(result.PhysicalPath!, range.Start, range.Length, context.RequestAborted);
+            await context.Response.WriteAsync("\r\n", context.RequestAborted);
+        }
+        await context.Response.WriteAsync($"--{result.Boundary}--\r\n", context.RequestAborted);
     }
 }

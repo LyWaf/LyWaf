@@ -71,6 +71,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '配置集群', icon: '⚖️' }
   },
   {
+    path: '/multi-node',
+    name: 'MultiNode',
+    component: () => import('@/views/MultiNode.vue'),
+    meta: { title: '节点管理', icon: '◫' }
+  },
+  {
     path: '/route-config',
     name: 'RouteConfig',
     component: () => import('@/views/RouteConfig.vue'),

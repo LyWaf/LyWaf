@@ -28,6 +28,7 @@ using LyWaf.Utils;
 using LyWaf.Services.WafInfo;
 using LyWaf.Services.AccessControl;
 using LyWaf.Services.WebTamper;
+using LyWaf.Services.ResponseCaching;
 using LyWaf.Plugins.Core;
 using LyWaf.Control;
 using LyWaf.Services.Compress;
@@ -41,6 +42,20 @@ using LyWaf.Services.Param;
 using LyWaf.Services.Captcha;
 using LyWaf.Services.WafRule;
 using LyWaf.Services.AuditLog;
+using LyWaf.Services.Metrics;
+using LyWaf.Services.RequestMirroring;
+using LyWaf.Services.ExternalAuthorization;
+using LyWaf.Services.Protocols;
+using System.Net.Quic;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using LyWaf.Services.ManagementApi;
+using LyWaf.Services.Telemetry;
+using LyWaf.Services.Discovery;
+using LyWaf.Services.Distribution;
+using LyWaf.Services.RuntimeState;
+using LyWaf.Services.Retry;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Yarp.ReverseProxy.Forwarder;
 using LyWaf.Config;
 using LyWaf.Shared;
 
@@ -363,11 +378,121 @@ public class Program
 
             DoStartWaf(builder, run, null, null);
 
+            if (SharedData.UpgradeRequested)
+            {
+                if (TryStartUpgradeCandidate(configPath)) return;
+                SharedData.RestartRequested = true;
+                _logger.Error("候选版本未能就绪，正在恢复当前程序实例");
+            }
+
             if (SharedData.RestartRequested)
             {
                 _logger.Info("检测到端口变更，正在重启 WebApplication 以应用新端口监听...");
             }
         } while (SharedData.RestartRequested);
+    }
+
+    /// <summary>
+    /// 在旧 WebApplication 已完全停止并释放监听端口后启动候选版本；候选失败时返回 false 触发旧版本恢复。
+    /// </summary>
+    private static bool TryStartUpgradeCandidate(string configPath)
+    {
+        var probeProcessId = SharedData.PendingUpgradeProbeProcessId;
+        SharedData.PendingUpgradeProbeProcessId = null;
+        if (probeProcessId.HasValue)
+        {
+            try
+            {
+                using var probe = Process.GetProcessById(probeProcessId.Value);
+                if (!probe.HasExited) { probe.Kill(entireProcessTree: true); probe.WaitForExit(5000); }
+            }
+            catch (ArgumentException) { }
+            catch (Exception ex) { _logger.Warn(ex, "停止候选探针进程失败: {Pid}", probeProcessId.Value); }
+        }
+        var entryPoint = SharedData.PendingUpgradeEntryPoint;
+        var version = SharedData.PendingUpgradeVersion;
+        SharedData.UpgradeRequested = false;
+        SharedData.PendingUpgradeEntryPoint = null;
+        SharedData.PendingUpgradeVersion = null;
+        if (string.IsNullOrWhiteSpace(entryPoint) || string.IsNullOrWhiteSpace(version) || !File.Exists(entryPoint))
+        {
+            _logger.Error("待激活候选版本信息不完整");
+            return false;
+        }
+
+        IConfigurationRoot configuration;
+        var configurationBuilder = new ConfigurationBuilder();
+        if (configPath.EndsWith(".ly", StringComparison.OrdinalIgnoreCase))
+            configurationBuilder.AddLyConfig(configPath, optional: false);
+        else
+            configurationBuilder.AddYamlFile(configPath, optional: false);
+        configuration = configurationBuilder.Build();
+        var upgradeOptions = new LyWaf.Services.Lifecycle.UpgradeOptions();
+        configuration.GetSection("Lifecycle:Upgrade").Bind(upgradeOptions);
+        var store = new LyWaf.Services.Lifecycle.UpgradePackageService(
+            Microsoft.Extensions.Options.Options.Create(upgradeOptions));
+        var wafOptions = new WafInfoOptions();
+        configuration.GetSection("WafInfos").Bind(wafOptions);
+        var control = wafOptions.GetControlListen();
+        var host = control.Host is "0.0.0.0" or "::" ? "127.0.0.1" : control.Host;
+        var readyUrl = $"{(control.IsHttps ? "https" : "http")}://{host}:{control.Port}/api/health/ready";
+
+        Process? candidate = null;
+        try
+        {
+            var start = new ProcessStartInfo
+            {
+                WorkingDirectory = Directory.GetCurrentDirectory(),
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            if (entryPoint.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            {
+                start.FileName = "dotnet";
+                start.ArgumentList.Add(entryPoint);
+            }
+            else start.FileName = entryPoint;
+            start.ArgumentList.Add("run");
+            start.ArgumentList.Add("--config");
+            start.ArgumentList.Add(Path.GetFullPath(configPath));
+            candidate = Process.Start(start) ?? throw new InvalidOperationException("候选进程未启动");
+
+            using var handler = new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            };
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(2) };
+            var deadline = DateTime.UtcNow.AddSeconds(Math.Clamp(upgradeOptions.ReadinessTimeoutSeconds, 1, 300));
+            while (DateTime.UtcNow < deadline)
+            {
+                if (candidate.HasExited) throw new InvalidOperationException($"候选进程提前退出，退出码 {candidate.ExitCode}");
+                try
+                {
+                    using var response = client.GetAsync(readyUrl).GetAwaiter().GetResult();
+                    if (response.IsSuccessStatusCode)
+                    {
+                        store.CommitAsync(version).GetAwaiter().GetResult();
+                        _logger.Info("候选版本 {Version} 已就绪并成为当前版本，PID={Pid}", version, candidate.Id);
+                        return true;
+                    }
+                }
+                catch (HttpRequestException) { }
+                catch (TaskCanceledException) { }
+                Thread.Sleep(250);
+            }
+            throw new TimeoutException($"候选版本在 {upgradeOptions.ReadinessTimeoutSeconds} 秒内未就绪");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error(ex, "候选版本 {Version} 激活失败", version);
+            if (candidate is { HasExited: false })
+            {
+                try { candidate.Kill(entireProcessTree: true); candidate.WaitForExit(5000); } catch { }
+            }
+            store.AbortPendingAsync().GetAwaiter().GetResult();
+            return false;
+        }
+        finally { candidate?.Dispose(); }
     }
 
     public static void DoStop(string[] args, StopCommandOptions stop)
@@ -547,9 +672,10 @@ public class Program
         }
 
         // 读取配置文件获取 ControlListen
-        var config = new ConfigurationBuilder()
-            .AddYamlFile(reload.Config, optional: false)
-            .Build();
+        var reloadBuilder = new ConfigurationBuilder();
+        if (reload.Config.EndsWith(".ly", StringComparison.OrdinalIgnoreCase)) reloadBuilder.AddLyConfig(reload.Config, optional: false);
+        else reloadBuilder.AddYamlFile(reload.Config, optional: false);
+        var config = reloadBuilder.Build();
 
         var wafInfos = new WafInfoOptions();
         config.GetSection("WafInfos").Bind(wafInfos);
@@ -608,11 +734,14 @@ public class Program
         try
         {
             // 读取配置文件
-            var config = new ConfigurationBuilder()
-                .AddYamlFile(validate.Config, optional: false)
-                .Build();
+            var validateBuilder = new ConfigurationBuilder();
+            if (validate.Config.EndsWith(".ly", StringComparison.OrdinalIgnoreCase)) validateBuilder.AddLyConfig(validate.Config, optional: false);
+            else validateBuilder.AddYamlFile(validate.Config, optional: false);
+            var config = validateBuilder.Build();
 
-            _logger.Info("✓ YAML 语法正确");
+            _logger.Info("✓ 配置语法正确");
+            new LyWaf.Services.Configuration.ConfigurationLifecycleService().Validate(config);
+            _logger.Info("✓ 路由引用和 WAF 安全策略冒烟检查通过");
 
             // 验证 WafInfos 配置
             var wafInfos = new WafInfoOptions();
@@ -1107,23 +1236,46 @@ public class Program
         builder.Services.Configure<StatisticOptions>(builder.Configuration.GetSection("Statistic"));
         builder.Services.Configure<AccessControlOptions>(builder.Configuration.GetSection("AccessControl"));
         builder.Services.Configure<CompressOptions>(builder.Configuration.GetSection("Compress"));
-        builder.Services.Configure<AcmeOptions>(builder.Configuration.GetSection("Acme"));
+        builder.Services.AddOptions<AcmeOptions>().Bind(builder.Configuration.GetSection("Acme"))
+            .Validate(AcmeOnDemandPolicy.IsValidOptions, "ACME/内部 CA 配置无效。")
+            .ValidateOnStart();
         builder.Services.Configure<SimpleResOptions>(builder.Configuration.GetSection("SimpleRes"));
         builder.Services.Configure<CustomDnsOptions>(builder.Configuration.GetSection("CustomDns"));
         builder.Services.Configure<ProxyServerOptions>(builder.Configuration.GetSection("ProxyServer"));
-        builder.Services.Configure<StreamServerOptions>(builder.Configuration.GetSection("StreamServer"));
+        builder.Services.AddOptions<StreamServerOptions>()
+            .Bind(builder.Configuration.GetSection("StreamServer"))
+            .Validate(options => options.Streams.Values.All(StreamPrimitives.IsValidConfig),
+                "Stream 配置包含非法上游、CIDR、协议组合或资源限制")
+            .ValidateOnStart();
         builder.Services.Configure<ABTestOptions>(builder.Configuration.GetSection("ABTest"));
         builder.Services.Configure<GlobalOptions>(builder.Configuration.GetSection("Global"));
         builder.Services.Configure<LyWaf.Services.LyLog.LyLogOptions>(builder.Configuration.GetSection("LyLog"));
         builder.Services.Configure<LyWaf.Services.ErrorTemplate.ErrorTemplateOptions>(builder.Configuration.GetSection("ErrorTemplate"));
+        builder.Services.Configure<MetricsOptions>(builder.Configuration.GetSection("Metrics"));
+        builder.Services.AddOptions<Http3Options>().Bind(builder.Configuration.GetSection("Http3"))
+            .Validate(static value => value.Ports.All(static port => port is >= 1 and <= 65535),
+                "Http3.Ports 包含无效端口。")
+            .ValidateOnStart();
+        builder.Services.AddOptions<GrpcOptions>().Bind(builder.Configuration.GetSection("Grpc"))
+            .Validate(static value => value.H2cPorts.All(static port => port is >= 1 and <= 65535),
+                "Grpc.H2cPorts 包含无效端口。")
+            .ValidateOnStart();
+        builder.Services.AddLyWafOpenTelemetry(builder.Configuration);
 
-        // 缩短关机超时，避免 WebSocket 等长连接导致关机卡住
-        builder.Services.Configure<HostOptions>(opts => opts.ShutdownTimeout = TimeSpan.FromSeconds(5));
+        // 请求排空发生在 StopApplication 之前；这里为后台服务最终刷写保留独立超时。
+        var shutdownTimeout = Math.Clamp(builder.Configuration.GetValue("Lifecycle:ShutdownTimeoutSeconds", 15), 1, 600);
+        builder.Services.Configure<HostOptions>(opts => opts.ShutdownTimeout = TimeSpan.FromSeconds(shutdownTimeout));
 
         // 注册自定义响应压缩中间件（支持 MinSize）
         builder.Services.AddSingleton<ResponseCompressMiddleware>();
 
         builder.Services.AddMemoryCache();
+        builder.Services.AddHttpContextAccessor();
+        builder.Services.AddSingleton<LyWaf.Services.Configuration.ConfigVersionService>();
+        builder.Services.AddSingleton<LyWaf.Services.Configuration.ConfigurationLifecycleService>();
+        builder.Services.AddSingleton<LyWaf.Services.Lifecycle.GracefulShutdownCoordinator>();
+        builder.Services.Configure<LyWaf.Services.Lifecycle.UpgradeOptions>(builder.Configuration.GetSection("Lifecycle:Upgrade"));
+        builder.Services.AddSingleton<LyWaf.Services.Lifecycle.UpgradePackageService>();
         builder.Services.AddSingleton<IFileService, FileService>();
         builder.Services.AddSingleton<ISpeedLimitService, SpeedLimitService>();
         builder.Services.AddSingleton<IProtectService, ProtectService>();
@@ -1138,11 +1290,23 @@ public class Program
         builder.Services.AddHostedService(sp => (AcmeService)sp.GetRequiredService<IAcmeService>());
         builder.Services.AddSingleton<ICustomDnsService, CustomDnsService>();
         builder.Services.AddSingleton<IAuditLogService, AuditLogService>();
+        builder.Services.AddLyWafMetrics();
+        builder.Services.AddOptions<ManagementApiOptions>().Bind(builder.Configuration.GetSection("ManagementApi"))
+            .Validate(options => options.MaxRequestBodyBytes is >= 1024 and <= 67108864 &&
+                                 options.ReadRequestsPerMinute is >= 1 and <= 100000 &&
+                                 options.WriteRequestsPerMinute is >= 1 and <= 100000 &&
+                                 options.MaxTrackedClients is >= 100 and <= 100000,
+                "ManagementApi 限制配置无效。")
+            .ValidateOnStart();
+        builder.Services.AddSingleton<ManagementApiGuard>();
+        builder.Services.AddLyWafRequestMirroring(builder.Configuration);
+        builder.Services.AddLyWafExternalAuthorization(builder.Configuration);
 
         // 注册 DuckDB 持久化服务
         builder.Services.Configure<LyWaf.Services.DuckDb.DuckDbOptions>(builder.Configuration.GetSection("DuckDb"));
         builder.Services.AddSingleton<LyWaf.Services.DuckDb.IDuckDbService, LyWaf.Services.DuckDb.DuckDbService>();
-        builder.Services.AddSingleton<LyWaf.Services.DuckDb.IDuckDbQueryService, LyWaf.Services.DuckDb.DuckDbQueryService>();
+        builder.Services.AddSingleton<LyWaf.Services.DuckDb.DuckDbQueryService>();
+        builder.Services.AddSingleton<LyWaf.Services.DuckDb.IDuckDbQueryService, MetricsDuckDbQueryService>();
         builder.Services.AddHostedService<LyWaf.Services.DuckDb.StatisticRecoveryService>();  // 启动时恢复数据（先于 Flush）
         builder.Services.AddSingleton<LyWaf.Services.DuckDb.StatisticFlushService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LyWaf.Services.DuckDb.StatisticFlushService>());
@@ -1153,6 +1317,12 @@ public class Program
         builder.Services.AddHostedService<StreamService>();     // TCP 流代理服务
         builder.Services.AddSingleton<IProbingRequestFactory, LyxProbingRequestFactory>();
         builder.Services.AddSingleton<IActiveHealthCheckPolicy, LyxActiveHealthPolicy>();
+        builder.Services.AddSingleton<OutlierDetectionRegistry>();
+        builder.Services.AddSingleton<IPassiveHealthCheckPolicy, OutlierDetectionPolicy>();
+        builder.Services.AddLyWafServiceDiscovery(builder.Configuration);
+        builder.Services.AddLyWafDistribution(builder.Configuration);
+        builder.Services.AddLyWafRuntimeState(builder.Configuration);
+        builder.Services.AddLyWafResponseCache(builder.Configuration);
 
         // 注册自定义负载均衡策略
         builder.Services.AddSingleton<ILoadBalancingPolicy, WeightedRoundRobinPolicy>();
@@ -1161,6 +1331,7 @@ public class Program
         builder.Services.AddSingleton<ILoadBalancingPolicy, GenericHashPolicy>();
         builder.Services.AddSingleton<ILoadBalancingPolicy, WeightedRandomPolicy>();
         builder.Services.AddSingleton<ILoadBalancingPolicy, ConsistentHashPolicy>();
+        builder.Services.AddSingleton<ILoadBalancingPolicy, AdvancedLoadBalancingPolicy>();
         
         // 注册 A/B 测试服务和策略
         builder.Services.AddSingleton<IABTestService, ABTestService>();
@@ -1183,6 +1354,20 @@ public class Program
 
         var wafInfos = new WafInfoOptions();
         builder.Configuration.GetSection("WafInfos").Bind(wafInfos);
+        var managementApiOptions = new ManagementApiOptions();
+        builder.Configuration.GetSection("ManagementApi").Bind(managementApiOptions);
+        if (!managementApiOptions.AllowRemoteControl &&
+            !WafInfoOptions.IsLoopbackAddress(wafInfos.GetControlListen().Host))
+            throw new InvalidOperationException("ControlListen 使用非回环地址时必须显式设置 ManagementApi.AllowRemoteControl=true。");
+        var http3Options = builder.Configuration.GetSection("Http3").Get<Http3Options>() ?? new Http3Options();
+        var grpcOptions = builder.Configuration.GetSection("Grpc").Get<GrpcOptions>() ?? new GrpcOptions();
+        var quicSupported = QuicConnection.IsSupported;
+        if (http3Options.Enabled && !quicSupported)
+        {
+            if (http3Options.RequireSupport)
+                throw new PlatformNotSupportedException("Http3.Enabled=true，但当前操作系统或运行时不支持 QUIC。");
+            _logger.Warn("当前平台不支持 QUIC，HTTP/3 已降级关闭，HTTP/1.1 与 HTTP/2 继续可用");
+        }
         builder.Logging.AddNLog();
 
         var logger = LogManager.GetCurrentClassLogger();
@@ -1191,25 +1376,35 @@ public class Program
         builder.WebHost.UseKestrel((context, options) =>
         {
             // 合并主服务监听和控制台监听
-            var allListens = wafInfos.Listens.Concat([wafInfos.GetControlListen()]);
+            var allListens = wafInfos.Listens.Select(static listen => (Listen: listen, IsControl: false))
+                .Append((wafInfos.GetControlListen(), true));
 
-            foreach (var url in allListens)
+            foreach (var (url, isControl) in allListens)
             {
                 if (url.IsHttps)
                 {
                     options.Listen(IPAddress.Parse(url.Host), url.Port, listenOptions =>
                     {
+                        listenOptions.Protocols = Http3Policy.ShouldEnable(http3Options, url, isControl, quicSupported)
+                            ? HttpProtocols.Http1AndHttp2AndHttp3
+                            : HttpProtocols.Http1AndHttp2;
                         listenOptions.UseHttps(new TlsHandshakeCallbackOptions
                         {
-                            OnConnection = context =>
+                            OnConnection = async context =>
                             {
                                 var services = ServiceLocator.GetRequiredService<IWafInfoService>() ?? throw new Exception("HTTPS证书暂未加载");
                                 var name = context.ClientHelloInfo.ServerName;
-                                var cert = services.GetCertByName(name);
-                                return new ValueTask<SslServerAuthenticationOptions>(new SslServerAuthenticationOptions
+                                var cert = services.TryGetCertByName(name);
+                                if (cert is null && !string.IsNullOrWhiteSpace(name))
+                                {
+                                    var acme = ServiceLocator.GetService<IAcmeService>();
+                                    cert = acme is null ? null : await acme.GetOrRequestCertificateAsync(name, context.CancellationToken);
+                                }
+                                cert ??= services.GetCertByName(name);
+                                return new SslServerAuthenticationOptions
                                 {
                                     ServerCertificate = cert
-                                });
+                                };
                             },
                         });
                     });
@@ -1217,9 +1412,11 @@ public class Program
                 else
                 {
                     if(IPAddress.TryParse(url.Host, out var ip)) {
-                        options.Listen(ip, url.Port);
+                        options.Listen(ip, url.Port, listenOptions =>
+                            listenOptions.Protocols = GrpcProtocolPolicy.ForHttpListener(grpcOptions, url, isControl));
                     } else {
-                        options.Listen(IPAddress.Loopback, url.Port);
+                        options.Listen(IPAddress.Loopback, url.Port, listenOptions =>
+                            listenOptions.Protocols = GrpcProtocolPolicy.ForHttpListener(grpcOptions, url, isControl));
                     }
                 }
             }
@@ -1268,6 +1465,7 @@ public class Program
         {
             reverse.LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
         }
+        builder.Services.Replace(ServiceDescriptor.Singleton<IForwarderHttpClientFactory, RetryForwarderHttpClientFactory>());
         _logger.Info("[启动耗时] YARP 配置: {}ms", startupSw.ElapsedMilliseconds);
         startupSw.Restart();
         var app = builder.Build();
@@ -1286,6 +1484,12 @@ public class Program
 
         // 初始化插件系统（不阻塞启动）
         var pluginManager = app.Services.GetRequiredService<PluginManager>();
+        var metrics = app.Services.GetRequiredService<PrometheusMetrics>();
+        app.Services.GetRequiredService<IPluginEventBus>().Subscribe<PluginOperationEvent>(operation =>
+        {
+            metrics.RecordPluginOperation(operation.PluginId, operation.Operation, operation.Success);
+            return Task.CompletedTask;
+        });
         _ = Task.Run(async () =>
         {
             try
@@ -1310,6 +1514,14 @@ public class Program
         // 注册控制台 API
         app.MapControlApi(wafInfos);
         app.MapLyWafPluginApi(wafInfos.GetControlListen().Port);
+        app.MapLyWafDistributionApi(wafInfos.GetControlListen().Port);
+        app.MapLyWafRuntimeStateApi(wafInfos.GetControlListen().Port);
+        app.MapLyWafResponseCacheApi(wafInfos.GetControlListen().Port);
+        app.MapLyWafMetrics(wafInfos.GetControlListen().Port);
+
+        var shutdownCoordinator = app.Services.GetRequiredService<LyWaf.Services.Lifecycle.GracefulShutdownCoordinator>();
+        app.Lifetime.ApplicationStarted.Register(shutdownCoordinator.MarkReady);
+        app.Lifetime.ApplicationStopping.Register(shutdownCoordinator.BeginDrain);
 
         // 启用 WebSocket 支持（使 context.WebSockets.IsWebSocketRequest 可用）
         app.UseWebSockets();
@@ -1325,12 +1537,17 @@ public class Program
         
         app.MapReverseProxy(proxyApp =>
         {
+            proxyApp.UseMiddleware<LyWaf.Services.Lifecycle.RequestDrainMiddleware>();
+            proxyApp.UseMiddleware<TelemetryMiddleware>();
+            proxyApp.UseMiddleware<MetricsMiddleware>();
             // 精确统计入站/出站字节（必须放在最外层）
             proxyApp.UseMiddleware<BandwidthCountingMiddleware>();
             // 路由级 CORS 及 OPTIONS 预检
             proxyApp.UseMiddleware<CorsMiddleware>();
             // 启用响应压缩（必须放在其他中间件之前）
             proxyApp.UseMiddleware<ResponseCompressMiddleware>();
+            // 缓存未压缩且经过内层安全响应处理的最终内容
+            proxyApp.UseMiddleware<ResponseCacheMiddleware>();
             // 高优先级插件（Highest, High）- 在核心中间件之前
             proxyApp.UseLyWafPluginsInProxyHigh();
             
@@ -1349,6 +1566,10 @@ public class Program
             
             // 普通及低优先级插件（Normal, Low, Lowest）- 在核心中间件之后
             proxyApp.UseLyWafPluginsInProxyNormal();
+
+            proxyApp.UseMiddleware<ExternalAuthorizationMiddleware>();
+            // 仅复制通过安全检查且真正进入回源分支的请求
+            proxyApp.UseMiddleware<RequestMirrorMiddleware>();
             
             // SimpleRes 简单响应处理中间件
             proxyApp.UseMiddleware<SimpleResMiddleware>();
@@ -1356,22 +1577,13 @@ public class Program
             
             // 启用负载均衡中间件（使用自定义代理管道时必须显式添加）
             proxyApp.UseLoadBalancing();
+            proxyApp.UsePassiveHealthChecks();
         }).RequireHost(proxyPorts);
 
         // 注册应用关闭时的清理
         app.Lifetime.ApplicationStopping.Register(() =>
         {
-            _logger.Info("应用正在关闭，释放静态资源...");
-            // 先执行 DuckDB 最终刷写，再关闭连接
-            try
-            {
-                var flushService = app.Services.GetService<LyWaf.Services.DuckDb.StatisticFlushService>();
-                flushService?.FinalFlush();
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "DuckDB 最终刷写失败");
-            }
+            _logger.Info("应用正在关闭，等待托管服务停止...");
             // 记录进程关闭到运行日志
             try
             {
@@ -1382,15 +1594,10 @@ public class Program
             {
                 _logger.Warn(ex, "记录运行日志关闭失败");
             }
-            try
-            {
-                var duckDb = app.Services.GetService<LyWaf.Services.DuckDb.IDuckDbService>();
-                duckDb?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                _logger.Error(ex, "DuckDB 连接关闭失败");
-            }
+        });
+        app.Lifetime.ApplicationStopped.Register(() =>
+        {
+            _logger.Info("托管服务已停止，释放静态资源...");
             SharedData.DisposeAll();
         });
 

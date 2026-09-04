@@ -9,28 +9,37 @@ using LyWaf.Services.Statistic;
 using LyWaf.Services.WafInfo;
 using LyWaf.Config;
 using LyWaf.Plugins.Core;
+using LyWaf.Plugins.Packaging;
 using LyWaf.Services.Auth;
 using LyWaf.Services.WafRule;
 using LyWaf.Services.AuditLog;
 using LyWaf.Services.Acme;
 using LyWaf.Shared;
 using System.Security.Cryptography.X509Certificates;
+using System.Security.Cryptography;
 using LyWaf.Utils;
 using LyWaf.Services.Param;
 using LyWaf.Services.ProxyServer;
+using LyWaf.Services.Configuration;
+using LyWaf.Services.ManagementApi;
+using LyWaf.Services.RuntimeState;
+using LyWaf.Services;
+using LyWaf.Policy;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using NLog;
 
 namespace LyWaf.Control;
 
 public static class ControlApi
 {
+    private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     private static readonly HashSet<string> AllowedConfigKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         "FileProvider", "Logging", "Protect", "ReverseProxy", 
-        "SpeedLimit", "Statistic", "WafInfos"
+        "SpeedLimit", "Statistic", "WafInfos", "RuntimeState", "Distribution", "ServiceDiscovery"
     };
     
     // 缓存前端静态文件
@@ -90,6 +99,10 @@ public static class ControlApi
     {
         var controlListen = wafInfos.GetControlListen();
         var controlPort = controlListen.Port;
+
+        app.UseManagementApiContract(controlPort);
+        // 显式固定顺序：版本路径重写必须发生在端点路由匹配之前。
+        app.UseRouting();
         
         // =============== 前端静态文件服务 ===============
         
@@ -217,6 +230,9 @@ public static class ControlApi
             if (path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/time", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/auth/check", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals("/api/health/ready", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith("/api/distribution/agent/", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith("/api/runtime-state/agent/", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/pcap/ca.crl", StringComparison.OrdinalIgnoreCase))
             {
                 await next();
@@ -229,7 +245,7 @@ public static class ControlApi
             {
                 context.Response.StatusCode = 401;
                 context.Response.Headers["WWW-Authenticate"] = "Basic realm=\"LyWaf\", Bearer";
-                await context.Response.WriteAsJsonAsync(new { success = false, message = "未授权访问" });
+                await context.Response.WriteAsJsonAsync(ManagementApiContract.CreateError(context, "unauthorized", "未授权访问"));
                 return;
             }
 
@@ -242,7 +258,7 @@ public static class ControlApi
                 if (!authService.ValidateToken(token))
                 {
                     context.Response.StatusCode = 401;
-                    await context.Response.WriteAsJsonAsync(new { success = false, message = "令牌无效或已过期" });
+                    await context.Response.WriteAsJsonAsync(ManagementApiContract.CreateError(context, "invalid_token", "令牌无效或已过期"));
                     return;
                 }
                 context.Items["Username"] = authService.GetUsername(token) ?? "unknown";
@@ -271,12 +287,9 @@ public static class ControlApi
                         }
                         // 验证失败，返回具体错误
                         context.Response.StatusCode = 401;
-                        await context.Response.WriteAsJsonAsync(new
-                        {
-                            success = false,
-                            message = result.Message ?? "用户名或密码错误",
-                            retryAfterSeconds = result.RetryAfterSeconds
-                        });
+                        var message = result.Message ?? "用户名或密码错误";
+                        await context.Response.WriteAsJsonAsync(ManagementApiContract.CreateError(context,
+                            "invalid_credentials", message, new { result.RetryAfterSeconds }));
                         return;
                     }
                 }
@@ -285,7 +298,7 @@ public static class ControlApi
 
             context.Response.StatusCode = 401;
             context.Response.Headers["WWW-Authenticate"] = "Basic realm=\"LyWaf\", Bearer";
-            await context.Response.WriteAsJsonAsync(new { success = false, message = "无效的认证方式" });
+            await context.Response.WriteAsJsonAsync(ManagementApiContract.CreateError(context, "invalid_auth_scheme", "无效的认证方式"));
         });
 
         // =============== 认证端点（需认证） ===============
@@ -1483,7 +1496,14 @@ public static class ControlApi
                 return Results.Json(new { success = false, message = "配置重载失败：不支持的配置类型" }, statusCode: 500);
             }
 
-            configRoot.Reload();
+            var lifecycle = ctx.RequestServices.GetRequiredService<ConfigurationLifecycleService>();
+            var before = lifecycle.Capture(configRoot);
+            ConfigurationChangeImpact impact;
+            try { impact = lifecycle.ReloadAndValidate(configRoot, before); }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"配置重载冒烟检查失败: {ex.Message}" }, statusCode: 400);
+            }
 
             var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
             audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", "重载配置", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
@@ -1502,25 +1522,126 @@ public static class ControlApi
                     ? "配置已重新加载，检测到端口变更，需要重启服务才能生效"
                     : "配置已重新加载",
                 portsChanged,
+                restartRequired = impact.RequiresRestart,
+                changeImpact = impact,
                 timestamp = DateTime.Now
             });
         }).RequireHost($"*:{controlPort}");
 
-        // 重启服务（用于端口变更后由前端确认触发）
-        app.MapGet("/api/restart", (HttpContext ctx, IHostApplicationLifetime lifetime) =>
+        app.MapGet("/api/health/ready", (HttpContext ctx) =>
+        {
+            var coordinator = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.GracefulShutdownCoordinator>();
+            var state = coordinator.Snapshot();
+            return Results.Json(new { success = state.Ready, state }, statusCode: state.Ready ? 200 : 503);
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapGet("/api/openapi.json", (EndpointDataSource endpoints) =>
+            Results.Json(ManagementApiContract.BuildOpenApiDocument(endpoints)))
+            .RequireHost($"*:{controlPort}");
+
+        app.MapGet("/api/lifecycle/drain", (HttpContext ctx) =>
+        {
+            var coordinator = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.GracefulShutdownCoordinator>();
+            return Results.Json(new { success = true, state = coordinator.Snapshot() });
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapGet("/api/upgrade/releases", async (HttpContext ctx) =>
+        {
+            var service = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.UpgradePackageService>();
+            return Results.Json(new { success = true, releases = await service.ListAsync(ctx.RequestAborted), pointers = await service.GetPointersAsync(ctx.RequestAborted) });
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapPost("/api/upgrade/stage", async (HttpContext ctx) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<StageUpgradeRequest>(ctx.RequestAborted);
+                if (request == null) return Results.BadRequest(new { success = false, message = "请求内容为空" });
+                var service = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.UpgradePackageService>();
+                var release = await service.StageAsync(request.PackageName, request.Version, request.Sha256, SharedData.ConfigFilePath, ctx.RequestAborted);
+                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
+                    ctx.Items["Username"]?.ToString() ?? "unknown", $"校验并入库程序版本: {release.Version}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
+                return Results.Json(new { success = true, message = "候选版本已校验并入库", release });
+            }
+            catch (Exception ex) { return Results.Json(new { success = false, message = $"候选版本入库失败: {ex.Message}" }, statusCode: 400); }
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapPost("/api/upgrade/activate", async (HttpContext ctx, IHostApplicationLifetime lifetime, IConfiguration config) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<ActivateUpgradeRequest>(ctx.RequestAborted);
+                if (request == null) return Results.BadRequest(new { success = false, message = "请求内容为空" });
+                var service = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.UpgradePackageService>();
+                var release = (await service.ListAsync(ctx.RequestAborted)).SingleOrDefault(x => x.Version == request.Version)
+                    ?? throw new KeyNotFoundException("候选版本不存在");
+                var assembly = System.Reflection.Assembly.GetEntryAssembly();
+                var probe = await service.StartReadinessProbeAsync(release, config, SharedData.ConfigFilePath, ctx.RequestAborted);
+                try
+                {
+                    await service.MarkPendingAsync(release.Version, assembly?.GetName().Version?.ToString() ?? "current", GetRunningEntryPoint(), ctx.RequestAborted);
+                }
+                catch
+                {
+                    try { Process.GetProcessById(probe.ProcessId).Kill(entireProcessTree: true); } catch { }
+                    throw;
+                }
+                SharedData.PendingUpgradeVersion = release.Version;
+                SharedData.PendingUpgradeEntryPoint = release.EntryPoint;
+                SharedData.PendingUpgradeProbeProcessId = probe.ProcessId;
+                SharedData.UpgradeRequested = true;
+                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
+                    ctx.Items["Username"]?.ToString() ?? "unknown", $"激活程序版本: {release.Version}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
+                ScheduleDrainAndStop(ctx, lifetime, config);
+                return Results.Json(new { success = true, message = "候选版本将在当前实例排空后启动", version = release.Version });
+            }
+            catch (Exception ex) { return Results.Json(new { success = false, message = $"激活失败: {ex.Message}" }, statusCode: 400); }
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapPost("/api/upgrade/rollback", async (HttpContext ctx, IHostApplicationLifetime lifetime, IConfiguration config) =>
+        {
+            try
+            {
+                var service = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.UpgradePackageService>();
+                var currentPointers = await service.GetPointersAsync(ctx.RequestAborted);
+                var entryPoint = currentPointers.PreviousEntryPoint;
+                if (string.IsNullOrWhiteSpace(currentPointers.Previous) || string.IsNullOrWhiteSpace(entryPoint) || !File.Exists(entryPoint))
+                    throw new InvalidOperationException("没有可用的上一程序版本");
+                var rollbackRelease = new LyWaf.Services.Lifecycle.UpgradeReleaseInfo(
+                    currentPointers.Previous, Path.GetDirectoryName(entryPoint)!, entryPoint, "rollback", DateTimeOffset.UtcNow, "validated", "previous-version");
+                var probe = await service.StartReadinessProbeAsync(rollbackRelease, config, SharedData.ConfigFilePath, ctx.RequestAborted);
+                LyWaf.Services.Lifecycle.UpgradePointers pointers;
+                try { (pointers, entryPoint) = await service.MarkPreviousPendingAsync(ctx.RequestAborted); }
+                catch
+                {
+                    try { Process.GetProcessById(probe.ProcessId).Kill(entireProcessTree: true); } catch { }
+                    throw;
+                }
+                SharedData.PendingUpgradeVersion = pointers.Pending;
+                SharedData.PendingUpgradeEntryPoint = entryPoint;
+                SharedData.PendingUpgradeProbeProcessId = probe.ProcessId;
+                SharedData.UpgradeRequested = true;
+                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
+                    ctx.Items["Username"]?.ToString() ?? "unknown", $"回退程序版本: {pointers.Pending}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
+                ScheduleDrainAndStop(ctx, lifetime, config);
+                return Results.Json(new { success = true, message = "上一版本将在当前实例排空后启动", version = pointers.Pending });
+            }
+            catch (Exception ex) { return Results.Json(new { success = false, message = $"回退失败: {ex.Message}" }, statusCode: 400); }
+        }).RequireHost($"*:{controlPort}");
+
+        // 重启服务：先从就绪检查摘流，再等待现有 HTTP、下载和 WebSocket 排空。
+        app.MapGet("/api/restart", (HttpContext ctx, IHostApplicationLifetime lifetime, IConfiguration config) =>
         {
             var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
             audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", "重启服务", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
             SharedData.RestartRequested = true;
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(500); // 等待响应发送完毕
-                lifetime.StopApplication();
-            });
+            var timeoutSeconds = Math.Clamp(config.GetValue("Lifecycle:DrainTimeoutSeconds", 30), 1, 600);
+            ScheduleDrainAndStop(ctx, lifetime, config);
             return Results.Json(new
             {
                 success = true,
-                message = "服务正在重启...",
+                message = "实例将先摘流并等待在途请求完成，然后重启",
+                drainTimeoutSeconds = timeoutSeconds,
                 timestamp = DateTime.Now
             });
         }).RequireHost($"*:{controlPort}");
@@ -1582,30 +1703,14 @@ public static class ControlApi
                 }
 
                 var originalPath = SharedData.ConfigFilePath;
-                var isLy = originalPath.EndsWith(".ly", StringComparison.OrdinalIgnoreCase);
-
-                // 如果是 .ly 文件，先校验语法
-                if (isLy)
-                {
-                    try
-                    {
-                        LyConfigParser.Parse(request.Content);
-                    }
-                    catch (LyConfigException ex)
-                    {
-                        return Results.Json(new { success = false, message = $"语法错误: {ex.Message}" }, statusCode: 400);
-                    }
-                }
-
-                // 保存到草稿文件（不覆盖原始配置文件）
-                var dir = Path.GetDirectoryName(originalPath) ?? ".";
-                var ext = Path.GetExtension(originalPath);
-                var draftPath = Path.Combine(dir, $".lywaf.draft{ext}");
-
-                await File.WriteAllTextAsync(draftPath, request.Content, Encoding.UTF8);
+                var versionService = ctx.RequestServices.GetRequiredService<ConfigVersionService>();
+                var version = await versionService.WriteDraftAsync(request.Content,
+                    request.Reload ? "save-and-reload" : "save", ctx.RequestAborted);
+                var draftPath = version.TargetPath;
 
                 var message = $"草稿已保存到 {Path.GetFileName(draftPath)}";
                 var portsChanged = false;
+                ConfigurationChangeImpact? changeImpact = null;
 
                 // 如果需要重载配置，直接 Reload
                 // LyConfigProvider / DraftAwareYamlProvider 会自动检测草稿文件并优先读取
@@ -1613,7 +1718,9 @@ public static class ControlApi
                 {
                     if (config is IConfigurationRoot configRoot)
                     {
-                        configRoot.Reload();
+                        var lifecycle = ctx.RequestServices.GetRequiredService<ConfigurationLifecycleService>();
+                        var before = lifecycle.Capture(configRoot);
+                        changeImpact = await ApplyVersionReloadOrRollback(version, configRoot, before);
                         message = "草稿已保存，配置已重新加载";
 
                         // 检测端口是否变化（仅通知前端，由用户确认后调用 /api/restart 重启）
@@ -1640,8 +1747,19 @@ public static class ControlApi
                     success = true,
                     message,
                     portsChanged,
-                    draftFile = Path.GetFileName(draftPath)
+                    restartRequired = changeImpact?.RequiresRestart ?? false,
+                    changeImpact,
+                    draftFile = Path.GetFileName(draftPath),
+                    versionId = version.Id
                 });
+            }
+            catch (LyConfigException ex)
+            {
+                return Results.Json(new { success = false, message = $"语法错误: {ex.Message}" }, statusCode: 400);
+            }
+            catch (InvalidDataException ex)
+            {
+                return Results.Json(new { success = false, message = $"配置校验失败: {ex.Message}" }, statusCode: 400);
             }
             catch (Exception ex)
             {
@@ -2202,6 +2320,41 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        app.MapGet("/api/config/history", async (HttpContext ctx) =>
+        {
+            var service = ctx.RequestServices.GetRequiredService<ConfigVersionService>();
+            return Results.Json(new { success = true, versions = await service.GetVersionsAsync(ctx.RequestAborted) });
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapGet("/api/config/history/{id}/diff", async (string id, HttpContext ctx) =>
+        {
+            var service = ctx.RequestServices.GetRequiredService<ConfigVersionService>();
+            var diff = await service.GetDiffAsync(id, ctx.RequestAborted);
+            return diff == null
+                ? Results.Json(new { success = false, message = "配置版本不存在" }, statusCode: 404)
+                : Results.Json(new { success = true, diff });
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapPost("/api/config/history/{id}/rollback", async (string id, HttpContext ctx, IConfiguration config) =>
+        {
+            try
+            {
+                var service = ctx.RequestServices.GetRequiredService<ConfigVersionService>();
+                var version = await service.RollbackAsync(id, ctx.RequestAborted);
+                if (version == null)
+                    return Results.Json(new { success = false, message = "配置版本不存在" }, statusCode: 404);
+                if (config is IConfigurationRoot root) root.Reload();
+                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
+                    ctx.Items["Username"]?.ToString() ?? "unknown", $"回滚配置版本: {id}",
+                    ctx.Connection.RemoteIpAddress?.ToString() ?? "");
+                return Results.Json(new { success = true, message = "配置已回滚并重新加载", versionId = version.Id });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { success = false, message = $"回滚失败: {ex.Message}" }, statusCode: 400);
+            }
+        }).RequireHost($"*:{controlPort}");
+
         app.MapPut("/api/ip-groups/{id}", async (string id, HttpContext ctx, IIpGroupService ipGroupService) =>
         {
             try
@@ -2462,8 +2615,10 @@ public static class ControlApi
         // =============== 被封禁 IP 管理 API ===============
         
         // 获取被封禁的 IP 列表
-        app.MapGet("/api/blocked-ips", (HttpContext ctx) =>
+        app.MapGet("/api/blocked-ips", (HttpContext ctx, IRuntimeStateStore runtimeState) =>
         {
+            var stateExpirations = runtimeState.GetSnapshots()
+                .ToDictionary(x => $"{x.Domain}\n{x.Key}", x => x.ExpiresAt, StringComparer.Ordinal);
             var blockedIps = SharedData.ClientFb.GetValidItemsWithExpiry()
                 .Select(x => new
                 {
@@ -2504,6 +2659,28 @@ public static class ControlApi
                             expiresAt = SharedData.IpLogTargets.GetExpiration(x.Key)
                         };
                     }))
+                .Concat(runtimeState.GetValues<string>("ip.blocked").Select(x =>
+                {
+                    var expiresAt = stateExpirations.GetValueOrDefault($"ip.blocked\n{x.Key}");
+                    return new
+                    {
+                        ip = x.Key, type = "blocked", reason = x.Value,
+                        remainingSeconds = expiresAt.HasValue ? (expiresAt.Value - DateTimeOffset.UtcNow).TotalSeconds : (double?)null,
+                        expiresAt = expiresAt?.LocalDateTime
+                    };
+                }))
+                .Concat(runtimeState.GetValues<CaptchaPendingInfo>("captcha.pending").Select(x =>
+                {
+                    var expiresAt = stateExpirations.GetValueOrDefault($"captcha.pending\n{x.Key}");
+                    return new
+                    {
+                        ip = x.Key, type = "captcha", reason = $"验证码待验证: {x.Value.RuleName}",
+                        remainingSeconds = expiresAt.HasValue ? (expiresAt.Value - DateTimeOffset.UtcNow).TotalSeconds : (double?)null,
+                        expiresAt = expiresAt?.LocalDateTime
+                    };
+                }))
+                .GroupBy(x => $"{x.type}\n{x.ip}", StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
                 .OrderBy(x => x.ip)
                 .ToList();
 
@@ -2517,7 +2694,7 @@ public static class ControlApi
         }).RequireHost($"*:{controlPort}");
 
         // 手动添加 IP 限制（支持 blocked/captcha/throttled/log 类型）
-        app.MapPost("/api/blocked-ips/add", async (HttpContext ctx) =>
+        app.MapPost("/api/blocked-ips/add", async (HttpContext ctx, IRuntimeStateStore runtimeState, ICaptchaService captchaService) =>
         {
             try
             {
@@ -2542,7 +2719,7 @@ public static class ControlApi
                             ActionSeconds = (int)duration.TotalSeconds,
                             CreatedAt = DateTime.UtcNow
                         };
-                        SharedData.CaptchaPending.Set(ip, captchaInfo, duration);
+                        captchaService.SetPending(ip, captchaInfo.RuleName, captchaInfo.ActionSeconds);
                         message = $"已对 IP 启用验证码: {ip}";
                         break;
 
@@ -2554,16 +2731,19 @@ public static class ControlApi
                             LeftToken = speedKBps * 1024,
                         };
                         SharedData.ClientThrottled.Set(ip, throttleLimit, duration);
+                        runtimeState.Set("ip.throttled", ip, throttleLimit, duration);
                         message = $"已对 IP 启用限速: {ip} ({speedKBps}KB/s)";
                         break;
 
                     case "log":
                         SharedData.IpLogTargets.Set(ip, DateTime.Now, duration);
+                        runtimeState.Set("ip.log", ip, DateTimeOffset.UtcNow, duration);
                         message = $"已开始记录 IP: {ip} 的请求日志 ({duration.TotalMinutes:0}分钟)";
                         break;
 
                     default: // "blocked"
                         SharedData.ClientFb.Set(ip, reason, duration);
+                        runtimeState.Set("ip.blocked", ip, reason, duration);
                         message = $"已封禁 IP: {ip}";
                         break;
                 }
@@ -2587,7 +2767,7 @@ public static class ControlApi
         }).RequireHost($"*:{controlPort}");
 
         // 解封 IP
-        app.MapPost("/api/blocked-ips/remove", async (HttpContext ctx) =>
+        app.MapPost("/api/blocked-ips/remove", async (HttpContext ctx, IRuntimeStateStore runtimeState) =>
         {
             try
             {
@@ -2602,6 +2782,10 @@ public static class ControlApi
                 removed |= SharedData.CaptchaPending.Remove(ip);
                 removed |= SharedData.ClientThrottled.Remove(ip);
                 removed |= SharedData.IpLogTargets.Remove(ip);
+                removed |= runtimeState.Remove("ip.blocked", ip);
+                removed |= runtimeState.Remove("captcha.pending", ip);
+                removed |= runtimeState.Remove("ip.throttled", ip);
+                removed |= runtimeState.Remove("ip.log", ip);
 
                 if (removed)
                 {
@@ -2625,13 +2809,15 @@ public static class ControlApi
         }).RequireHost($"*:{controlPort}");
 
         // 清空所有封禁的 IP
-        app.MapPost("/api/blocked-ips/clear", (HttpContext ctx) =>
+        app.MapPost("/api/blocked-ips/clear", (HttpContext ctx, IRuntimeStateStore runtimeState) =>
         {
             var count = SharedData.ClientFb.Count + SharedData.CaptchaPending.Count + SharedData.ClientThrottled.Count + SharedData.IpLogTargets.Count;
             SharedData.ClientFb.Clear();
             SharedData.CaptchaPending.Clear();
             SharedData.ClientThrottled.Clear();
             SharedData.IpLogTargets.Clear();
+            foreach (var domain in new[] { "ip.blocked", "captcha.pending", "ip.throttled", "ip.log" })
+                foreach (var state in runtimeState.GetSnapshots(domain)) runtimeState.Remove(domain, state.Key);
             return Results.Json(new
             {
                 success = true,
@@ -4226,6 +4412,18 @@ public static class ControlApi
             }
         }).RequireHost($"*:{controlPort}");
 
+        app.MapGet("/api/lb/outliers", (HttpContext ctx) =>
+        {
+            var registry = ctx.RequestServices.GetRequiredService<OutlierDetectionRegistry>();
+            return Results.Json(new { success = true, destinations = registry.GetSnapshots(), timestamp = DateTime.Now });
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapGet("/api/discovery/snapshots", (HttpContext ctx) =>
+        {
+            var registry = ctx.RequestServices.GetRequiredService<LyWaf.Services.Discovery.DiscoveryRegistry>();
+            return Results.Json(new { success = true, snapshots = registry.GetAll(), timestamp = DateTimeOffset.UtcNow });
+        }).RequireHost($"*:{controlPort}");
+
         // 获取所有可用负载均衡策略
         app.MapGet("/api/lb/policies", (HttpContext ctx) =>
         {
@@ -5408,11 +5606,13 @@ public static class ControlApi
             try
             {
                 var patchPath = LbPatchConfig.GetPatchFilePath();
-                await File.WriteAllTextAsync(patchPath, "{}", Encoding.UTF8);
+                var versionService = ctx.RequestServices.GetRequiredService<ConfigVersionService>();
+                var version = await versionService.WritePatchAsync(patchPath, "{}", "clear-all-patches", ctx.RequestAborted);
 
                 if (config is IConfigurationRoot configRoot)
                 {
-                    configRoot.Reload();
+                    var lifecycle = ctx.RequestServices.GetRequiredService<ConfigurationLifecycleService>();
+                    await ApplyVersionReloadOrRollback(version, configRoot, lifecycle.Capture(configRoot));
                 }
 
                 return Results.Json(new { success = true, message = "所有补丁已清除" });
@@ -5540,6 +5740,32 @@ public static class ControlApi
         }).RequireHost($"*:{controlPort}");
 
         // =============== 插件管理 API ===============
+
+        app.MapPost("/api/plugins/install", async (HttpContext ctx, PluginPackageManager packages) =>
+        {
+            try
+            {
+                var result = await packages.InstallAsync(ctx.Request.Body, ctx.Request.ContentLength, ctx.RequestAborted);
+                return Results.Json(new { success = true, result.Id, result.Version, result.RequiresRestart, result.Message });
+            }
+            catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or CryptographicException)
+            {
+                return Results.Json(new { success = false, message = ex.Message }, statusCode: 400);
+            }
+        }).RequireHost($"*:{controlPort}");
+
+        app.MapPost("/api/plugins/{pluginId}/rollback", (string pluginId, PluginPackageManager packages) =>
+        {
+            try
+            {
+                var result = packages.Rollback(pluginId);
+                return Results.Json(new { success = true, result.Id, result.Version, result.RequiresRestart, result.Message });
+            }
+            catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException)
+            {
+                return Results.Json(new { success = false, message = ex.Message }, statusCode: 400);
+            }
+        }).RequireHost($"*:{controlPort}");
 
         app.MapGet("/api/plugins", (IPluginManager pluginManager) =>
         {
@@ -5975,6 +6201,12 @@ public static class ControlApi
         {
             return Results.Json(new { success = true, email = acmeService.GetSavedEmail() ?? "" });
         }).RequireHost($"*:{controlPort}");
+
+        app.MapGet("/api/settings/certs/status", (IAcmeService acmeService) => Results.Ok(new
+        {
+            certificates = acmeService.GetCertificateStatuses(),
+            accounts = acmeService.GetAccountStatuses()
+        })).RequireHost($"*:{controlPort}");
 
         app.MapPost("/api/settings/certs/acme-apply", async (HttpContext ctx, IAcmeService acmeService) =>
         {
@@ -7068,6 +7300,61 @@ public static class ControlApi
         }
     }
 
+    /// <summary>响应发送完成后开始摘流和排空，最终触发 Host 的有序停止流程。</summary>
+    private static void ScheduleDrainAndStop(HttpContext context, IHostApplicationLifetime lifetime, IConfiguration config)
+    {
+        var coordinator = context.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.GracefulShutdownCoordinator>();
+        var timeoutSeconds = Math.Clamp(config.GetValue("Lifecycle:DrainTimeoutSeconds", 30), 1, 600);
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(500);
+            coordinator.BeginDrain();
+            var drained = await coordinator.WaitForDrainAsync(TimeSpan.FromSeconds(timeoutSeconds));
+            if (!drained)
+            {
+                var state = coordinator.Snapshot();
+                Logger.Warn("请求排空超时，继续停止。ActiveRequests={Requests}, ActiveWebSockets={WebSockets}", state.ActiveRequests, state.ActiveWebSockets);
+            }
+            lifetime.StopApplication();
+        });
+
+    }
+
+    /// <summary>取得可在新进程中重新启动当前版本的入口点。</summary>
+    private static string GetRunningEntryPoint()
+    {
+        var processPath = Environment.ProcessPath;
+        if (!string.IsNullOrWhiteSpace(processPath) && Path.GetFileNameWithoutExtension(processPath).Equals("LyWaf", StringComparison.OrdinalIgnoreCase))
+            return Path.GetFullPath(processPath);
+        return Path.GetFullPath(System.Reflection.Assembly.GetEntryAssembly()?.Location
+            ?? throw new InvalidOperationException("无法确定当前程序入口点"));
+    }
+
+    /// <summary>重载并验证刚写入的版本；失败时恢复写入前版本，确保运行配置和磁盘配置一致。</summary>
+    private static async Task<ConfigurationChangeImpact> ApplyVersionReloadOrRollback(
+        ConfigVersionInfo version,
+        IConfigurationRoot root,
+        IReadOnlyDictionary<string, string?> before)
+    {
+        var lifecycle = ServiceLocator.GetRequiredService<ConfigurationLifecycleService>()
+            ?? throw new InvalidOperationException("配置生命周期服务尚未初始化");
+        try
+        {
+            return lifecycle.ReloadAndValidate(root, before);
+        }
+        catch
+        {
+            if (version.PreviousVersionId != null)
+            {
+                var versions = ServiceLocator.GetRequiredService<ConfigVersionService>()
+                    ?? throw new InvalidOperationException("配置版本服务尚未初始化");
+                await versions.RollbackAsync(version.PreviousVersionId);
+                root.Reload();
+            }
+            throw;
+        }
+    }
+
     /// <summary>
     /// 保存补丁文件并触发配置重载
     /// </summary>
@@ -7076,11 +7363,15 @@ public static class ControlApi
         var patchPath = LbPatchConfig.GetPatchFilePath();
         var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
         var newJson = System.Text.Json.JsonSerializer.Serialize(patch, options);
-        await File.WriteAllTextAsync(patchPath, newJson, Encoding.UTF8);
+        var versionService = ServiceLocator.GetRequiredService<ConfigVersionService>()
+            ?? throw new InvalidOperationException("配置版本服务尚未初始化");
+        var version = await versionService.WritePatchAsync(patchPath, newJson, "patch-update");
 
         if (config is IConfigurationRoot configRoot)
         {
-            configRoot.Reload();
+            var lifecycle = ServiceLocator.GetRequiredService<ConfigurationLifecycleService>()
+                ?? throw new InvalidOperationException("配置生命周期服务尚未初始化");
+            await ApplyVersionReloadOrRollback(version, configRoot, lifecycle.Capture(configRoot));
         }
     }
 
@@ -7270,7 +7561,15 @@ public static class ControlApi
                 
                 // 保存 YAML 文件
                 var newYaml = serializer.Serialize(configObj);
-                await File.WriteAllTextAsync(configPath, newYaml, Encoding.UTF8);
+                var versionService = ServiceLocator.GetRequiredService<ConfigVersionService>()
+                    ?? throw new InvalidOperationException("配置版本服务尚未初始化");
+                var version = await versionService.WriteMainAsync(configPath, newYaml, $"update-cluster:{clusterId}");
+                if (config is IConfigurationRoot yamlRoot)
+                {
+                    var lifecycle = ServiceLocator.GetRequiredService<ConfigurationLifecycleService>()
+                        ?? throw new InvalidOperationException("配置生命周期服务尚未初始化");
+                    await ApplyVersionReloadOrRollback(version, yamlRoot, lifecycle.Capture(yamlRoot));
+                }
             }
             else if (configPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
             {
@@ -7293,17 +7592,19 @@ public static class ControlApi
                 
                 // 保存 JSON 文件
                 var newJson = System.Text.Json.JsonSerializer.Serialize(configObj, jsonOptions);
-                await File.WriteAllTextAsync(configPath, newJson, Encoding.UTF8);
+                var versionService = ServiceLocator.GetRequiredService<ConfigVersionService>()
+                    ?? throw new InvalidOperationException("配置版本服务尚未初始化");
+                var version = await versionService.WriteMainAsync(configPath, newJson, $"update-cluster:{clusterId}");
+                if (config is IConfigurationRoot jsonRoot)
+                {
+                    var lifecycle = ServiceLocator.GetRequiredService<ConfigurationLifecycleService>()
+                        ?? throw new InvalidOperationException("配置生命周期服务尚未初始化");
+                    await ApplyVersionReloadOrRollback(version, jsonRoot, lifecycle.Capture(jsonRoot));
+                }
             }
             else
             {
                 return Results.Json(new { success = false, message = "不支持的配置文件格式" }, statusCode: 500);
-            }
-
-            // 触发配置重载
-            if (config is IConfigurationRoot configRoot)
-            {
-                configRoot.Reload();
             }
 
             return Results.Json(new { success = true, message = "原始配置已更新并重载" });
@@ -7886,6 +8187,20 @@ public class SaveConfigRequest
 {
     public string Content { get; set; } = "";
     public bool Reload { get; set; }
+}
+
+/// <summary>从受限升级收件箱登记并校验候选程序包的请求。</summary>
+public sealed class StageUpgradeRequest
+{
+    public string PackageName { get; set; } = "";
+    public string Version { get; set; } = "";
+    public string Sha256 { get; set; } = "";
+}
+
+/// <summary>请求在当前实例排空后激活指定候选版本。</summary>
+public sealed class ActivateUpgradeRequest
+{
+    public string Version { get; set; } = "";
 }
 
 public class ConvertConfigRequest

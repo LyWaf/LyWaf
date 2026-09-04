@@ -58,6 +58,14 @@ public class PluginStateChangedEvent
     public required PluginState NewState { get; init; }
 }
 
+/// <summary>描述插件初始化、启动、停止或卸载操作的结果，供指标与审计订阅者消费。</summary>
+public class PluginOperationEvent
+{
+    public required string PluginId { get; init; }
+    public required string Operation { get; init; }
+    public required bool Success { get; init; }
+}
+
 /// <summary>
 /// 插件事件总线实现
 /// </summary>

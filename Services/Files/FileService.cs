@@ -1,295 +1,280 @@
-using System.Text;
-using Microsoft.AspNetCore.Http.Features;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Primitives;
 using Microsoft.Net.Http.Headers;
 
 namespace LyWaf.Services.Files;
 
+/// <summary>解析和校验静态文件路径，并生成不持有文件句柄的发送描述。</summary>
 public interface IFileService
 {
     Task<FileGetInfo?> GetFileRealAsync(HttpRequest request, FileEveryConfig config, string requestPath, string path);
     Task<FileServiceResult> GetFileAsync(FileEveryConfig config, string requestPath, string realPath, RangeHeaderValue? range = null);
     Task<FileMetadata> GetFileMetadataAsync(string path);
+    bool IsVisible(FileEveryConfig config, string path);
 }
-public class FileService : IFileService
+
+/// <summary>静态文件安全解析、MIME 识别和字节范围规范化服务。</summary>
+public sealed class FileService : IFileService
 {
+    private static readonly HashSet<string> PreCompressedExtensions = [".gz", ".zst", ".br"];
     private FileProviderOptions _options;
-    private readonly IMemoryCache _cache;
-    private readonly ILogger<FileService> _logger;
 
-    private readonly static HashSet<string> PreCompressExtension = [".gz", ".zst", ".br"];
-
-    public FileService(
-        IOptionsMonitor<FileProviderOptions> options, IMemoryCache cache,
-        ILogger<FileService> logger)
+    public FileService(IOptionsMonitor<FileProviderOptions> options)
     {
         _options = options.CurrentValue;
-        options.OnChange(newConfig =>
-        {
-            _options = newConfig;
-        });
-        _cache = cache;
-        _logger = logger;
+        options.OnChange(value => _options = value);
     }
 
-    public async Task<FileGetInfo?> GetFileRealAsync(HttpRequest request, FileEveryConfig config,  string requestPath, string path)
+    public Task<FileGetInfo?> GetFileRealAsync(HttpRequest request, FileEveryConfig config, string requestPath, string path)
     {
-        var accepts = request.Headers.AcceptEncoding.ToString().Split(",").Select(item => item.Trim()).ToArray();
-        var safePath = GetSafePath(config.BasePath, path);
-        var cacheKey = $"exists_direct_{config.BasePath}_{requestPath}_{safePath}";
-        if (config.PreCompressed)
+        if (!TryGetSafePath(config, path, out var safePath)) return Task.FromResult<FileGetInfo?>(null);
+        var encodings = AcceptedEncodings(request);
+
+        if (config.TryFiles is { Length: > 0 })
         {
-            cacheKey += "_" + accepts.ToString();
+            FileGetInfo? directory = null;
+            foreach (var template in config.TryFiles)
+            {
+                if (!TryGetSafePath(config, template.Replace("$path", path, StringComparison.Ordinal), out var candidate)) continue;
+                var resolved = GetRealPath(candidate, false, config, encodings);
+                if (resolved is { IsDirectory: false }) return Task.FromResult<FileGetInfo?>(resolved);
+                directory ??= resolved;
+            }
+            return Task.FromResult(directory);
         }
 
-        return await _cache.GetOrCreateAsync(cacheKey, async entry =>
-        {
-            entry.AbsoluteExpirationRelativeToNow = _options.CacheDuration;
-            if (config.TryFiles != null)
-            {
-                FileGetInfo? folder = null;
-                foreach (var f in config.TryFiles)
-                {
-                    var v = f.Replace("$path", path);
-                    var tryPath = GetSafePath(config.BasePath, v);
-
-                    var real = GetRealPath(tryPath, false, config, accepts);
-                    if (real != null)
-                    {
-                        if(real.IsDirectory) {
-                            folder = real;
-                        } else {
-                            return real;
-                        }
-                    }
-                }
-                return folder;
-            }
-            else
-            {
-                var tryPath = GetSafePath(config.BasePath, path);
-                return GetRealPath(tryPath, requestPath.EndsWith('/'),  config, accepts);
-            }
-        });
+        return Task.FromResult(GetRealPath(safePath, requestPath.EndsWith('/'), config, encodings));
     }
 
-    public async Task<FileServiceResult> GetFileAsync(FileEveryConfig config, string requestPath, string realPath, RangeHeaderValue? range = null)
+    public async Task<FileServiceResult> GetFileAsync(FileEveryConfig config, string requestPath, string realPath,
+        RangeHeaderValue? range = null)
     {
-        if (!File.Exists(realPath))
-            return FileServiceResult.NotFound();
-
+        if (!IsAllowedExistingPath(config, realPath) || !File.Exists(realPath)) return FileServiceResult.NotFound();
         var fileInfo = new FileInfo(realPath);
         var metadata = await GetFileMetadataAsync(realPath);
-        if (metadata.IsNotSupport())
+        if (metadata.IsNotSupport() || IsDeniedExtension(config, realPath)) return FileServiceResult.NoSupportContentType();
+        if (metadata.Size > Math.Max(0, config.MaxFileSize)) return FileServiceResult.FileTooLarge();
+
+        var result = new FileServiceResult
         {
-            return FileServiceResult.NoSupportContentType();
-        }
-
-        if (config.MaxFileSize * 1024 < metadata.Size)
-        {
-            return FileServiceResult.FileToBigger();
-        }
-
-        if (range != null)
-        {
-            return await HandleRangeRequest(fileInfo, range, metadata);
-        }
-
-        return await HandleFullFileRequest(fileInfo, metadata);
-    }
-
-    private static async Task<FileServiceResult> HandleFullFileRequest(FileInfo fileInfo, FileMetadata metadata)
-    {
-        var fileStream = new FileStream(fileInfo.FullName,
-            FileMode.Open, FileAccess.Read, FileShare.Read, 4096,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-        return new FileServiceResult
-        {
-            Stream = fileStream,
+            PhysicalPath = fileInfo.FullName,
             ContentType = metadata.ContentType,
-            FileLength = fileInfo.Length,
-            LastModified = fileInfo.LastWriteTimeUtc,
-            ETag = metadata.ETag,
-            StatusCode = StatusCodes.Status200OK
-        };
-    }
-
-    private static async Task<FileServiceResult> HandleRangeRequest(FileInfo fileInfo,
-        RangeHeaderValue range, FileMetadata metadata)
-    {
-        long start = 0, end = fileInfo.Length - 1;
-
-        if (range.Ranges.Count > 0)
-        {
-            var rangeItem = range.Ranges.First();
-            if (rangeItem.From.HasValue)
-            {
-                start = rangeItem.From.Value;
-                end = rangeItem.To ?? fileInfo.Length - 1;
-            }
-            else if (rangeItem.To.HasValue)
-            {
-                start = fileInfo.Length - rangeItem.To.Value;
-                end = fileInfo.Length - 1;
-            }
-        }
-
-        // 边界检查
-        if (start < 0) start = 0;
-        if (end >= fileInfo.Length) end = fileInfo.Length - 1;
-        if (start > end) start = end;
-
-        var contentLength = end - start + 1;
-        var fileStream = new FileStream(fileInfo.FullName, FileMode.Open, FileAccess.Read);
-        fileStream.Seek(start, SeekOrigin.Begin);
-
-        return new FileServiceResult
-        {
-            Stream = new LimitedStream(fileStream, start, contentLength),
-            ContentType = metadata.ContentType,
-            FileLength = contentLength,
+            ContentLength = fileInfo.Length,
             TotalLength = fileInfo.Length,
-            LastModified = fileInfo.LastWriteTimeUtc,
-            ETag = metadata.ETag,
+            LastModified = metadata.LastModified,
+            ETag = metadata.ETag
+        };
+        if (range is null || !_options.EnableRangeProcessing) return result;
+
+        var ranges = NormalizeRanges(range, fileInfo.Length);
+        if (ranges.Count == 0) return new FileServiceResult
+        {
+            PhysicalPath = result.PhysicalPath,
+            ContentType = result.ContentType,
+            TotalLength = result.TotalLength,
+            LastModified = result.LastModified,
+            ETag = result.ETag,
+            StatusCode = StatusCodes.Status416RangeNotSatisfiable
+        };
+        if (ranges.Count == 1)
+        {
+            var item = ranges[0];
+            return new FileServiceResult
+            {
+                PhysicalPath = result.PhysicalPath,
+                ContentType = result.ContentType,
+                ContentLength = item.Length,
+                TotalLength = result.TotalLength,
+                LastModified = result.LastModified,
+                ETag = result.ETag,
+                StatusCode = StatusCodes.Status206PartialContent,
+                Ranges = ranges
+            };
+        }
+
+        var boundary = $"lywaf-{Guid.NewGuid():N}";
+        return new FileServiceResult
+        {
+            PhysicalPath = result.PhysicalPath,
+            ContentType = $"multipart/byteranges; boundary={boundary}",
+            TotalLength = result.TotalLength,
+            LastModified = result.LastModified,
+            ETag = result.ETag,
             StatusCode = StatusCodes.Status206PartialContent,
-            RangeStart = start,
-            RangeEnd = end
+            Ranges = ranges,
+            Boundary = boundary
         };
     }
 
-    public async Task<FileMetadata> GetFileMetadataAsync(string real)
+    public Task<FileMetadata> GetFileMetadataAsync(string realPath)
     {
-        var cacheKey = $"metadata_{real}";
-
-        var meta = await _cache.GetOrCreateAsync(cacheKey, async entry =>
+        var fileInfo = new FileInfo(realPath);
+        if (!fileInfo.Exists) throw new FileNotFoundException("文件不存在", realPath);
+        return Task.FromResult(new FileMetadata
         {
-            entry.AbsoluteExpirationRelativeToNow = _options.CacheDuration;
-
-            var fileInfo = new FileInfo(real);
-            return new FileMetadata
-            {
-                ContentType = GetContentType(fileInfo),
-                LastModified = fileInfo.LastWriteTimeUtc,
-                Size = fileInfo.Length,
-                ETag = GenerateETag(fileInfo)
-            };
+            ContentType = GetContentType(fileInfo),
+            LastModified = fileInfo.LastWriteTimeUtc,
+            Size = fileInfo.Length,
+            ETag = GenerateETag(fileInfo)
         });
-        return meta ?? throw new FileNotFoundException("文件不存在");
     }
 
-    private static string GetSafePath(string basePath, string requestedPath)
+    internal static bool TryGetSafePath(FileEveryConfig config, string requestedPath, out string fullPath)
     {
-        var full = Path.GetFullPath(basePath);
-        if (requestedPath == "/")
+        fullPath = string.Empty;
+        if (requestedPath.IndexOf('\0') >= 0 || Path.IsPathRooted(requestedPath)) return false;
+        try
         {
-            return full;
+            var root = Path.GetFullPath(config.BasePath);
+            var relative = requestedPath.Replace('/', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar);
+            var candidate = Path.GetFullPath(Path.Combine(root, relative));
+            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (!candidate.Equals(root, comparison) && !candidate.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, comparison))
+                return false;
+            if (!config.ShowHidden && relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
+                .Any(segment => segment.StartsWith(".", StringComparison.Ordinal))) return false;
+            if (!config.FollowLinks && ContainsReparsePoint(root, candidate)) return false;
+            fullPath = candidate;
+            return true;
         }
-        requestedPath = requestedPath.TrimStart('/');
-        var fullPath = Path.Combine(full, requestedPath);
-        if (!fullPath.StartsWith(full))
-            throw new UnauthorizedAccessException("Access denied");
-
-        return fullPath;
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
-    private static FileGetInfo? GetRealPath(string path, bool tryFiles, FileEveryConfig fileEveryConfig, string[] accepts)
+    internal static IReadOnlyList<FileByteRange> NormalizeRanges(RangeHeaderValue range, long length)
     {
-        if (fileEveryConfig.PreCompressed)
+        if (!range.Unit.Equals("bytes", StringComparison.OrdinalIgnoreCase) || length <= 0 || range.Ranges.Count > 16) return [];
+        var result = new List<FileByteRange>(range.Ranges.Count);
+        foreach (var item in range.Ranges)
         {
-            foreach (var accept in accepts)
+            long start;
+            long end;
+            if (item.From.HasValue)
             {
-                var extension = accept switch
-                {
-                    "gzip" => ".gz",
-                    "zstd" => ".zst",
-                    "br" => ".br",
-                    _ => "",
-                };
-                if (extension.Length == 0)
-                {
-                    continue;
-                }
-
-                string realPath = path + extension;
-                if (File.Exists(realPath))
-                {
-                    return new FileGetInfo(realPath, false, accept);
-                }
+                start = item.From.Value;
+                if (start >= length) continue;
+                end = Math.Min(item.To ?? length - 1, length - 1);
+                if (end < start) continue;
             }
-        }
-        if (File.Exists(path))
-        {
-            return new FileGetInfo(path);
-        }
-
-        if (Directory.Exists(path))
-        {
-            if(tryFiles) {
-                foreach (var def in fileEveryConfig.Default)
-                {
-                    var subPath = GetSafePath(path, def);
-                    if (File.Exists(subPath))
-                    {
-                        return new FileGetInfo(subPath);
-                    }
-                }
+            else if (item.To is > 0)
+            {
+                var count = Math.Min(item.To.Value, length);
+                start = length - count;
+                end = length - 1;
             }
-            // 目录存在，返回目录信息（用于重定向或浏览）
-            return new FileGetInfo(path, true);
+            else continue;
+            result.Add(new FileByteRange(start, end));
         }
-        return null;
+        return result;
     }
+
+    private FileGetInfo? GetRealPath(string path, bool resolveIndex, FileEveryConfig config, IReadOnlyList<string> encodings)
+    {
+        if (config.PreCompressed)
+        {
+            foreach (var encoding in encodings)
+            {
+                var suffix = encoding switch { "br" => ".br", "zstd" => ".zst", "gzip" => ".gz", _ => null };
+                if (suffix is not null && IsAllowedExistingPath(config, path + suffix) && File.Exists(path + suffix))
+                    return new FileGetInfo(path + suffix, compress: encoding);
+            }
+        }
+        if (IsAllowedExistingPath(config, path) && File.Exists(path) && !IsDeniedExtension(config, path)) return new FileGetInfo(path);
+        if (!IsAllowedExistingPath(config, path) || !Directory.Exists(path)) return null;
+        if (resolveIndex)
+        {
+            foreach (var name in config.Default)
+            {
+                if (!TryGetSafePath(new FileEveryConfig
+                    {
+                        BasePath = path, FollowLinks = config.FollowLinks, ShowHidden = config.ShowHidden,
+                        DeniedExtensions = config.DeniedExtensions
+                    }, name, out var index)) continue;
+                if (File.Exists(index) && !IsDeniedExtension(config, index)) return new FileGetInfo(index);
+            }
+        }
+        return new FileGetInfo(path, true);
+    }
+
+    private bool IsDeniedExtension(FileEveryConfig config, string path)
+    {
+        var extension = OriginalExtension(path);
+        return config.DeniedExtensions.Contains(extension) || _options.RemoveExtensions.Contains(extension);
+    }
+
+    private bool IsAllowedExistingPath(FileEveryConfig config, string path)
+    {
+        var root = Path.GetFullPath(config.BasePath);
+        var target = Path.GetFullPath(path);
+        if (!config.ShowHidden && ContainsAttribute(root, target, FileAttributes.Hidden)) return false;
+        return config.FollowLinks || !ContainsReparsePoint(root, target);
+    }
+
+    public bool IsVisible(FileEveryConfig config, string path) => IsAllowedExistingPath(config, path) &&
+        (config.ShowHidden || !Path.GetFileName(path).StartsWith(".", StringComparison.Ordinal)) &&
+        (Directory.Exists(path) || !IsDeniedExtension(config, path));
+
+    private static bool ContainsReparsePoint(string root, string target)
+        => ContainsAttribute(root, target, FileAttributes.ReparsePoint);
+
+    private static bool ContainsAttribute(string root, string target, FileAttributes attribute)
+    {
+        var current = root;
+        if (HasAttribute(current, attribute)) return true;
+        var relative = Path.GetRelativePath(root, target);
+        foreach (var segment in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            if (segment is "" or "." or "..") continue;
+            current = Path.Combine(current, segment);
+            if (HasAttribute(current, attribute)) return true;
+        }
+        return false;
+    }
+
+    private static bool HasAttribute(string path, FileAttributes attribute)
+    {
+        try { return (File.GetAttributes(path) & attribute) != 0; }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
+    }
+
+    private static IReadOnlyList<string> AcceptedEncodings(HttpRequest request) => request.GetTypedHeaders().AcceptEncoding
+        .Where(item => item.Quality.GetValueOrDefault(1) > 0)
+        .OrderByDescending(item => item.Quality.GetValueOrDefault(1))
+        .ThenBy(item => item.Value.Value switch { "br" => 0, "zstd" => 1, "gzip" => 2, _ => 3 })
+        .Select(item => item.Value.Value ?? string.Empty)
+        .ToArray();
 
     private string GetContentType(FileInfo info)
     {
-        var extension = info.Extension.ToLower();
-        // 压缩格式, 再往前寻找最真正的后缀
-        if (PreCompressExtension.Contains(extension))
-        {
-            string full = info.FullName[..(info.FullName.Length - extension.Length)];
-            var lastDot = full.LastIndexOf('.');
-            if (lastDot != -1)
-            {
-                extension = full[lastDot..].ToLower();
-            }
-        }
-        if (_options.MimeExtensions.TryGetValue(extension, out var val))
-        {
-            return val;
-        }
-
-        if (_options.RemoveExtensions.Contains(extension))
-        {
-            return FileMetadata.UnspportContentType;
-        }
-
+        var extension = OriginalExtension(info.FullName);
+        if (_options.MimeExtensions.TryGetValue(extension, out var value)) return value;
+        if (_options.RemoveExtensions.Contains(extension)) return FileMetadata.UnspportContentType;
         return extension switch
         {
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".png" => "image/png",
-            ".gif" => "image/gif",
-            ".pdf" => "application/pdf",
-            ".txt" => "text/plain",
-            ".html" => "text/html",
-            ".css" => "text/css",
-            ".js" => "application/javascript",
-            ".json" => "application/json",
-            ".zip" => "application/zip",
-            ".mp4" => "video/mp4",
-            ".mp3" => "audio/mpeg",
-            _ => "application/octet-stream"
+            ".avif" => "image/avif", ".css" => "text/css; charset=utf-8", ".gif" => "image/gif",
+            ".htm" or ".html" => "text/html; charset=utf-8", ".ico" => "image/x-icon",
+            ".jpeg" or ".jpg" => "image/jpeg", ".js" or ".mjs" => "text/javascript; charset=utf-8",
+            ".json" => "application/json; charset=utf-8", ".map" => "application/json",
+            ".mp3" => "audio/mpeg", ".mp4" => "video/mp4", ".pdf" => "application/pdf",
+            ".png" => "image/png", ".svg" => "image/svg+xml", ".txt" => "text/plain; charset=utf-8",
+            ".wasm" => "application/wasm", ".webm" => "video/webm", ".webp" => "image/webp",
+            ".woff" => "font/woff", ".woff2" => "font/woff2", ".xml" => "application/xml",
+            ".zip" => "application/zip", _ => "application/octet-stream"
         };
+    }
+
+    private static string OriginalExtension(string path)
+    {
+        var extension = Path.GetExtension(path).ToLowerInvariant();
+        if (!PreCompressedExtensions.Contains(extension)) return extension;
+        return Path.GetExtension(path[..^extension.Length]).ToLowerInvariant();
     }
 
     private static string GenerateETag(FileInfo fileInfo)
     {
-        var info = $"{fileInfo.LastWriteTimeUtc.Ticks}_{fileInfo.Length}";
-        return Convert.ToBase64String(Encoding.UTF8.GetBytes(info))
-            .Replace("+", "-")
-            .Replace("/", "_")
-            .Replace("=", "");
+        var value = $"{fileInfo.LastWriteTimeUtc.Ticks:x}-{fileInfo.Length:x}";
+        return $"\"{value}\"";
     }
 }

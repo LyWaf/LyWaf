@@ -15,6 +15,8 @@ public interface IWafInfoService
 {
     public WafInfoOptions GetOptions(); 
     public X509Certificate2 GetCertByName(string name);
+    /// <summary>仅返回与域名精确或通配匹配的证书，不使用默认回退证书。</summary>
+    public X509Certificate2? TryGetCertByName(string name);
 }
 
 
@@ -61,15 +63,8 @@ public class WafInfoService : IWafInfoService
 
     public X509Certificate2 GetCertByName(string name)
     {
-        // 首先尝试从 ACME 服务获取证书
-        if (_acmeService != null)
-        {
-            var acmeCert = _acmeService.GetCertificate(name);
-            if (acmeCert != null)
-            {
-                return acmeCert;
-            }
-        }
+        var matched = TryGetCertByName(name);
+        if (matched is not null) return matched;
 
         // 然后从配置的证书中查找
         switch (certs.Count)
@@ -98,5 +93,19 @@ public class WafInfoService : IWafInfoService
                     return certs.First().Value;
                 }
         }
+    }
+
+    /// <inheritdoc />
+    public X509Certificate2? TryGetCertByName(string name)
+    {
+        var acmeCert = _acmeService?.GetCertificate(name);
+        if (acmeCert is not null) return acmeCert;
+        foreach (var (host, certificate) in certs)
+        {
+            if (host.Equals(name, StringComparison.OrdinalIgnoreCase)) return certificate;
+            if (host.StartsWith("*.", StringComparison.Ordinal) &&
+                name.EndsWith(host[1..], StringComparison.OrdinalIgnoreCase)) return certificate;
+        }
+        return null;
     }
 }

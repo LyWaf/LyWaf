@@ -3,7 +3,7 @@ import { ref, onMounted } from 'vue'
 import { settingsApi, authApi } from '@/api'
 import type { RuntimeLogEntry } from '@/api'
 import { useToast } from '@/composables/useToast'
-import type { CertDetail, AuditLogEntry } from '@/types'
+import type { CertDetail, AuditLogEntry, CertificateRuntimeStatus, AcmeAccountStatus } from '@/types'
 
 const { showSuccess, showError } = useToast()
 
@@ -25,14 +25,21 @@ const uploading = ref(false)
 const showDeleteConfirm = ref(false)
 const deletingCert = ref<CertDetail | null>(null)
 const deleting = ref(false)
+const runtimeCertificates = ref<CertificateRuntimeStatus[]>([])
+const acmeAccounts = ref<AcmeAccountStatus[]>([])
 
 const loadCerts = async () => {
   certsLoading.value = true
   try {
-    const res = await settingsApi.getCerts() as unknown as { success: boolean; certs: CertDetail[] }
+    const [res, status] = await Promise.all([
+      settingsApi.getCerts(),
+      settingsApi.getCertificateStatus(),
+    ]) as unknown as [{ success: boolean; certs: CertDetail[] }, { certificates: CertificateRuntimeStatus[]; accounts: AcmeAccountStatus[] }]
     if (res?.success) {
       certs.value = res.certs
     }
+    runtimeCertificates.value = status.certificates || []
+    acmeAccounts.value = status.accounts || []
   } catch {
     showError('加载证书列表失败')
   } finally {
@@ -355,6 +362,29 @@ onMounted(() => {
               上传证书
             </button>
           </div>
+        </div>
+
+        <div v-if="acmeAccounts.length" class="mb-5 overflow-x-auto border-y border-dark-border">
+          <table class="w-full text-xs">
+            <thead><tr class="text-left text-gray-500"><th class="py-2 font-medium">ACME 服务</th><th class="py-2 font-medium">账户</th><th class="py-2 font-medium">联系邮箱</th></tr></thead>
+            <tbody><tr v-for="account in acmeAccounts" :key="account.directoryUrl" class="border-t border-dark-border/50">
+              <td class="py-2 text-gray-300 font-mono">{{ account.directoryUrl }}</td>
+              <td class="py-2" :class="account.accountKeyExists ? 'text-green-400' : 'text-yellow-400'">{{ account.accountKeyExists ? '已建立' : '未建立' }}</td>
+              <td class="py-2 text-gray-400">{{ account.email || '-' }}</td>
+            </tr></tbody>
+          </table>
+        </div>
+
+        <div v-if="runtimeCertificates.length" class="mb-5 overflow-x-auto border-y border-dark-border">
+          <table class="w-full text-xs">
+            <thead><tr class="text-left text-gray-500"><th class="py-2 font-medium">运行时证书</th><th class="py-2 font-medium">来源</th><th class="py-2 font-medium">状态</th><th class="py-2 font-medium">剩余</th></tr></thead>
+            <tbody><tr v-for="cert in runtimeCertificates" :key="cert.domain" class="border-t border-dark-border/50">
+              <td class="py-2 text-gray-300 font-mono">{{ cert.domain }}</td>
+              <td class="py-2 text-gray-400">{{ cert.source }}</td>
+              <td class="py-2" :class="cert.status === 'valid' ? 'text-green-400' : cert.status === 'revoked' ? 'text-red-400' : 'text-yellow-400'">{{ cert.status }}</td>
+              <td class="py-2 text-gray-400">{{ cert.daysRemaining }} 天</td>
+            </tr></tbody>
+          </table>
         </div>
 
         <!-- 加载 -->

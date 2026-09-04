@@ -47,6 +47,18 @@ public static class SharedData
     /// </summary>
     public static volatile bool RestartRequested = false;
 
+    /// <summary>是否在当前实例排空后启动已验证的候选程序。</summary>
+    public static volatile bool UpgradeRequested = false;
+
+    /// <summary>待启动候选版本的入口文件绝对路径。</summary>
+    public static string? PendingUpgradeEntryPoint { get; set; }
+
+    /// <summary>待启动候选版本标识，用于就绪后提交版本指针。</summary>
+    public static string? PendingUpgradeVersion { get; set; }
+
+    /// <summary>隔离端口候选探针进程 ID，正式接管生产端口前由旧进程终止。</summary>
+    public static int? PendingUpgradeProbeProcessId { get; set; }
+
     /// <summary>
     /// 当前是否为首台服务器（直接面对客户端，不经过代理）
     /// 为 true 时 GetClientIp 直接取连接 IP，忽略代理头

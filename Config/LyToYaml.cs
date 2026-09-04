@@ -334,6 +334,8 @@ public class LyConfigContext
 /// </summary>
 public static class LyToAppSettingsConverter
 {
+    private sealed record UpstreamDefinition(string Address, Dictionary<string, object> Metadata);
+
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
 
     /// <summary>
@@ -627,7 +629,9 @@ public static class LyToAppSettingsConverter
                 else if ((directive == "reverse_proxy" || directive == "proxy") && parts.Length > 1)
                 {
                     // 简化的反向代理配置（proxy 是 reverse_proxy 的简写）
-                    var upstreams = parts.Skip(1).Select(NormalizeUpstream).ToList();
+                    var upstreams = parts.Skip(1)
+                        .Select(part => new UpstreamDefinition(NormalizeUpstream(part), new Dictionary<string, object>()))
+                        .ToList();
                     var clusterId = GetOrCreateCluster(upstreams, new Dictionary<string, object>(), ctx);
 
                     var routeId = ctx.NextRouteId();
@@ -682,7 +686,7 @@ public static class LyToAppSettingsConverter
         {
             // 收集 handle/route 块和默认配置
             var handleBlocks = new List<(string path, Dictionary<string, object> config)>();
-            var defaultUpstreams = new List<string>();
+            var defaultUpstreams = new List<UpstreamDefinition>();
             var defaultClusterConfig = new Dictionary<string, object>();
             var hasFileServer = false;
             var defaultFileServerConfig = new Dictionary<string, object>();
@@ -691,6 +695,9 @@ public static class LyToAppSettingsConverter
             var siteHeaderUps = new Dictionary<string, object>();
             var siteHeaderDowns = new Dictionary<string, object>();
             Dictionary<string, object>? siteCors = null;
+            Dictionary<string, object>? siteResponseCache = null;
+            Dictionary<string, object>? siteMirror = null;
+            Dictionary<string, object>? siteExternalAuth = null;
 
             foreach (var directive in siteContent)
             {
@@ -816,6 +823,16 @@ public static class LyToAppSettingsConverter
                         case "tryfiles":
                         case "precompressed":
                         case "pre_compressed":
+                        case "follow_links":
+                        case "followlinks":
+                        case "show_hidden":
+                        case "showhidden":
+                        case "max_browse_entries":
+                        case "maxbrowseentries":
+                        case "cache_control":
+                        case "cachecontrol":
+                        case "denied_extensions":
+                        case "deniedextensions":
                         case "max_file_size":
                         case "maxfilesize":
                             // 将这些属性收集到 file_server 配置中
@@ -837,6 +854,19 @@ public static class LyToAppSettingsConverter
                         case "cors":
                             siteCors = ParseCorsConfig(directive.Value);
                             break;
+                        case "responsecache":
+                        case "response_cache":
+                            siteResponseCache = directive.Value as Dictionary<string, object>;
+                            break;
+                        case "mirror":
+                        case "request_mirror":
+                            siteMirror = directive.Value as Dictionary<string, object>;
+                            break;
+                        case "external_auth":
+                        case "externalauth":
+                        case "ext_auth":
+                            siteExternalAuth = directive.Value as Dictionary<string, object>;
+                            break;
                     }
                 }
             }
@@ -844,7 +874,7 @@ public static class LyToAppSettingsConverter
             // 处理 handle 块生成的路由
             foreach (var (path, config) in handleBlocks)
             {
-                var upstreams = new List<string>();
+                var upstreams = new List<UpstreamDefinition>();
                 var clusterConfig = new Dictionary<string, object>(defaultClusterConfig);
                 var blockHasFileServer = false;
                 var blockFileServerConfig = new Dictionary<string, object>();
@@ -852,6 +882,9 @@ public static class LyToAppSettingsConverter
                 var blockHasRespond = false;
                 var blockRespondConfig = new Dictionary<string, object>();
                 var blockCors = siteCors;
+                var blockResponseCache = siteResponseCache;
+                var blockMirror = siteMirror;
+                var blockExternalAuth = siteExternalAuth;
 
                 // 解析 handle 块内的配置
                 foreach (var kv in config)
@@ -924,6 +957,19 @@ public static class LyToAppSettingsConverter
                         case "cors":
                             blockCors = ParseCorsConfig(kv.Value);
                             break;
+                        case "responsecache":
+                        case "response_cache":
+                            blockResponseCache = kv.Value as Dictionary<string, object>;
+                            break;
+                        case "mirror":
+                        case "request_mirror":
+                            blockMirror = kv.Value as Dictionary<string, object>;
+                            break;
+                        case "external_auth":
+                        case "externalauth":
+                        case "ext_auth":
+                            blockExternalAuth = kv.Value as Dictionary<string, object>;
+                            break;
                     }
                 }
 
@@ -961,6 +1007,9 @@ public static class LyToAppSettingsConverter
                     };
                     ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
                     ApplyCorsMetadata(routeConfig, blockCors);
+                    ApplyResponseCacheMetadata(routeConfig, blockResponseCache);
+                    ApplyMirrorMetadata(routeConfig, blockMirror);
+                    ApplyExternalAuthorizationMetadata(routeConfig, blockExternalAuth);
 
                     ctx.Routes[routeId] = routeConfig;
                 }
@@ -1061,6 +1110,9 @@ public static class LyToAppSettingsConverter
                 };
                 ApplyHeaderMetadata(routeConfig, siteHeaderUps, siteHeaderDowns);
                 ApplyCorsMetadata(routeConfig, siteCors);
+                ApplyResponseCacheMetadata(routeConfig, siteResponseCache);
+                ApplyMirrorMetadata(routeConfig, siteMirror);
+                ApplyExternalAuthorizationMetadata(routeConfig, siteExternalAuth);
 
                 ctx.Routes[routeId] = routeConfig;
             }
@@ -1252,6 +1304,26 @@ public static class LyToAppSettingsConverter
                 case "pre_compressed":
                     item["PreCompressed"] = kv.Value is bool pb ? pb : kv.Value?.ToString()?.ToLower() == "true";
                     break;
+                case "follow_links":
+                case "followlinks":
+                    item["FollowLinks"] = kv.Value is bool fl ? fl : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "show_hidden":
+                case "showhidden":
+                    item["ShowHidden"] = kv.Value is bool sh ? sh : kv.Value?.ToString()?.ToLower() == "true";
+                    break;
+                case "max_browse_entries":
+                case "maxbrowseentries":
+                    if (int.TryParse(kv.Value?.ToString(), out var maxEntries)) item["MaxBrowseEntries"] = maxEntries;
+                    break;
+                case "cache_control":
+                case "cachecontrol":
+                    item["CacheControl"] = kv.Value?.ToString() ?? string.Empty;
+                    break;
+                case "denied_extensions":
+                case "deniedextensions":
+                    item["DeniedExtensions"] = ParseStringList(kv.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    break;
                 case "max_file_size":
                 case "maxfilesize":
                     if (kv.Value is long lfs)
@@ -1284,28 +1356,14 @@ public static class LyToAppSettingsConverter
     /// <param name="clusterConfig">Cluster 配置</param>
     /// <param name="ctx">配置上下文</param>
     private static string GetOrCreateCluster(
-        List<string> upstreams,
+        List<UpstreamDefinition> upstreams,
         Dictionary<string, object> clusterConfig,
         LyConfigContext ctx)
     {
-        // 生成缓存 key：排序后的 upstream 地址 + 配置 hash
-        var sortedUpstreams = upstreams.OrderBy(u => u).ToList();
-        var cacheKey = string.Join("|", sortedUpstreams);
-        
-        // 添加 lb_policy 到缓存 key（不同策略需要不同 cluster）
-        if (clusterConfig.TryGetValue("LoadBalancingPolicy", out var lbPolicy))
-        {
-            cacheKey += $"@lb={lbPolicy}";
-        }
-        
-        // 添加 ABTestId 到缓存 key
-        if (clusterConfig.TryGetValue("Metadata", out var metaObj) && metaObj is Dictionary<string, object> meta)
-        {
-            if (meta.TryGetValue("ABTestId", out var abTestId))
-            {
-                cacheKey += $"@abtest={abTestId}";
-            }
-        }
+        // Cluster 行为配置不同就不能复用，否则超时、健康检查、重试等策略会串到其他路由。
+        var sortedUpstreams = upstreams.OrderBy(static item => item.Address, StringComparer.Ordinal).ToList();
+        var cacheKey = string.Join("|", sortedUpstreams.Select(static item =>
+            item.Address + "#" + BuildStableConfigKey(item.Metadata))) + "@config=" + BuildStableConfigKey(clusterConfig);
 
         // 检查缓存
         if (ctx.ClusterCache.TryGetValue(cacheKey, out var existingClusterId))
@@ -1321,20 +1379,17 @@ public static class LyToAppSettingsConverter
         foreach (var upstream in upstreams)
         {
             // 解析 upstream，支持带权重格式: "http://host:port@weight" 或 "http://host:port weight=70"
-            var (address, weight) = ParseUpstreamWithWeight(upstream);
+            var (address, weight) = ParseUpstreamWithWeight(upstream.Address);
             
             var destConfig = new Dictionary<string, object>
             {
                 ["Address"] = address
             };
-            
-            // 如果有权重配置，添加到 Metadata
-            if (weight > 0)
+            var destinationMetadata = new Dictionary<string, object>(upstream.Metadata, StringComparer.OrdinalIgnoreCase);
+            if (weight > 0) destinationMetadata["Weight"] = weight.ToString();
+            if (destinationMetadata.Count > 0)
             {
-                destConfig["Metadata"] = new Dictionary<string, object>
-                {
-                    ["Weight"] = weight.ToString()
-                };
+                destConfig["Metadata"] = destinationMetadata;
             }
             
             destinations[$"dest{destIndex++}"] = destConfig;
@@ -1349,6 +1404,46 @@ public static class LyToAppSettingsConverter
         ctx.ClusterCache[cacheKey] = clusterId;
 
         return clusterId;
+    }
+
+    private static string BuildStableConfigKey(object? value)
+    {
+        var builder = new System.Text.StringBuilder();
+        AppendStableValue(builder, value);
+        return builder.ToString();
+    }
+
+    private static void AppendStableValue(System.Text.StringBuilder builder, object? value)
+    {
+        switch (value)
+        {
+            case null:
+                builder.Append('n');
+                break;
+            case Dictionary<string, object> dictionary:
+                builder.Append('{');
+                foreach (var item in dictionary.OrderBy(static item => item.Key, StringComparer.OrdinalIgnoreCase))
+                {
+                    builder.Append(item.Key.Length).Append(':').Append(item.Key).Append('=');
+                    AppendStableValue(builder, item.Value);
+                    builder.Append(';');
+                }
+                builder.Append('}');
+                break;
+            case IEnumerable<object> list:
+                builder.Append('[');
+                foreach (var item in list)
+                {
+                    AppendStableValue(builder, item);
+                    builder.Append(',');
+                }
+                builder.Append(']');
+                break;
+            default:
+                var text = value.ToString() ?? "";
+                builder.Append(value.GetType().Name).Append(':').Append(text.Length).Append(':').Append(text);
+                break;
+        }
     }
     
     /// <summary>
@@ -1853,7 +1948,7 @@ public static class LyToAppSettingsConverter
     /// </summary>
     private static void ParseReverseProxyConfig(
         object value,
-        List<string> upstreams,
+        List<UpstreamDefinition> upstreams,
         Dictionary<string, object> clusterConfig)
     {
         switch (value)
@@ -1862,7 +1957,7 @@ public static class LyToAppSettingsConverter
                 // 简单字符串格式：可能是空格分隔的多个上游
                 foreach (var part in s.Split(' ', StringSplitOptions.RemoveEmptyEntries))
                 {
-                    upstreams.Add(NormalizeUpstream(part));
+                    upstreams.Add(new UpstreamDefinition(NormalizeUpstream(part), new Dictionary<string, object>()));
                 }
                 break;
 
@@ -1870,7 +1965,7 @@ public static class LyToAppSettingsConverter
                 // 数组格式
                 foreach (var item in list)
                 {
-                    upstreams.Add(NormalizeUpstream(item?.ToString() ?? ""));
+                    upstreams.Add(new UpstreamDefinition(NormalizeUpstream(item?.ToString() ?? ""), new Dictionary<string, object>()));
                 }
                 break;
 
@@ -1942,6 +2037,30 @@ public static class LyToAppSettingsConverter
                             }
                             break;
 
+                        case "retry":
+                        case "retries":
+                            ProcessRetryConfig(kv.Value, EnsureDict(clusterConfig, "Metadata"), "Retry.");
+                            break;
+
+                        case "circuit_breaker":
+                        case "circuitbreaker":
+                            ProcessCircuitBreakerConfig(kv.Value, EnsureDict(clusterConfig, "Metadata"));
+                            break;
+
+                        case "outlier_detection":
+                        case "outlierdetection":
+                            ProcessOutlierDetectionConfig(kv.Value, clusterConfig);
+                            break;
+
+                        case "grpc":
+                            ProcessGrpcProxyConfig(kv.Value, clusterConfig);
+                            break;
+
+                        case "advanced_lb":
+                        case "advancedlb":
+                            ProcessAdvancedLoadBalancingConfig(kv.Value, clusterConfig);
+                            break;
+
                         default:
                             // 尝试作为上游地址解析
                             if (kv.Value is Dictionary<string, object> destConfig)
@@ -1949,7 +2068,7 @@ public static class LyToAppSettingsConverter
                                 if (destConfig.TryGetValue("Address", out var addr) ||
                                     destConfig.TryGetValue("address", out addr))
                                 {
-                                    upstreams.Add(NormalizeUpstream(addr?.ToString() ?? ""));
+                                    upstreams.Add(CreateUpstreamDefinition(addr?.ToString() ?? "", destConfig));
                                 }
                             }
                             break;
@@ -2030,6 +2149,74 @@ public static class LyToAppSettingsConverter
         EnsureDict(routeConfig, "Metadata")["_Cors"] = System.Text.Json.JsonSerializer.Serialize(normalized);
     }
 
+    /// <summary>将站点或路径级响应缓存开关写入 YARP Route Metadata。</summary>
+    private static void ApplyResponseCacheMetadata(Dictionary<string, object> routeConfig,
+        Dictionary<string, object>? responseCache)
+    {
+        if (responseCache is null || responseCache.Count == 0) return;
+        var metadata = EnsureDict(routeConfig, "Metadata");
+        foreach (var (key, value) in responseCache)
+        {
+            if (key.Equals("Enabled", StringComparison.OrdinalIgnoreCase))
+                metadata["ResponseCache.Enabled"] = value.ToString() ?? "false";
+            else if (key.Equals("TtlSeconds", StringComparison.OrdinalIgnoreCase) ||
+                     key.Equals("Ttl", StringComparison.OrdinalIgnoreCase))
+                metadata["ResponseCache.TtlSeconds"] = value.ToString() ?? "60";
+        }
+    }
+
+    /// <summary>将站点或路径级请求镜像策略写入 YARP Route Metadata。</summary>
+    private static void ApplyMirrorMetadata(Dictionary<string, object> routeConfig,
+        Dictionary<string, object>? mirror)
+    {
+        if (mirror is null || mirror.Count == 0) return;
+        var metadata = EnsureDict(routeConfig, "Metadata");
+        metadata["Mirror.Enabled"] = "true";
+        foreach (var (rawKey, value) in mirror)
+        {
+            var key = rawKey.Replace("_", "", StringComparison.Ordinal)
+                .Replace("-", "", StringComparison.Ordinal).ToLowerInvariant();
+            var name = key switch
+            {
+                "enabled" => "Enabled",
+                "target" or "to" => "Target",
+                "percentage" or "percent" => "Percentage",
+                "maxbodybytes" or "maxbody" => "MaxBodyBytes",
+                "methods" => "Methods",
+                "allowedheaders" or "headers" => "AllowedHeaders",
+                _ => throw new LyConfigException($"不支持的 Mirror 配置项: {rawKey}")
+            };
+            metadata["Mirror." + name] = value is System.Collections.IEnumerable values and not string
+                ? string.Join(',', values.Cast<object>().Select(static item => item?.ToString()))
+                : value?.ToString() ?? "";
+        }
+    }
+
+    /// <summary>将站点或路径级外部授权策略写入 YARP Route Metadata。</summary>
+    private static void ApplyExternalAuthorizationMetadata(Dictionary<string, object> routeConfig,
+        Dictionary<string, object>? externalAuth)
+    {
+        if (externalAuth is null || externalAuth.Count == 0) return;
+        var metadata = EnsureDict(routeConfig, "Metadata");
+        metadata["ExtAuth.Enabled"] = "true";
+        foreach (var (rawKey, value) in externalAuth)
+        {
+            var key = rawKey.Replace("_", "", StringComparison.Ordinal).Replace("-", "", StringComparison.Ordinal)
+                .ToLowerInvariant();
+            var name = key switch
+            {
+                "enabled" => "Enabled",
+                "endpoint" or "url" => "Endpoint",
+                "timeoutmilliseconds" or "timeoutms" => "TimeoutMilliseconds",
+                "maxbodybytes" or "maxbody" => "MaxBodyBytes",
+                "failopen" => "FailOpen",
+                "cacheseconds" or "cache" => "CacheSeconds",
+                _ => throw new LyConfigException($"不支持的 ExternalAuth 配置项: {rawKey}")
+            };
+            metadata["ExtAuth." + name] = value?.ToString() ?? "";
+        }
+    }
+
     private static void AddCorsPreflightMethod(Dictionary<string, object> match, List<string>? configuredMethods, Dictionary<string, object>? cors)
     {
         if (cors is null || configuredMethods is null || configuredMethods.Count == 0) return;
@@ -2051,9 +2238,9 @@ public static class LyToAppSettingsConverter
     /// <summary>
     /// 解析上游服务器列表
     /// </summary>
-    private static List<string> ParseUpstreams(object value)
+    private static List<UpstreamDefinition> ParseUpstreams(object value)
     {
-        var upstreams = new List<string>();
+        var upstreams = new List<UpstreamDefinition>();
 
         switch (value)
         {
@@ -2061,14 +2248,14 @@ public static class LyToAppSettingsConverter
                 // 可能是空格分隔的多个上游
                 foreach (var part in s.Split(' ', StringSplitOptions.RemoveEmptyEntries))
                 {
-                    upstreams.Add(NormalizeUpstream(part));
+                    upstreams.Add(new UpstreamDefinition(NormalizeUpstream(part), new Dictionary<string, object>()));
                 }
                 break;
 
             case List<object> list:
                 foreach (var item in list)
                 {
-                    upstreams.Add(NormalizeUpstream(item?.ToString() ?? ""));
+                    upstreams.Add(new UpstreamDefinition(NormalizeUpstream(item?.ToString() ?? ""), new Dictionary<string, object>()));
                 }
                 break;
 
@@ -2081,18 +2268,41 @@ public static class LyToAppSettingsConverter
                         if (destConfig.TryGetValue("Address", out var addr) ||
                             destConfig.TryGetValue("address", out addr))
                         {
-                            upstreams.Add(NormalizeUpstream(addr?.ToString() ?? ""));
+                            upstreams.Add(CreateUpstreamDefinition(addr?.ToString() ?? "", destConfig));
                         }
                     }
                     else
                     {
-                        upstreams.Add(NormalizeUpstream(kv.Value?.ToString() ?? ""));
+                        upstreams.Add(new UpstreamDefinition(NormalizeUpstream(kv.Value?.ToString() ?? ""), new Dictionary<string, object>()));
                     }
                 }
                 break;
         }
 
         return upstreams;
+    }
+
+    private static UpstreamDefinition CreateUpstreamDefinition(string address, Dictionary<string, object> config)
+    {
+        var metadata = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (rawKey, value) in config)
+        {
+            var key = rawKey.Replace("_", "", StringComparison.Ordinal).Replace("-", "", StringComparison.Ordinal)
+                .ToLowerInvariant();
+            var name = key switch
+            {
+                "weight" => "Weight",
+                "priority" => "Priority",
+                "zone" => "Zone",
+                "region" => "Region",
+                "subset" => "Subset",
+                "slowstartseconds" or "slowstart" => "SlowStartSeconds",
+                "address" => null,
+                _ => null
+            };
+            if (name != null) metadata[name] = value?.ToString() ?? "";
+        }
+        return new UpstreamDefinition(NormalizeUpstream(address), metadata);
     }
 
     /// <summary>
@@ -2216,6 +2426,18 @@ public static class LyToAppSettingsConverter
             case "plugins":
                 // 插件配置
                 ProcessPluginsConfig(value, result);
+                break;
+
+            case "metrics":
+            case "metric":
+            case "monitoring":
+                ProcessMetricsConfig(value, result);
+                break;
+
+            case "opentelemetry":
+            case "open_telemetry":
+            case "otel":
+                ProcessOpenTelemetryConfig(value, result);
                 break;
 
             case "abtest":
@@ -2511,6 +2733,217 @@ public static class LyToAppSettingsConverter
     ///     }
     /// }
     /// </summary>
+    private static void ProcessMetricsConfig(object value, Dictionary<string, object> result)
+    {
+        var metrics = EnsureDict(result, "Metrics");
+
+        if (value is bool enabled)
+        {
+            metrics["Enabled"] = enabled;
+            return;
+        }
+
+        if (value is not Dictionary<string, object> options)
+            return;
+
+        foreach (var option in options)
+        {
+            switch (option.Key.ToLowerInvariant())
+            {
+                case "enabled":
+                    metrics["Enabled"] = option.Value;
+                    break;
+                case "path":
+                    metrics["Path"] = option.Value;
+                    break;
+                case "includeroute":
+                case "include_route":
+                    metrics["IncludeRoute"] = option.Value;
+                    break;
+            }
+        }
+    }
+
+    private static void ProcessRetryConfig(
+        object? value,
+        Dictionary<string, object> metadata,
+        string prefix)
+    {
+        if (value is bool enabled)
+        {
+            metadata[prefix + "Enabled"] = enabled.ToString();
+            return;
+        }
+        if (value is not Dictionary<string, object> options) return;
+
+        metadata[prefix + "Enabled"] = "true";
+        foreach (var option in options)
+        {
+            var key = option.Key.Replace("_", "", StringComparison.Ordinal)
+                .Replace("-", "", StringComparison.Ordinal).ToLowerInvariant();
+            var name = key switch
+            {
+                "enabled" => "Enabled",
+                "attempts" or "maxattempts" => "MaxAttempts",
+                "methods" => "Methods",
+                "statuscodes" or "statuses" => "StatusCodes",
+                "retrynetworkerrors" or "networkerrors" => "RetryNetworkErrors",
+                "pertrytimeoutms" or "trytimeoutms" => "PerTryTimeoutMs",
+                "totaltimeoutms" => "TotalTimeoutMs",
+                "basebackoffms" or "backoffms" => "BaseBackoffMs",
+                "maxbackoffms" => "MaxBackoffMs",
+                "budgetpercent" => "BudgetPercent",
+                "budgetminretriespersecond" or "budgetminpersecond" => "BudgetMinRetriesPerSecond",
+                _ => null
+            };
+            if (name == null) continue;
+            metadata[prefix + name] = option.Value is List<object> list
+                ? string.Join(',', list.Select(static item => item?.ToString()))
+                : option.Value?.ToString() ?? "";
+        }
+    }
+
+    private static void ProcessCircuitBreakerConfig(object? value, Dictionary<string, object> metadata)
+    {
+        const string prefix = "CircuitBreaker.";
+        if (value is bool enabled)
+        {
+            metadata[prefix + "Enabled"] = enabled.ToString();
+            return;
+        }
+        if (value is not Dictionary<string, object> options) return;
+
+        metadata[prefix + "Enabled"] = "true";
+        foreach (var option in options)
+        {
+            var key = option.Key.Replace("_", "", StringComparison.Ordinal)
+                .Replace("-", "", StringComparison.Ordinal).ToLowerInvariant();
+            var name = key switch
+            {
+                "enabled" => "Enabled",
+                "maxconnections" => "MaxConnections",
+                "maxactiverequests" or "maxactive" => "MaxActiveRequests",
+                "maxqueuedrequests" or "maxqueue" => "MaxQueuedRequests",
+                "maxconcurrentretries" or "maxretries" => "MaxConcurrentRetries",
+                _ => null
+            };
+            if (name != null) metadata[prefix + name] = option.Value?.ToString() ?? "";
+        }
+    }
+
+    private static void ProcessOutlierDetectionConfig(object? value, Dictionary<string, object> clusterConfig)
+    {
+        const string prefix = "OutlierDetection.";
+        var metadata = EnsureDict(clusterConfig, "Metadata");
+        if (value is bool enabled)
+        {
+            metadata[prefix + "Enabled"] = enabled.ToString();
+            if (!enabled) return;
+            value = new Dictionary<string, object>();
+        }
+        if (value is not Dictionary<string, object> options) return;
+        metadata[prefix + "Enabled"] = "true";
+        foreach (var option in options)
+        {
+            var key = option.Key.Replace("_", "", StringComparison.Ordinal)
+                .Replace("-", "", StringComparison.Ordinal).ToLowerInvariant();
+            var name = key switch
+            {
+                "enabled" => "Enabled",
+                "consecutivefailures" or "consecutiveconnectionfailures" => "ConsecutiveFailures",
+                "consecutive5xx" => "Consecutive5xx",
+                "windowsize" => "WindowSize",
+                "minimumvolume" or "minvolume" => "MinimumVolume",
+                "errorratepercent" or "errorrate" => "ErrorRatePercent",
+                "ejectiondurationms" or "ejectiontimems" => "EjectionDurationMs",
+                "maxejectionpercent" => "MaxEjectionPercent",
+                _ => null
+            };
+            if (name != null) metadata[prefix + name] = option.Value?.ToString() ?? "";
+        }
+        var health = EnsureDict(clusterConfig, "HealthCheck");
+        health["Passive"] = new Dictionary<string, object>
+        {
+            ["Enabled"] = true,
+            ["Policy"] = "LyWafOutlierDetection",
+            ["ReactivationPeriod"] = TimeSpan.FromMilliseconds(ReadOption(options, "ejectiondurationms", 30000)).ToString("c")
+        };
+
+        static int ReadOption(Dictionary<string, object> values, string wanted, int fallback)
+        {
+            foreach (var (key, raw) in values)
+            {
+                var normalized = key.Replace("_", "", StringComparison.Ordinal).Replace("-", "", StringComparison.Ordinal).ToLowerInvariant();
+                if (normalized == wanted && int.TryParse(raw?.ToString(), out var result)) return result;
+            }
+            return fallback;
+        }
+    }
+
+    /// <summary>将高级负载均衡选址参数写入 Cluster Metadata，并选择组合策略。</summary>
+    private static void ProcessAdvancedLoadBalancingConfig(object? value, Dictionary<string, object> clusterConfig)
+    {
+        if (value is not Dictionary<string, object> options)
+            throw new LyConfigException("AdvancedLb 必须使用配置块");
+        clusterConfig["LoadBalancingPolicy"] = "Advanced";
+        var metadata = EnsureDict(clusterConfig, "Metadata");
+        foreach (var (rawKey, optionValue) in options)
+        {
+            var key = rawKey.Replace("_", "", StringComparison.Ordinal).Replace("-", "", StringComparison.Ordinal)
+                .ToLowerInvariant();
+            var name = key switch
+            {
+                "regionheader" => "RegionHeader",
+                "zoneheader" => "ZoneHeader",
+                "subsetheader" => "SubsetHeader",
+                "subsetkey" => "SubsetKey",
+                "subsetfallback" => "SubsetFallback",
+                "slowstartseconds" or "slowstart" => "SlowStartSeconds",
+                _ => throw new LyConfigException($"不支持的 AdvancedLb 配置项: {rawKey}")
+            };
+            metadata["AdvancedLb." + name] = optionValue?.ToString() ?? "";
+        }
+    }
+
+    /// <summary>强制 Cluster 使用 HTTP/2 连接 gRPC 上游。</summary>
+    private static void ProcessGrpcProxyConfig(object? value, Dictionary<string, object> clusterConfig)
+    {
+        var enabled = value is bool boolean ? boolean :
+            !string.Equals(value?.ToString(), "false", StringComparison.OrdinalIgnoreCase);
+        if (!enabled) return;
+        var httpRequest = EnsureDict(clusterConfig, "HttpRequest");
+        httpRequest["Version"] = "2.0";
+        httpRequest["VersionPolicy"] = "RequestVersionExact";
+    }
+
+    private static void ProcessOpenTelemetryConfig(object value, Dictionary<string, object> result)
+    {
+        var telemetry = EnsureDict(result, "OpenTelemetry");
+        if (value is bool enabled)
+        {
+            telemetry["Enabled"] = enabled;
+            return;
+        }
+        if (value is not Dictionary<string, object> options) return;
+
+        foreach (var option in options)
+        {
+            var name = option.Key.ToLowerInvariant() switch
+            {
+                "enabled" => "Enabled",
+                "servicename" or "service_name" => "ServiceName",
+                "endpoint" => "Endpoint",
+                "protocol" => "Protocol",
+                "sampleratio" or "sample_ratio" => "SampleRatio",
+                "exporttraces" or "export_traces" => "ExportTraces",
+                "exportmetrics" or "export_metrics" => "ExportMetrics",
+                "excludedpaths" or "excluded_paths" => "ExcludedPaths",
+                _ => null
+            };
+            if (name != null) telemetry[name] = option.Value;
+        }
+    }
+
     private static void ProcessPluginsConfig(object value, Dictionary<string, object> result)
     {
         if (value is not Dictionary<string, object> pluginsConfig)
@@ -2543,6 +2976,11 @@ public static class LyToAppSettingsConverter
                 case "hot_reload":
                     plugins["EnableHotReload"] = kv.Value is bool hr ? hr : kv.Value?.ToString()?.ToLower() == "true";
                     break;
+                case "lifecycletimeoutseconds":
+                case "lifecycle_timeout_seconds":
+                    if (int.TryParse(kv.Value?.ToString(), out var lifecycleTimeout))
+                        plugins["LifecycleTimeoutSeconds"] = lifecycleTimeout;
+                    break;
                 case "disabledplugins":
                 case "disabled_plugins":
                 case "disabled":
@@ -2552,6 +2990,16 @@ public static class LyToAppSettingsConverter
                 case "system_plugins":
                 case "system":
                     plugins["SystemPlugins"] = ParseStringList(kv.Value);
+                    break;
+                case "permissions":
+                    if (kv.Value is Dictionary<string, object> permissionMap)
+                    {
+                        plugins["Permissions"] = permissionMap.ToDictionary(
+                            item => item.Key,
+                            item => item.Value is List<object> list
+                                ? string.Join(",", list.Select(value => value?.ToString()))
+                                : item.Value?.ToString() ?? "None");
+                    }
                     break;
                 case "pluginconfigs":
                 case "plugin_configs":
@@ -3009,8 +3457,61 @@ public static class LyToAppSettingsConverter
                         {
                             "random" => "Random",
                             "first" => "First",
+                            "leastconnections" or "least_connections" or "least_conn" => "LeastConnections",
+                            "clientiphash" or "client_ip_hash" or "ip_hash" => "ClientIpHash",
                             _ => "RoundRobin"
                         };
+                        break;
+                    case "protocol":
+                        config["Protocol"] = kv.Value?.ToString()?.Equals("udp", StringComparison.OrdinalIgnoreCase) == true ? "Udp" : "Tcp";
+                        break;
+                    case "acceptproxyprotocol":
+                    case "accept_proxy_protocol":
+                        config["AcceptProxyProtocol"] = ParseBoolean(kv.Value);
+                        break;
+                    case "proxyprotocoltrustednetworks":
+                    case "proxy_protocol_trusted_networks":
+                    case "trusted_proxies":
+                        config["ProxyProtocolTrustedNetworks"] = ParseStringList(kv.Value);
+                        break;
+                    case "sendproxyprotocol":
+                    case "send_proxy_protocol":
+                        config["SendProxyProtocol"] = ParseBoolean(kv.Value);
+                        break;
+                    case "snipreread":
+                    case "sni_preread":
+                        config["SniPreread"] = ParseBoolean(kv.Value);
+                        break;
+                    case "sniupstreams":
+                    case "sni_upstreams":
+                        if (kv.Value is Dictionary<string, object> sniValues)
+                            config["SniUpstreams"] = sniValues.ToDictionary(
+                                item => item.Key.Trim().Trim('"', '\''), item => ParseStringList(item.Value),
+                                StringComparer.OrdinalIgnoreCase);
+                        break;
+                    case "allowednetworks":
+                    case "allowed_networks":
+                        config["AllowedNetworks"] = ParseStringList(kv.Value);
+                        break;
+                    case "deniednetworks":
+                    case "denied_networks":
+                        config["DeniedNetworks"] = ParseStringList(kv.Value);
+                        break;
+                    case "maxconnections":
+                    case "max_connections":
+                        if (int.TryParse(kv.Value?.ToString(), out var maxConnections)) config["MaxConnections"] = maxConnections;
+                        break;
+                    case "bytespersecond":
+                    case "bytes_per_second":
+                        if (long.TryParse(kv.Value?.ToString(), out var bytesPerSecond)) config["BytesPerSecond"] = bytesPerSecond;
+                        break;
+                    case "udpsessiontimeout":
+                    case "udp_session_timeout":
+                        if (int.TryParse(kv.Value?.ToString(), out var udpTimeout)) config["UdpSessionTimeout"] = udpTimeout;
+                        break;
+                    case "maxudpsessions":
+                    case "max_udp_sessions":
+                        if (int.TryParse(kv.Value?.ToString(), out var maxUdpSessions)) config["MaxUdpSessions"] = maxUdpSessions;
                         break;
                     case "connecttimeout":
                     case "connect_timeout":
@@ -3046,6 +3547,10 @@ public static class LyToAppSettingsConverter
 
         return config;
     }
+
+    private static bool ParseBoolean(object? value) => value is bool boolean
+        ? boolean
+        : value?.ToString()?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
 
     /// <summary>
     /// 验证端口键格式是否有效

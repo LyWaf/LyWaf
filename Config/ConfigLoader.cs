@@ -132,6 +132,7 @@ public class LyConfigProvider : ConfigurationProvider
             return;
         }
 
+        var previousData = Data;
         try
         {
             // 检测草稿文件：存在且格式正常则优先读取
@@ -166,39 +167,42 @@ public class LyConfigProvider : ConfigurationProvider
             // 转换为 appsettings 格式（处理 listen -> WafInfos 等）
             var appSettings = LyToAppSettingsConverter.TransformToAppSettings(config);
 
-            FlattenDictionary(appSettings, "");
+            var candidate = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            FlattenDictionary(appSettings, "", candidate);
+            Data = candidate;
             _logger.Info("LyWaf 配置已加载: {Path} {DraftInfo}", _source.FilePath, usingDraft ? "(草稿)" : "(原始)");
         }
         catch (Exception ex)
         {
+            Data = previousData;
             _logger.Error(ex, "加载配置失败: {Path}", _source.FilePath);
             if (!_source.Optional)
                 throw;
         }
     }
 
-    private void FlattenDictionary(Dictionary<string, object> dict, string prefix)
+    private static void FlattenDictionary(Dictionary<string, object> dict, string prefix, IDictionary<string, string?> target)
     {
         foreach (var kv in dict)
         {
             var key = string.IsNullOrEmpty(prefix) ? kv.Key : $"{prefix}:{kv.Key}";
-            FlattenValue(key, kv.Value);
+            FlattenValue(key, kv.Value, target);
         }
     }
 
-    private void FlattenValue(string key, object? value)
+    private static void FlattenValue(string key, object? value, IDictionary<string, string?> target)
     {
         switch (value)
         {
             case Dictionary<string, object> nestedDict:
-                FlattenDictionary(nestedDict, key);
+                FlattenDictionary(nestedDict, key, target);
                 break;
 
             case Dictionary<string, string> stringDict:
                 foreach (var kv in stringDict)
                 {
                     var itemKey = $"{key}:{kv.Key}";
-                    Data[itemKey] = kv.Value ?? "";
+                    target[itemKey] = kv.Value ?? "";
                 }
                 break;
 
@@ -206,7 +210,7 @@ public class LyConfigProvider : ConfigurationProvider
                 foreach (System.Collections.DictionaryEntry entry in genericDict)
                 {
                     var itemKey = $"{key}:{entry.Key}";
-                    FlattenValue(itemKey, entry.Value);
+                    FlattenValue(itemKey, entry.Value, target);
                 }
                 break;
 
@@ -214,7 +218,7 @@ public class LyConfigProvider : ConfigurationProvider
                 for (var i = 0; i < list.Count; i++)
                 {
                     var itemKey = $"{key}:{i}";
-                    FlattenValue(itemKey, list[i]);
+                    FlattenValue(itemKey, list[i], target);
                 }
                 break;
 
@@ -223,12 +227,12 @@ public class LyConfigProvider : ConfigurationProvider
                 foreach (var item in genericList)
                 {
                     var itemKey = $"{key}:{index++}";
-                    FlattenValue(itemKey, item);
+                    FlattenValue(itemKey, item, target);
                 }
                 break;
 
             default:
-                Data[key] = value?.ToString() ?? "";
+                target[key] = value?.ToString() ?? "";
                 break;
         }
     }
@@ -271,6 +275,7 @@ public class DraftAwareYamlProvider : ConfigurationProvider
             return;
         }
 
+        var previousData = Data;
         try
         {
             // 检测草稿文件：存在且格式正常则优先读取
@@ -301,11 +306,13 @@ public class DraftAwareYamlProvider : ConfigurationProvider
             SharedData.ExistsDraftConfig = usingDraft;
 
             using var stream = File.OpenRead(filePath);
-            Data = YamlConfigurationFileParser.Parse(stream);
+            var candidate = YamlConfigurationFileParser.Parse(stream);
+            Data = candidate;
             _logger.Info("YAML 配置已加载: {Path} {DraftInfo}", filePath, usingDraft ? "(草稿)" : "(原始)");
         }
         catch (Exception ex)
         {
+            Data = previousData;
             _logger.Error(ex, "加载 YAML 配置失败: {Path}", _source.FilePath);
             if (!_source.Optional)
                 throw;

@@ -183,7 +183,7 @@ public class LyConfigParser
             // 字符串（带引号）
             if (c == '"' || c == '\'')
             {
-                var (str, newPos) = ParseString(line, i, c);
+                var (str, newPos) = ParseString(line, i, c, lineNum);
                 _tokens.Add(new Token(TokenType.String, str, lineNum));
                 i = newPos;
                 continue;
@@ -226,7 +226,7 @@ public class LyConfigParser
         _tokens.Add(new Token(TokenType.NewLine, "\n", lineNum));
     }
 
-    private static (string, int) ParseString(string line, int start, char quote)
+    private static (string, int) ParseString(string line, int start, char quote, int lineNum)
     {
         var sb = new StringBuilder();
         var i = start + 1;
@@ -255,7 +255,7 @@ public class LyConfigParser
             }
             i++;
         }
-        throw new LyConfigException($"未闭合的字符串");
+        throw new LyConfigException($"第 {lineNum} 行存在未闭合的字符串: {line}");
     }
 
     /// <summary>

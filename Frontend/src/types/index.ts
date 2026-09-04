@@ -3,6 +3,12 @@ export interface ApiResponse<T = unknown> {
   success: boolean
   message?: string
   data?: T
+  error?: {
+    code: string
+    message: string
+    traceId: string
+    details?: unknown
+  }
 }
 
 // 流量分析统计
@@ -250,6 +256,104 @@ export interface LbPolicy {
   label: string
 }
 
+export interface OutlierDestination {
+  clusterId: string
+  destinationId: string
+  address: string
+  state: 'available' | 'ejected'
+  reason?: string
+  ejectedUntil?: string
+  consecutiveFailures: number
+  consecutive5xx: number
+  windowRequests: number
+  windowFailures: number
+  errorRate: number
+}
+
+// =============== 多节点控制台类型 ===============
+
+export interface NodeUpstreamSnapshot {
+  clusterId: string
+  destinationId: string
+  address: string
+  activeHealth: string
+  passiveHealth: string
+  concurrentRequests: number
+}
+
+export interface NodeSecuritySnapshot {
+  totalInterceptCount: number
+  wafInterceptCount: number
+  blacklistBlockCount: number
+  ccAttackCount: number
+  crawlerDetectCount: number
+  geoBlockCount: number
+  rateLimitCount: number
+  uniqueAttackIps: number
+}
+
+export interface NodeSecurityEvent {
+  eventId: string
+  sourceIp: string
+  application: string
+  ruleName: string
+  ruleType: string
+  hitCount: number
+  lastHitAt: string
+}
+
+export interface NodeDashboardSnapshot {
+  nodeId: string
+  applicationVersion: string
+  configVersionId: string | null
+  state: string
+  timestamp: string
+  uptimeSeconds: number
+  runtimeStateEntries: number
+  security: NodeSecuritySnapshot
+  upstreams: NodeUpstreamSnapshot[]
+  recentEvents: NodeSecurityEvent[]
+}
+
+export interface ManagedNodeSnapshot {
+  nodeId: string
+  endpoint: string
+  tags: string[]
+  online: boolean
+  stale: boolean
+  clockSkewSeconds: number | null
+  clockSkewWarning: boolean
+  lastSeenAt: string | null
+  error: string | null
+  canOperate: boolean
+  snapshot: NodeDashboardSnapshot | null
+}
+
+export interface MultiNodeDashboard {
+  generatedAt: string
+  canOperateGlobally: boolean
+  nodes: ManagedNodeSnapshot[]
+  security: NodeSecuritySnapshot
+  recentEvents: NodeSecurityEvent[]
+}
+
+export interface DistributionTargetState {
+  nodeId: string
+  state: string
+  updatedAt: string
+  configVersionId: string | null
+  error: string | null
+}
+
+export interface ConfigurationDeployment {
+  id: string
+  versionId: string
+  createdAt: string
+  state: string
+  nodeOrder: string[]
+  targets: Record<string, DistributionTargetState>
+}
+
 // =============== 路由配置类型 ===============
 
 export interface RouteMatch {
@@ -388,6 +492,21 @@ export interface CertDetail {
   notAfter: string
   pemFile: string
   usedBy: string[]
+}
+
+export interface CertificateRuntimeStatus {
+  domain: string
+  expiresAt: string
+  daysRemaining: number
+  source: 'acme' | 'internal' | 'file'
+  status: 'unknown' | 'valid' | 'revoked' | 'error' | 'expired'
+  statusCheckedAt?: string
+}
+
+export interface AcmeAccountStatus {
+  directoryUrl: string
+  accountKeyExists: boolean
+  email?: string
 }
 
 // 审计日志条目

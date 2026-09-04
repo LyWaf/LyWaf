@@ -47,7 +47,8 @@ public class WafInfoOptions
         return listen;
     }
 
-    private static bool IsLoopbackAddress(string host)
+    /// <summary>判断控制监听主机是否明确表示本机回环地址。</summary>
+    public static bool IsLoopbackAddress(string host)
     {
         if (LoopbackAddresses.Contains(host.ToLower()))
         {

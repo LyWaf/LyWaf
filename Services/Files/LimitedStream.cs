@@ -1,6 +1,6 @@
 namespace LyWaf.Services.Files;
 
-public class LimitedStream(Stream baseStream, long start, long length) : Stream
+internal sealed class LimitedStream(Stream baseStream, long start, long length) : Stream
 {
     private readonly Stream _baseStream = baseStream;
     private readonly long _start = start;

@@ -4,6 +4,8 @@
 
 LyWaf 是一款基于 .NET 9 和 YARP（Yet Another Reverse Proxy）构建的高性能 Web 应用防火墙（WAF），集成了反向代理、负载均衡、安全防护、流量控制等功能于一体。
 
+LyWaf 聚焦 Web 安全网关，不以复制 Nginx、Caddy、Envoy 或 Traefik 的全部生态为目标；详细取舍见 [产品定位与能力边界](docs/58-产品定位与能力边界.md)。性能结论必须来自同条件、可复核的基准数据。
+
 ## ✨ 特性
 
 - 🚀 **高性能反向代理** - 基于 YARP 构建，支持 HTTP/HTTPS 代理

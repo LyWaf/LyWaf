@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using LyWaf.Services.Captcha;
+using LyWaf.Services.RuntimeState;
 using LyWaf.Shared;
 using LyWaf.Utils;
 using Microsoft.Extensions.Primitives;
@@ -59,6 +60,7 @@ public class WafRuleService : IWafRuleService
 
     private readonly ICaptchaService _captchaService;
     private readonly IConfiguration _configuration;
+    private readonly IRuntimeStateStore _runtimeState;
     private readonly object _lock = new();
 
     // 三个来源的规则列表
@@ -75,10 +77,11 @@ public class WafRuleService : IWafRuleService
     // 正则缓存
     private static readonly ConcurrentDictionary<string, Regex> _regexCache = new();
 
-    public WafRuleService(ICaptchaService captchaService, IConfiguration configuration)
+    public WafRuleService(ICaptchaService captchaService, IConfiguration configuration, IRuntimeStateStore runtimeState)
     {
         _captchaService = captchaService;
         _configuration = configuration;
+        _runtimeState = runtimeState;
 
         // 监听 config.ly 变化，自动重新加载配置规则
         ChangeToken.OnChange(
@@ -245,6 +248,7 @@ public class WafRuleService : IWafRuleService
             case WafRuleAction.Block:
                 var duration = TimeSpan.FromSeconds(rule.ActionSeconds);
                 SharedData.ClientFb.Set(clientIp, $"WAF规则触发: {rule.Name}", duration);
+                _runtimeState.Set("ip.blocked", clientIp, $"WAF规则触发: {rule.Name}", duration);
                 _logger.Info("WAF 封禁: IP={ClientIp}, Rule={Rule}, Duration={Duration}秒",
                     clientIp, rule.Name, rule.ActionSeconds);
                 await WafUtil.WriteErrorOutput(context, 403, new Dictionary<string, string?>

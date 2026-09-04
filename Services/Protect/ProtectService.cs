@@ -9,7 +9,6 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json.Linq;
 using NLog;
-using Xunit;
 
 namespace LyWaf.Services.Protect;
 public interface IProtectService
@@ -468,23 +467,5 @@ public class ProtectService : IProtectService
             }
         }
         return false;
-    }
-}
-
-public class CalculatorTests
-{
-    private static void CheckMatch(string reg, string val)
-    {
-        val = SqlUtil.Unescape(val);
-        Assert.Matches(reg, val);
-    }
-
-    [Fact]
-    public void TestAddition()
-    {
-        var reg = @"(?:(union(.|\n)*select))";
-        CheckMatch(reg, "union all select");
-        CheckMatch(reg, "union\nselect");
-        CheckMatch(reg, "uni/**/on\nselect");
     }
 }

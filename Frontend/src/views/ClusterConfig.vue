@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { lbApi } from '@/api'
 import { useToast } from '@/composables/useToast'
-import type { LbCluster, LbDestination, LbPolicy } from '@/types'
+import type { LbCluster, LbDestination, LbPolicy, OutlierDestination } from '@/types'
 
 const { showSuccess, showError } = useToast()
 
@@ -19,6 +19,7 @@ const getErrorMessage = (error: unknown, fallback: string): string => {
 const loading = ref(false)
 const clusters = ref<LbCluster[]>([])
 const policies = ref<LbPolicy[]>([])
+const outliers = ref<OutlierDestination[]>([])
 const selectedClusterId = ref('')
 const selectedDestIds = ref<Set<string>>(new Set())
 
@@ -52,6 +53,16 @@ const destinations = computed(() =>
   currentCluster.value?.destinations ?? []
 )
 
+const getOutlier = (destinationId: string) => outliers.value.find(
+  item => item.clusterId === selectedClusterId.value && item.destinationId === destinationId
+)
+
+const outlierReason = (reason?: string) => ({
+  consecutive_connection_failures: '连续连接失败',
+  consecutive_5xx: '连续 5xx',
+  error_rate: '错误率过高',
+}[reason || ''] || reason || '')
+
 // 当前集群是否存在补丁数据
 const hasPatch = computed(() =>
   destinations.value.some(d => d.source === 'patch')
@@ -66,12 +77,14 @@ const allSelected = computed(() =>
 const loadData = async () => {
   loading.value = true
   try {
-    const [clustersRes, policiesRes] = await Promise.all([
+    const [clustersRes, policiesRes, outliersRes] = await Promise.all([
       lbApi.getClusters(),
       lbApi.getPolicies(),
+      lbApi.getOutliers(),
     ])
     clusters.value = clustersRes.clusters
     policies.value = policiesRes.policies
+    outliers.value = outliersRes.destinations
     if (!selectedClusterId.value && clusters.value.length > 0) {
       selectedClusterId.value = clusters.value[0].id
     }
@@ -355,6 +368,7 @@ onMounted(loadData)
               <th class="py-3 px-3 text-left">IP</th>
               <th class="py-3 px-3 text-left">端口</th>
               <th class="py-3 px-3 text-left">权重</th>
+              <th class="py-3 px-3 text-left">运行状态</th>
               <th class="py-3 px-3 text-left">操作</th>
             </tr>
           </thead>
@@ -386,6 +400,14 @@ onMounted(loadData)
               <td class="py-3 px-3 text-gray-300 font-mono">{{ dest.host }}</td>
               <td class="py-3 px-3 text-gray-300">{{ dest.port }}</td>
               <td class="py-3 px-3 text-gray-300">{{ dest.metadata?.Weight || '1' }}</td>
+              <td class="py-3 px-3">
+                <div v-if="getOutlier(dest.id)?.state === 'ejected'" class="space-y-1">
+                  <span class="inline-block px-1.5 py-0.5 text-xs bg-red-500/20 text-red-400 rounded">已驱逐</span>
+                  <div class="text-xs text-gray-500">{{ outlierReason(getOutlier(dest.id)?.reason) }}</div>
+                  <div class="text-xs text-gray-500">恢复于 {{ new Date(getOutlier(dest.id)!.ejectedUntil!).toLocaleString() }}</div>
+                </div>
+                <span v-else class="inline-block px-1.5 py-0.5 text-xs bg-green-500/20 text-green-400 rounded">可用</span>
+              </td>
               <td class="py-3 px-3">
                 <div class="flex items-center gap-2">
                   <button

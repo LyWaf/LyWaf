@@ -5,54 +5,10 @@ using NLog;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.Loader;
+using LyWaf.Services.Telemetry;
+using LyWaf.Plugins.Packaging;
 
 namespace LyWaf.Plugins.Core;
-
-/// <summary>
-/// 插件管理器接口
-/// </summary>
-public interface IPluginManager
-{
-    /// <summary>
-    /// 获取指定插件
-    /// </summary>
-    ILyWafPlugin? GetPlugin(string pluginId);
-
-    /// <summary>
-    /// 获取所有已加载的插件
-    /// </summary>
-    IReadOnlyList<ILyWafPlugin> GetAllPlugins();
-
-    /// <summary>
-    /// 获取所有系统插件
-    /// </summary>
-    IReadOnlyList<ILyWafPlugin> GetSystemPlugins();
-
-    /// <summary>
-    /// 检查插件是否是系统插件
-    /// </summary>
-    bool IsSystemPlugin(string pluginId);
-
-    /// <summary>
-    /// 启用插件
-    /// </summary>
-    Task EnablePluginAsync(string pluginId);
-
-    /// <summary>
-    /// 禁用插件
-    /// </summary>
-    Task DisablePluginAsync(string pluginId);
-
-    /// <summary>
-    /// 重新加载插件
-    /// </summary>
-    Task ReloadPluginAsync(string pluginId);
-
-    /// <summary>
-    /// 获取插件状态
-    /// </summary>
-    PluginState GetPluginState(string pluginId);
-}
 
 /// <summary>
 /// 插件配置选项
@@ -84,10 +40,31 @@ public class PluginOptions
     /// </summary>
     public bool EnableHotReload { get; set; } = false;
 
+    /// <summary>单个插件生命周期操作允许占用的最长秒数。</summary>
+    public int LifecycleTimeoutSeconds { get; set; } = 30;
+
+    /// <summary>插件包允许的最大字节数。</summary>
+    public long MaxPackageBytes { get; set; } = 100 * 1024 * 1024;
+
+    /// <summary>插件包解压后的最大总字节数。</summary>
+    public long MaxExtractedPackageBytes { get; set; } = 250 * 1024 * 1024;
+
+    /// <summary>插件包允许包含的最大已校验文件数。</summary>
+    public int MaxPackageFiles { get; set; } = 512;
+
+    /// <summary>是否拒绝没有可信 RSA 签名的插件包。</summary>
+    public bool RequireSignedPackages { get; set; }
+
+    /// <summary>签名密钥 ID 到 PEM 公钥的映射。</summary>
+    public Dictionary<string, string> TrustedSigningKeys { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// 各插件的配置
     /// </summary>
     public Dictionary<string, Dictionary<string, object>> PluginConfigs { get; set; } = [];
+
+    /// <summary>外部插件逐项获准的能力；未配置时默认不授予特权。</summary>
+    public Dictionary<string, PluginPermission> Permissions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 系统插件 ID 列表
@@ -95,6 +72,22 @@ public class PluginOptions
     /// 除非在 DisabledPlugins 中明确禁用
     /// </summary>
     public HashSet<string> SystemPlugins { get; } = ["request-logger", "analysis", "web-tamper"];
+
+    /// <summary>统一插件代理 API 的资源限额。</summary>
+    public PluginApiProxyOptions ApiProxy { get; set; } = new();
+}
+
+/// <summary>插件代理 API 的请求体、速率和并发限制。</summary>
+public sealed class PluginApiProxyOptions
+{
+    /// <summary>单次请求体最大字节数。</summary>
+    public long MaxRequestBodyBytes { get; set; } = 1_048_576;
+
+    /// <summary>同一登录用户调用同一插件的每分钟最大请求数。</summary>
+    public int RequestsPerMinute { get; set; } = 120;
+
+    /// <summary>所有插件代理请求共享的最大并发数。</summary>
+    public int MaxConcurrentRequests { get; set; } = 16;
 }
 
 /// <summary>
@@ -145,7 +138,8 @@ public class PluginManager : IPluginManager
             foreach (var (pluginId, info) in _plugins)
             {
                 var isSystemPlugin = newOptions.SystemPlugins.Contains(pluginId);
-                var shouldBeEnabled = GetPluginEnabledState(pluginId, isSystemPlugin, info.Plugin.Metadata.EnabledByDefault);
+                var shouldBeEnabled = GetPluginEnabledState(pluginId, isSystemPlugin, info.Plugin.Metadata.EnabledByDefault)
+                    && HasRequiredPermissions(info.Plugin.Metadata, isSystemPlugin, newOptions);
 
                 if (shouldBeEnabled && !info.IsEnabled)
                 {
@@ -221,8 +215,23 @@ public class PluginManager : IPluginManager
             return;
         }
 
-        // 扫描插件目录下的所有 DLL
-        var pluginFiles = Directory.GetFiles(pluginDir, "*.dll", SearchOption.AllDirectories);
+        // 兼容旧布局时仅加载根目录 DLL；包管理布局只加载 current.json 指向的版本，
+        // 避免历史版本和依赖程序集被当作独立插件重复扫描。
+        var pluginFiles = Directory.GetFiles(pluginDir, "*.dll", SearchOption.TopDirectoryOnly).ToList();
+        foreach (var pointerFile in Directory.GetFiles(pluginDir, "current.json", SearchOption.AllDirectories))
+        {
+            var pluginRoot = Path.GetDirectoryName(pointerFile)!;
+            var pointer = PluginPackageManager.ReadPointer(pluginRoot);
+            if (pointer == null) continue;
+            var entry = Path.GetFullPath(Path.Combine(pluginRoot, "versions", pointer.Version, pointer.EntryAssembly));
+            var versionRoot = Path.GetFullPath(Path.Combine(pluginRoot, "versions", pointer.Version)) + Path.DirectorySeparatorChar;
+            if (!entry.StartsWith(versionRoot, StringComparison.OrdinalIgnoreCase) || !File.Exists(entry))
+            {
+                _logger.Warn("插件 {Id} 当前版本入口无效: {Entry}", pointer.Id, entry);
+                continue;
+            }
+            pluginFiles.Add(entry);
+        }
 
         foreach (var pluginFile in pluginFiles)
         {
@@ -262,9 +271,15 @@ public class PluginManager : IPluginManager
                 }
 
                 var metadata = plugin.Metadata;
+                if (assemblyPath != null) PluginPackageManager.ValidateLoadedMetadata(assemblyPath, metadata);
 
                 // 检查是否是系统插件（仅由 SystemPlugins 配置决定）
                 var isSystemPlugin = _options.SystemPlugins.Contains(metadata.Id);
+
+                var grantedPermissions = isSystemPlugin
+                    ? PluginPermission.All
+                    : _options.Permissions.GetValueOrDefault(metadata.Id, PluginPermission.None);
+                var missingPermissions = metadata.RequestedPermissions & ~grantedPermissions;
 
                 // 检查是否已加载
                 if (_plugins.TryGetValue(metadata.Id, out _))
@@ -282,6 +297,11 @@ public class PluginManager : IPluginManager
                 // 检查是否被禁用
                 // 优先级：PluginConfigs 中的 enable/enabled/Enabled > DisabledPlugins > EnabledByDefault
                 bool isEnabled = GetPluginEnabledState(metadata.Id, isSystemPlugin, metadata.EnabledByDefault);
+                if (missingPermissions != PluginPermission.None)
+                {
+                    isEnabled = false;
+                    _logger.Warn("插件 {Id} 缺少权限 {Permissions}，已保持禁用", metadata.Id, missingPermissions);
+                }
 
                 var info = new PluginInfo
                 {
@@ -311,6 +331,7 @@ public class PluginManager : IPluginManager
     {
         // 所有插件都注册服务，确保运行时启用插件时依赖已经存在。
         var enabledPlugins = _plugins.Values
+            .Where(plugin => plugin.IsEnabled)
             .OrderBy(p => (int)p.Plugin.Metadata.Priority)
             .ThenBy(p => p.Plugin.Metadata.Id)
             .ToList();
@@ -356,10 +377,14 @@ public class PluginManager : IPluginManager
                 _plugins[info.Plugin.Metadata.Id] = info with { Context = context };
 
                 _logger.Debug("初始化插件: {Id}", info.Plugin.Metadata.Id);
-                await info.Plugin.InitializeAsync(context);
+                using var activity = StartPluginActivity(info.Plugin.Metadata.Id, "initialize");
+                await ApplyDataMigrationsAsync(info.Plugin, context, CancellationToken.None);
+                await RunLifecycleAsync(info.Plugin.InitializeAsync(context), CancellationToken.None);
+                await PublishOperationAsync(info.Plugin.Metadata.Id, "initialize", true);
             }
             catch (Exception ex)
             {
+                await PublishOperationAsync(info.Plugin.Metadata.Id, "initialize", false);
                 _logger.Error(ex, "初始化插件 {Id} 失败", info.Plugin.Metadata.Id);
             }
         }
@@ -465,7 +490,9 @@ public class PluginManager : IPluginManager
             try
             {
                 _logger.Debug("启动插件: {Id}", info.Plugin.Metadata.Id);
-                await info.Plugin.StartAsync(cancellationToken);
+                using var activity = StartPluginActivity(info.Plugin.Metadata.Id, "start");
+                await RunLifecycleAsync(info.Plugin.StartAsync(cancellationToken), cancellationToken);
+                await PublishOperationAsync(info.Plugin.Metadata.Id, "start", true);
 
                 await _eventBus.PublishAsync(new PluginStateChangedEvent
                 {
@@ -476,6 +503,7 @@ public class PluginManager : IPluginManager
             }
             catch (Exception ex)
             {
+                await PublishOperationAsync(info.Plugin.Metadata.Id, "start", false);
                 _logger.Error(ex, "启动插件 {Id} 失败", info.Plugin.Metadata.Id);
             }
         }
@@ -494,7 +522,9 @@ public class PluginManager : IPluginManager
             try
             {
                 _logger.Debug("停止插件: {Id}", info.Plugin.Metadata.Id);
-                await info.Plugin.StopAsync(cancellationToken);
+                using var activity = StartPluginActivity(info.Plugin.Metadata.Id, "stop");
+                await RunLifecycleAsync(info.Plugin.StopAsync(cancellationToken), cancellationToken);
+                await PublishOperationAsync(info.Plugin.Metadata.Id, "stop", true);
 
                 await _eventBus.PublishAsync(new PluginStateChangedEvent
                 {
@@ -505,6 +535,7 @@ public class PluginManager : IPluginManager
             }
             catch (Exception ex)
             {
+                await PublishOperationAsync(info.Plugin.Metadata.Id, "stop", false);
                 _logger.Error(ex, "停止插件 {Id} 失败", info.Plugin.Metadata.Id);
             }
         }
@@ -636,6 +667,9 @@ public class PluginManager : IPluginManager
             return;
         }
 
+        if (!HasRequiredPermissions(info.Plugin.Metadata, IsSystemPlugin(pluginId), _options))
+            throw new UnauthorizedAccessException($"插件 {pluginId} 缺少其声明的宿主权限。");
+
         info.IsEnabled = true;
         _options.DisabledPlugins.Remove(pluginId);
 
@@ -651,8 +685,9 @@ public class PluginManager : IPluginManager
                 Path.GetFullPath(_options.DataDirectory)
             );
 
-            await info.Plugin.InitializeAsync(context);
-            await info.Plugin.StartAsync(CancellationToken.None);
+            await ApplyDataMigrationsAsync(info.Plugin, context, CancellationToken.None);
+            await RunLifecycleAsync(info.Plugin.InitializeAsync(context), CancellationToken.None);
+            await RunLifecycleAsync(info.Plugin.StartAsync(CancellationToken.None), CancellationToken.None);
         }
 
         _logger.Info("已启用插件: {Id}", pluginId);
@@ -670,7 +705,7 @@ public class PluginManager : IPluginManager
             return;
         }
 
-        await info.Plugin.StopAsync(CancellationToken.None);
+        await RunLifecycleAsync(info.Plugin.StopAsync(CancellationToken.None), CancellationToken.None);
         info.IsEnabled = false;
         _options.DisabledPlugins.Add(pluginId);
 
@@ -691,7 +726,7 @@ public class PluginManager : IPluginManager
         }
 
         // 停止并卸载
-        await info.Plugin.StopAsync(CancellationToken.None);
+        await RunLifecycleAsync(info.Plugin.StopAsync(CancellationToken.None), CancellationToken.None);
         info.LoadContext.Unload();
         _plugins.TryRemove(pluginId, out _);
 
@@ -712,8 +747,9 @@ public class PluginManager : IPluginManager
                 Path.GetFullPath(_options.DataDirectory)
             );
 
-            await newInfo.Plugin.InitializeAsync(context);
-            await newInfo.Plugin.StartAsync(CancellationToken.None);
+            await ApplyDataMigrationsAsync(newInfo.Plugin, context, CancellationToken.None);
+            await RunLifecycleAsync(newInfo.Plugin.InitializeAsync(context), CancellationToken.None);
+            await RunLifecycleAsync(newInfo.Plugin.StartAsync(CancellationToken.None), CancellationToken.None);
         }
 
         _logger.Info("已重载插件: {Id}", pluginId);
@@ -722,6 +758,79 @@ public class PluginManager : IPluginManager
     public PluginState GetPluginState(string pluginId)
     {
         return _plugins.TryGetValue(pluginId, out var info) ? info.Plugin.State : PluginState.Unloaded;
+    }
+
+    /// <inheritdoc />
+    public bool IsPermissionGranted(string pluginId, PluginPermission permission)
+    {
+        if (_options.SystemPlugins.Contains(pluginId)) return true;
+        return (_options.Permissions.GetValueOrDefault(pluginId, PluginPermission.None) & permission) == permission;
+    }
+
+    private static bool HasRequiredPermissions(PluginMetadata metadata, bool isSystemPlugin, PluginOptions options)
+    {
+        if (isSystemPlugin) return true;
+        var granted = options.Permissions.GetValueOrDefault(metadata.Id, PluginPermission.None);
+        return (granted & metadata.RequestedPermissions) == metadata.RequestedPermissions;
+    }
+
+    private async Task RunLifecycleAsync(Task operation, CancellationToken cancellationToken)
+    {
+        var seconds = Math.Clamp(_options.LifecycleTimeoutSeconds, 1, 300);
+        await operation.WaitAsync(TimeSpan.FromSeconds(seconds), cancellationToken);
+    }
+
+    internal async Task ApplyDataMigrationsAsync(ILyWafPlugin plugin, IPluginContext context, CancellationToken cancellationToken)
+    {
+        var target = plugin.Metadata.DataVersion;
+        if (target == 0) return;
+        if (!IsPermissionGranted(plugin.Metadata.Id, PluginPermission.DataDirectory))
+            throw new UnauthorizedAccessException($"插件 {plugin.Metadata.Id} 声明了数据版本但未获数据目录权限。");
+
+        const string versionFile = ".lywaf-data-version";
+        var current = 0;
+        if (context.Storage.Exists(versionFile))
+        {
+            using var stream = context.Storage.OpenRead(versionFile);
+            Span<byte> buffer = stackalloc byte[4];
+            if (stream.Read(buffer) != buffer.Length) throw new InvalidDataException("插件数据版本文件损坏。");
+            current = BitConverter.ToInt32(buffer);
+        }
+        if (current == target) return;
+        if (plugin is not IPluginDataMigrationProvider provider)
+            throw new InvalidOperationException($"插件 {plugin.Metadata.Id} 需要从数据版本 {current} 迁移到 {target}，但未提供迁移器。");
+
+        var migrations = provider.GetMigrations();
+        var visited = new HashSet<int>();
+        while (current != target)
+        {
+            if (!visited.Add(current)) throw new InvalidOperationException("插件数据迁移链存在循环。");
+            var migration = migrations.SingleOrDefault(item => item.FromVersion == current
+                && (target > current ? item.ToVersion > current && item.ToVersion <= target : item.ToVersion < current && item.ToVersion >= target));
+            if (migration == null) throw new InvalidOperationException($"插件数据迁移链在版本 {current} 处中断。");
+            await RunLifecycleAsync(migration.MigrateAsync(context.Storage, cancellationToken), cancellationToken);
+            current = migration.ToVersion;
+        }
+
+        using var output = context.Storage.OpenWrite(versionFile);
+        output.Write(BitConverter.GetBytes(target));
+        output.Flush();
+    }
+
+    private Task PublishOperationAsync(string pluginId, string operation, bool success)
+        => _eventBus.PublishAsync(new PluginOperationEvent
+        {
+            PluginId = pluginId,
+            Operation = operation,
+            Success = success
+        });
+
+    private static System.Diagnostics.Activity? StartPluginActivity(string pluginId, string operation)
+    {
+        var activity = LyWafTelemetry.ActivitySource.StartActivity($"plugin.{operation}");
+        activity?.SetTag("lywaf.plugin.id", pluginId);
+        activity?.SetTag("lywaf.plugin.operation", operation);
+        return activity;
     }
 
     #endregion
@@ -737,6 +846,9 @@ public class PluginLoadContext(string pluginPath) : AssemblyLoadContext(isCollec
 
     protected override Assembly? Load(AssemblyName assemblyName)
     {
+        // 插件必须复用默认上下文中的契约程序集，否则 ILyWafPlugin 类型身份不相等。
+        if (assemblyName.Name == typeof(ILyWafPlugin).Assembly.GetName().Name)
+            return typeof(ILyWafPlugin).Assembly;
         var assemblyPath = _resolver.ResolveAssemblyToPath(assemblyName);
         if (assemblyPath != null)
         {

@@ -10,17 +10,15 @@
   <ItemGroup>
     <PackageReference Include="CommandLineParser" Version="2.9.1" />
     <PackageReference Include="DotNetEnv" Version="3.1.1" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageReference Include="NetEscapades.Configuration.Yaml" Version="3.1.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="NLog" Version="6.0.5" />
     <PackageReference Include="NLog.Extensions.Logging" Version="6.0.5" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />
     <PackageReference Include="System.CommandLine" Version="2.0.0" />
-    <PackageReference Include="xunit" Version="2.9.3" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-      <PrivateAssets>all</PrivateAssets>
-    </PackageReference>
     <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
     <!-- IP地理位置库：用于国家/地区访问控制 -->
     <PackageReference Include="IP2Region.Net" Version="3.0.0" />
@@ -33,6 +31,9 @@
   </ItemGroup>
   
   <ItemGroup>
+    <Compile Remove="sdk\**\*.cs" />
+    <Compile Remove="Plugins\Core\ILyWafPlugin.cs" />
+    <Compile Remove="Plugins\Core\IPluginEventBus.cs" />
      <None Update="nlog.config" CopyToOutputDirectory="Always" />
      <None Update="config.ly" CopyToOutputDirectory="Always" />
      <None Update="config.ly.example" CopyToOutputDirectory="Always" />
@@ -52,13 +53,23 @@
 
   <!-- 排除运行时状态文件、用户配置、构建产物等 -->
   <ItemGroup>
+    <Compile Remove="benchmarks\**\*.cs" />
+    <Compile Remove="tests\LyWaf.Tests\**\*.cs" />
     <Content Remove=".lywaf.*" />
     <Content Remove="config.ly.*" />
     <!-- 排除 DuckDB 运行时数据库文件（由程序启动时自动创建） -->
     <Content Remove="datas\*.duckdb" />
     <Content Remove="datas\*.duckdb.*" />
     <None Remove=".lywaf.*" />
+    <None Remove="artifacts\**;Frontend\**;benchmarks\**;tests\**;tools\**;certs\**;plugin_data\**" />
     <Content Remove="publish\**" />
+    <Content Remove="artifacts\**" />
+    <Content Remove="Frontend\**" />
+    <Content Remove="benchmarks\**" />
+    <Content Remove="tests\**" />
+    <Content Remove="tools\**" />
+    <Content Remove="certs\**" />
+    <Content Remove="plugin_data\**" />
     <Content Remove="temp\**" />
     <Content Remove="logs\**" />
     <Content Remove="bin*\**" />

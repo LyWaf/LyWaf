@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { configFileApi, serviceApi, patchApi } from '@/api'
+import { configFileApi, serviceApi, patchApi, upgradeApi, type ConfigVersionInfo, type ConfigVersionDiff, type UpgradeReleaseInfo, type UpgradePointers } from '@/api'
 import { useToast } from '@/composables/useToast'
 
 const { showSuccess, showError } = useToast()
@@ -17,10 +17,114 @@ const lastSavedContent = ref('')       // 上次保存/加载时的内容
 const yamlPreview = ref('')
 const activeTab = ref<'source' | 'yaml'>('source')
 const hasDraft = ref(false)
+const historyLoading = ref(false)
+const versions = ref<ConfigVersionInfo[]>([])
+const selectedDiff = ref<ConfigVersionDiff | null>(null)
+const diffLoading = ref(false)
+const rollbackTarget = ref<ConfigVersionInfo | null>(null)
+const rollingBack = ref(false)
+const upgradeLoading = ref(false)
+const upgradePackageName = ref('')
+const upgradeVersion = ref('')
+const upgradeSha256 = ref('')
+const upgradeReleases = ref<UpgradeReleaseInfo[]>([])
+const upgradePointers = ref<UpgradePointers>({ current: null, previous: null, pending: null })
+const activateTarget = ref<UpgradeReleaseInfo | null>(null)
+const activatingUpgrade = ref(false)
 
 const isLyFormat = computed(() => format.value === 'ly')
 const hasChanges = computed(() => content.value !== lastSavedContent.value)
 const isDifferentFromOriginal = computed(() => content.value !== originalContent.value)
+
+const formatTime = (value: string) => new Date(value).toLocaleString()
+const shortHash = (value: string) => value.slice(0, 12)
+
+const loadHistory = async () => {
+  historyLoading.value = true
+  try {
+    versions.value = (await configFileApi.getHistory()).versions
+  } catch (error: any) {
+    showError(error?.response?.data?.message || '加载配置历史失败')
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+const viewDiff = async (version: ConfigVersionInfo) => {
+  diffLoading.value = true
+  try {
+    selectedDiff.value = (await configFileApi.getVersionDiff(version.id)).diff
+  } catch (error: any) {
+    showError(error?.response?.data?.message || '加载配置差异失败')
+  } finally {
+    diffLoading.value = false
+  }
+}
+
+const confirmRollback = async () => {
+  if (!rollbackTarget.value) return
+  rollingBack.value = true
+  try {
+    await configFileApi.rollback(rollbackTarget.value.id)
+    rollbackTarget.value = null
+    selectedDiff.value = null
+    await Promise.all([loadFile(), loadHistory()])
+    showSuccess('配置已回滚并重新加载')
+  } catch (error: any) {
+    showError(error?.response?.data?.message || '配置回滚失败')
+  } finally {
+    rollingBack.value = false
+  }
+}
+
+const loadUpgrades = async () => {
+  upgradeLoading.value = true
+  try {
+    const response = await upgradeApi.list()
+    upgradeReleases.value = response.releases
+    upgradePointers.value = response.pointers
+  } catch (error: any) {
+    showError(error?.response?.data?.message || '加载程序版本失败')
+  } finally { upgradeLoading.value = false }
+}
+
+const stageUpgrade = async () => {
+  if (!upgradePackageName.value || !upgradeVersion.value || !/^[a-fA-F0-9]{64}$/.test(upgradeSha256.value)) {
+    showError('请填写 ZIP 文件名、版本号和完整 SHA-256')
+    return
+  }
+  upgradeLoading.value = true
+  try {
+    const response = await upgradeApi.stage(upgradePackageName.value, upgradeVersion.value, upgradeSha256.value)
+    showSuccess(response.message)
+    upgradePackageName.value = ''; upgradeVersion.value = ''; upgradeSha256.value = ''
+    await loadUpgrades()
+  } catch (error: any) {
+    showError(error?.response?.data?.message || '候选版本校验失败')
+  } finally { upgradeLoading.value = false }
+}
+
+const confirmActivateUpgrade = async () => {
+  if (!activateTarget.value) return
+  activatingUpgrade.value = true
+  try {
+    await upgradeApi.activate(activateTarget.value.version)
+    showSuccess('实例正在排空，候选版本就绪后将接管服务')
+    activateTarget.value = null
+  } catch (error: any) {
+    showError(error?.response?.data?.message || '激活失败')
+  } finally { activatingUpgrade.value = false }
+}
+
+const rollbackProgram = async () => {
+  activatingUpgrade.value = true
+  try {
+    await upgradeApi.rollback()
+    showSuccess('实例正在排空，上一程序版本将重新启动')
+  } catch (error: any) {
+    showError(error?.response?.data?.message || '程序版本回退失败')
+  } finally { activatingUpgrade.value = false }
+}
 
 // 加载配置文件
 const loadFile = async () => {
@@ -86,7 +190,7 @@ const saveConfig = async (reload: boolean = false) => {
       showSuccess(response.message || '草稿已保存')
 
       // 检测到端口变更，询问用户是否重启
-      if (response.portsChanged) {
+      if (response.restartRequired || response.portsChanged) {
         showRestartConfirm.value = true
       }
     } else {
@@ -169,6 +273,8 @@ const confirmClearPatch = async () => {
 
 onMounted(() => {
   loadFile()
+  loadHistory()
+  loadUpgrades()
 })
 </script>
 
@@ -295,6 +401,70 @@ onMounted(() => {
       </div>
     </div>
 
+    <div class="card !p-0 overflow-hidden">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-dark-border">
+        <div>
+          <h3 class="text-sm font-semibold text-gray-200">配置历史</h3>
+          <p class="mt-1 text-xs text-gray-500">每次有效写入都会生成不可变版本，可查看差异或回滚。</p>
+        </div>
+        <button class="btn btn-sm btn-secondary" :disabled="historyLoading" @click="loadHistory">
+          {{ historyLoading ? '加载中...' : '刷新历史' }}
+        </button>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-dark-sidebar text-gray-400">
+            <tr><th class="px-4 py-3 text-left">时间</th><th class="px-4 py-3 text-left">类型</th><th class="px-4 py-3 text-left">操作者</th><th class="px-4 py-3 text-left">动作</th><th class="px-4 py-3 text-left">摘要</th><th class="px-4 py-3 text-right">操作</th></tr>
+          </thead>
+          <tbody class="divide-y divide-dark-border">
+            <tr v-for="version in versions" :key="version.id">
+              <td class="px-4 py-3 whitespace-nowrap text-gray-300">{{ formatTime(version.createdAt) }}</td>
+              <td class="px-4 py-3 text-gray-400">{{ version.kind === 'main' ? '主配置' : '运行时补丁' }}</td>
+              <td class="px-4 py-3 text-gray-400">{{ version.operator }}</td>
+              <td class="px-4 py-3 font-mono text-xs text-gray-400">{{ version.action }}</td>
+              <td class="px-4 py-3 font-mono text-xs text-gray-500">{{ shortHash(version.sha256) }}</td>
+              <td class="px-4 py-3 text-right whitespace-nowrap">
+                <button class="text-primary-400 hover:text-primary-300 mr-4" :disabled="diffLoading" @click="viewDiff(version)">查看差异</button>
+                <button class="text-amber-400 hover:text-amber-300" @click="rollbackTarget = version">回滚</button>
+              </td>
+            </tr>
+            <tr v-if="!historyLoading && versions.length === 0"><td colspan="6" class="px-4 py-8 text-center text-gray-500">暂无配置版本</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card !p-0 overflow-hidden">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-dark-border">
+        <div><h3 class="text-sm font-semibold text-gray-200">程序版本</h3><p class="mt-1 text-xs text-gray-500">升级包需先放入配置的收件箱目录，校验通过后才能激活。</p></div>
+        <div class="flex gap-2">
+          <button v-if="upgradePointers.previous" class="btn btn-sm btn-secondary text-amber-400" :disabled="activatingUpgrade" @click="rollbackProgram">回退到 {{ upgradePointers.previous }}</button>
+          <button class="btn btn-sm btn-secondary" :disabled="upgradeLoading" @click="loadUpgrades">刷新版本</button>
+        </div>
+      </div>
+      <div class="grid gap-3 border-b border-dark-border p-4 md:grid-cols-[1fr_0.7fr_2fr_auto]">
+        <input v-model.trim="upgradePackageName" class="input" placeholder="收件箱 ZIP 文件名" />
+        <input v-model.trim="upgradeVersion" class="input" placeholder="版本号" />
+        <input v-model.trim="upgradeSha256" class="input font-mono" placeholder="SHA-256" />
+        <button class="btn btn-primary whitespace-nowrap" :disabled="upgradeLoading" @click="stageUpgrade">{{ upgradeLoading ? '校验中...' : '校验并入库' }}</button>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-dark-sidebar text-gray-400"><tr><th class="px-4 py-3 text-left">版本</th><th class="px-4 py-3 text-left">入库时间</th><th class="px-4 py-3 text-left">摘要</th><th class="px-4 py-3 text-left">状态</th><th class="px-4 py-3 text-right">操作</th></tr></thead>
+          <tbody class="divide-y divide-dark-border">
+            <tr v-for="release in upgradeReleases" :key="release.version">
+              <td class="px-4 py-3 text-gray-200"><span class="font-medium">{{ release.version }}</span><span v-if="upgradePointers.current === release.version" class="ml-2 text-xs text-emerald-400">当前</span><span v-if="upgradePointers.pending === release.version" class="ml-2 text-xs text-amber-400">待激活</span></td>
+              <td class="px-4 py-3 whitespace-nowrap text-gray-400">{{ formatTime(release.stagedAt) }}</td>
+              <td class="px-4 py-3 font-mono text-xs text-gray-500">{{ shortHash(release.sha256) }}</td>
+              <td class="px-4 py-3 text-emerald-400">已验证</td>
+              <td class="px-4 py-3 text-right"><button class="text-primary-400 hover:text-primary-300" :disabled="upgradePointers.current === release.version || activatingUpgrade" @click="activateTarget = release">激活</button></td>
+            </tr>
+            <tr v-if="!upgradeLoading && upgradeReleases.length === 0"><td colspan="5" class="px-4 py-8 text-center text-gray-500">暂无候选程序版本</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- 端口变更重启确认对话框 -->
     <Teleport to="body">
       <div v-if="showRestartConfirm" class="fixed inset-0 z-50 flex items-center justify-center">
@@ -342,6 +512,46 @@ onMounted(() => {
               <span>{{ clearingPatch ? '清除中...' : '确认清除' }}</span>
             </button>
           </div>
+        </div>
+      </div>
+    </Teleport>
+    <Teleport to="body">
+      <div v-if="selectedDiff" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/70" @click="selectedDiff = null"></div>
+        <div class="relative flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-dark-border bg-dark-card shadow-2xl">
+          <div class="flex items-center justify-between border-b border-dark-border px-5 py-4">
+            <div><h3 class="font-semibold text-gray-100">配置差异</h3><p class="mt-1 font-mono text-xs text-gray-500">{{ selectedDiff.version.id }}</p></div>
+            <button class="text-xl text-gray-400 hover:text-white" title="关闭" @click="selectedDiff = null">×</button>
+          </div>
+          <div class="overflow-auto bg-[#0d1117] font-mono text-xs leading-5">
+            <div v-for="(line, index) in selectedDiff.lines" :key="index" class="grid grid-cols-[4rem_4rem_1.5rem_minmax(0,1fr)] px-3"
+              :class="line.kind === 'add' ? 'bg-emerald-950/60 text-emerald-200' : line.kind === 'remove' ? 'bg-red-950/60 text-red-200' : 'text-gray-400'">
+              <span class="text-right text-gray-600">{{ line.oldLine ?? '' }}</span><span class="text-right text-gray-600">{{ line.newLine ?? '' }}</span>
+              <span class="text-center">{{ line.kind === 'add' ? '+' : line.kind === 'remove' ? '-' : ' ' }}</span><span class="whitespace-pre">{{ line.text }}</span>
+            </div>
+            <div v-if="selectedDiff.truncated" class="px-4 py-3 text-amber-400">差异过大，仅显示前 5000 行。</div>
+          </div>
+          <div class="flex justify-end gap-3 border-t border-dark-border px-5 py-4"><button class="btn btn-sm btn-secondary" @click="selectedDiff = null">关闭</button><button class="btn btn-sm btn-primary" @click="rollbackTarget = selectedDiff!.version">回滚到此版本</button></div>
+        </div>
+      </div>
+    </Teleport>
+    <Teleport to="body">
+      <div v-if="rollbackTarget" class="fixed inset-0 z-[60] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/70" @click="rollbackTarget = null"></div>
+        <div class="relative w-full max-w-md rounded-lg border border-dark-border bg-dark-card p-6 shadow-2xl">
+          <h3 class="text-lg font-semibold text-gray-100">确认回滚配置</h3>
+          <p class="my-4 text-sm text-gray-400">将把 {{ rollbackTarget.kind === 'main' ? '主配置' : '运行时补丁' }} 回滚到 {{ formatTime(rollbackTarget.createdAt) }} 的版本，并立即重新加载。</p>
+          <div class="flex justify-end gap-3"><button class="btn btn-sm btn-secondary" @click="rollbackTarget = null">取消</button><button class="btn btn-sm bg-amber-600 text-white hover:bg-amber-500" :disabled="rollingBack" @click="confirmRollback">{{ rollingBack ? '回滚中...' : '确认回滚' }}</button></div>
+        </div>
+      </div>
+    </Teleport>
+    <Teleport to="body">
+      <div v-if="activateTarget" class="fixed inset-0 z-[60] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/70" @click="activateTarget = null"></div>
+        <div class="relative w-full max-w-md rounded-lg border border-dark-border bg-dark-card p-6 shadow-2xl">
+          <h3 class="text-lg font-semibold text-gray-100">激活程序版本</h3>
+          <p class="my-4 text-sm text-gray-400">实例将停止接收新流量，等待在途请求结束，然后启动版本 {{ activateTarget.version }}。候选未能按时就绪时会自动恢复当前程序。</p>
+          <div class="flex justify-end gap-3"><button class="btn btn-sm btn-secondary" @click="activateTarget = null">取消</button><button class="btn btn-sm btn-primary" :disabled="activatingUpgrade" @click="confirmActivateUpgrade">{{ activatingUpgrade ? '处理中...' : '确认激活' }}</button></div>
         </div>
       </div>
     </Teleport>

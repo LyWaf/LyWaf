@@ -10,7 +10,7 @@ import type {
 } from '@/types'
 
 const http = axios.create({
-  baseURL: '/api',
+  baseURL: '/api/v1',
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
@@ -614,15 +614,73 @@ interface ConvertResponse {
   message?: string
 }
 
+export interface ConfigVersionInfo {
+  id: string
+  createdAt: string
+  operator: string
+  kind: string
+  targetPath: string
+  sha256: string
+  previousVersionId: string | null
+  action: string
+}
+
+export interface ConfigDiffLine {
+  kind: 'equal' | 'add' | 'remove'
+  oldLine: number | null
+  newLine: number | null
+  text: string
+}
+
+export interface ConfigVersionDiff {
+  version: ConfigVersionInfo
+  previousVersion: ConfigVersionInfo | null
+  lines: ConfigDiffLine[]
+  truncated: boolean
+}
+
 export const configFileApi = {
   getFile: () =>
     api.get<ConfigFileResponse>('/config/file'),
 
   saveFile: (content: string, reload: boolean = false) =>
-    api.post<ApiResponse & { portsChanged?: boolean }>('/config/file', { content, reload }),
+    api.post<ApiResponse & { portsChanged?: boolean; restartRequired?: boolean }>('/config/file', { content, reload }),
 
   convert: (content: string) =>
     api.post<ConvertResponse>('/config/convert', { content }),
+
+  getHistory: () =>
+    api.get<{ success: boolean; versions: ConfigVersionInfo[] }>('/config/history'),
+
+  getVersionDiff: (id: string) =>
+    api.get<{ success: boolean; diff: ConfigVersionDiff }>(`/config/history/${encodeURIComponent(id)}/diff`),
+
+  rollback: (id: string) =>
+    api.post<ApiResponse & { versionId: string }>(`/config/history/${encodeURIComponent(id)}/rollback`),
+}
+
+export interface UpgradeReleaseInfo {
+  version: string
+  directory: string
+  entryPoint: string
+  sha256: string
+  stagedAt: string
+  status: string
+  validationOutput: string
+}
+
+export interface UpgradePointers {
+  current: string | null
+  previous: string | null
+  pending: string | null
+}
+
+export const upgradeApi = {
+  list: () => api.get<{ success: boolean; releases: UpgradeReleaseInfo[]; pointers: UpgradePointers }>('/upgrade/releases'),
+  stage: (packageName: string, version: string, sha256: string) =>
+    api.post<{ success: boolean; message: string; release: UpgradeReleaseInfo }>('/upgrade/stage', { packageName, version, sha256 }),
+  activate: (version: string) => api.post<ApiResponse>('/upgrade/activate', { version }),
+  rollback: () => api.post<ApiResponse>('/upgrade/rollback'),
 }
 
 // ==================== 参数配置 API ====================
@@ -719,7 +777,8 @@ export const serviceApi = {
 
 // ==================== 集群配置 API ====================
 
-import type { LbCluster, LbPolicy } from '@/types'
+import type { LbCluster, LbPolicy, OutlierDestination } from '@/types'
+import type { MultiNodeDashboard, ConfigurationDeployment } from '@/types'
 
 interface LbClustersResponse {
   success: boolean
@@ -732,12 +791,21 @@ interface LbPoliciesResponse {
   policies: LbPolicy[]
 }
 
+interface OutlierResponse {
+  success: boolean
+  destinations: OutlierDestination[]
+  timestamp: string
+}
+
 export const lbApi = {
   getClusters: () =>
     api.get<LbClustersResponse>('/lb/clusters'),
 
   getPolicies: () =>
     api.get<LbPoliciesResponse>('/lb/policies'),
+
+  getOutliers: () =>
+    api.get<OutlierResponse>('/lb/outliers'),
 
   updatePolicy: (clusterId: string, policy: string) =>
     api.post<ApiResponse>('/lb/policy/update', { clusterId, policy }),
@@ -951,6 +1019,17 @@ export interface PluginActionItem {
   path?: string
 }
 
+export const distributionApi = {
+  getDashboard: () =>
+    api.get<{ success: boolean; dashboard: MultiNodeDashboard; message?: string }>('/distribution/dashboard'),
+  getDeployments: () =>
+    api.get<{ success: boolean; deployments: ConfigurationDeployment[] }>('/distribution/deployments'),
+  createDeployment: (data: { versionId: string; nodeIds?: string[]; canaryCount?: number; batchSize?: number; pauseAfterEachBatch?: boolean }) =>
+    api.post<{ success: boolean; deployment?: ConfigurationDeployment; message?: string }>('/distribution/deployments', data),
+  command: (id: string, command: 'pause' | 'resume' | 'rollback') =>
+    api.post<{ success: boolean; deployment?: ConfigurationDeployment; message?: string }>(`/distribution/deployments/${encodeURIComponent(id)}/${command}`),
+}
+
 export interface PluginItem {
   id: string
   name: string
@@ -1001,6 +1080,16 @@ export const pluginApi = {
 
   togglePlugin: (pluginId: string) =>
     api.post<ApiResponse & { state: string; isEnabled: boolean }>('/plugins/toggle', { pluginId }),
+
+  installPackage: (file: File) =>
+    api.post<ApiResponse & { id: string; version: string; requiresRestart: boolean }>('/plugins/install', file, {
+      headers: { 'Content-Type': 'application/octet-stream' },
+    }),
+
+  rollback: (pluginId: string) =>
+    api.post<ApiResponse & { version: string; requiresRestart: boolean }>(
+      `/plugins/${encodeURIComponent(pluginId)}/rollback`,
+    ),
 
   getConfig: (pluginId: string) =>
     api.get<PluginConfigResponse>(`/plugins/${encodeURIComponent(pluginId)}/config`),
@@ -1069,6 +1158,9 @@ export const settingsApi = {
 
   getAcmeEmail: () =>
     api.get<{ success: boolean; email: string }>('/settings/acme-email'),
+
+  getCertificateStatus: () =>
+    api.get<{ certificates: import('@/types').CertificateRuntimeStatus[]; accounts: import('@/types').AcmeAccountStatus[] }>('/settings/certs/status'),
 
   getConsole: () =>
     api.get<ConsoleInfo & { success: boolean }>('/settings/console'),

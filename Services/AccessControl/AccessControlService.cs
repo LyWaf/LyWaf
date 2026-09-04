@@ -4,6 +4,7 @@ using IP2Region.Net.XDB;
 using LyWaf.Services.SpeedLimit;
 using Microsoft.Extensions.Options;
 using NLog;
+using LyWaf.Services.RuntimeState;
 
 namespace LyWaf.Services.AccessControl;
 
@@ -311,6 +312,10 @@ public class GeoInfo
 /// </summary>
 public class AccessControlService : IAccessControlService, IDisposable
 {
+    private const string WhitelistDomain = "access.whitelist";
+    private const string WhitelistExclusionDomain = "access.whitelist.excluded";
+    private const string BlacklistDomain = "access.blacklist";
+    private const string BlacklistExclusionDomain = "access.blacklist.excluded";
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private AccessControlOptions _options;
     private ISearcher? _geoSearcher;
@@ -345,10 +350,13 @@ public class AccessControlService : IAccessControlService, IDisposable
     private readonly ConcurrentDictionary<string, int> _connectionsPerDestination = new();
     private readonly ConcurrentDictionary<string, int> _connectionsPerPath = new();
     private readonly object _connectionLock = new();
+    private readonly RuntimeStateStore _runtimeState;
 
-    public AccessControlService(IOptionsMonitor<AccessControlOptions> options)
+    public AccessControlService(IOptionsMonitor<AccessControlOptions> options, RuntimeStateStore runtimeState)
     {
+        _runtimeState = runtimeState;
         _options = options.CurrentValue;
+        _runtimeState.StateChanged += OnRuntimeStateChanged;
 
         // 订阅配置变更
         options.OnChange(newConfig =>
@@ -400,9 +408,10 @@ public class AccessControlService : IAccessControlService, IDisposable
         lock (_dynamicListLock)
         {
             var allWhitelist = _options.Whitelist
-                .Where(ip => !_excludedWhitelist.Contains(ip))
+                .Where(ip => !_excludedWhitelist.Contains(ip) && !ContainsState(WhitelistExclusionDomain, ip))
                 .ToList();
             allWhitelist.AddRange(_dynamicWhitelist);
+            allWhitelist.AddRange(StateKeys(WhitelistDomain));
             _whitelistNetworks = ParseNetworks(allWhitelist);
         }
 
@@ -410,9 +419,10 @@ public class AccessControlService : IAccessControlService, IDisposable
         lock (_dynamicListLock)
         {
             var allBlacklist = ipConfig.Blacklist
-                .Where(ip => !_excludedBlacklist.Contains(ip))
+                .Where(ip => !_excludedBlacklist.Contains(ip) && !ContainsState(BlacklistExclusionDomain, ip))
                 .ToList();
             allBlacklist.AddRange(_dynamicBlacklist);
+            allBlacklist.AddRange(StateKeys(BlacklistDomain));
             _blacklistNetworks = ParseNetworks(allBlacklist);
         }
 
@@ -961,6 +971,8 @@ public class AccessControlService : IAccessControlService, IDisposable
         {
             if (_dynamicWhitelist.Add(ipOrCidr))
             {
+                _runtimeState.Remove(WhitelistExclusionDomain, ipOrCidr);
+                _runtimeState.Set(WhitelistDomain, ipOrCidr, true);
                 BuildIpNetworks(); // 重新构建网络列表
                 _logger.Info("已动态添加白名单: {IpOrCidr}", ipOrCidr);
                 return true;
@@ -982,7 +994,7 @@ public class AccessControlService : IAccessControlService, IDisposable
 
         lock (_dynamicListLock)
         {
-            var removed = false;
+            var removed = ContainsState(WhitelistDomain, ipOrCidr);
             
             // 尝试从动态白名单移除
             if (_dynamicWhitelist.Remove(ipOrCidr))
@@ -1001,6 +1013,9 @@ public class AccessControlService : IAccessControlService, IDisposable
             
             if (removed)
             {
+                _runtimeState.Remove(WhitelistDomain, ipOrCidr);
+                if (_options.Whitelist.Contains(ipOrCidr, StringComparer.OrdinalIgnoreCase))
+                    _runtimeState.Set(WhitelistExclusionDomain, ipOrCidr, true);
                 BuildIpNetworks(); // 重新构建网络列表
                 _logger.Info("已从白名单移除: {IpOrCidr}", ipOrCidr);
                 return true;
@@ -1018,9 +1033,10 @@ public class AccessControlService : IAccessControlService, IDisposable
         lock (_dynamicListLock)
         {
             var allWhitelist = _options.Whitelist
-                .Where(ip => !_excludedWhitelist.Contains(ip))
+                .Where(ip => !_excludedWhitelist.Contains(ip) && !ContainsState(WhitelistExclusionDomain, ip))
                 .ToList();
             allWhitelist.AddRange(_dynamicWhitelist);
+            allWhitelist.AddRange(StateKeys(WhitelistDomain));
             return allWhitelist.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
     }
@@ -1046,6 +1062,8 @@ public class AccessControlService : IAccessControlService, IDisposable
         {
             if (_dynamicBlacklist.Add(ipOrCidr))
             {
+                _runtimeState.Remove(BlacklistExclusionDomain, ipOrCidr);
+                _runtimeState.Set(BlacklistDomain, ipOrCidr, true);
                 BuildIpNetworks(); // 重新构建网络列表
                 _logger.Info("已动态添加黑名单: {IpOrCidr}", ipOrCidr);
                 return true;
@@ -1067,7 +1085,7 @@ public class AccessControlService : IAccessControlService, IDisposable
 
         lock (_dynamicListLock)
         {
-            var removed = false;
+            var removed = ContainsState(BlacklistDomain, ipOrCidr);
             
             // 尝试从动态黑名单移除
             if (_dynamicBlacklist.Remove(ipOrCidr))
@@ -1086,6 +1104,9 @@ public class AccessControlService : IAccessControlService, IDisposable
             
             if (removed)
             {
+                _runtimeState.Remove(BlacklistDomain, ipOrCidr);
+                if (_options.IpControl.Blacklist.Contains(ipOrCidr, StringComparer.OrdinalIgnoreCase))
+                    _runtimeState.Set(BlacklistExclusionDomain, ipOrCidr, true);
                 BuildIpNetworks(); // 重新构建网络列表
                 _logger.Info("已从黑名单移除: {IpOrCidr}", ipOrCidr);
                 return true;
@@ -1103,9 +1124,10 @@ public class AccessControlService : IAccessControlService, IDisposable
         lock (_dynamicListLock)
         {
             var allBlacklist = _options.IpControl.Blacklist
-                .Where(ip => !_excludedBlacklist.Contains(ip))
+                .Where(ip => !_excludedBlacklist.Contains(ip) && !ContainsState(BlacklistExclusionDomain, ip))
                 .ToList();
             allBlacklist.AddRange(_dynamicBlacklist);
+            allBlacklist.AddRange(StateKeys(BlacklistDomain));
             return allBlacklist.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
     }
@@ -1414,8 +1436,21 @@ public class AccessControlService : IAccessControlService, IDisposable
         }
     }
 
+    private IEnumerable<string> StateKeys(string domain)
+        => _runtimeState.GetSnapshots(domain).Select(static item => item.Key);
+
+    private bool ContainsState(string domain, string key)
+        => _runtimeState.TryGet<bool>(domain, key, out var enabled) && enabled;
+
+    private void OnRuntimeStateChanged(string domain)
+    {
+        if (domain is WhitelistDomain or WhitelistExclusionDomain or BlacklistDomain or BlacklistExclusionDomain)
+            BuildIpNetworks();
+    }
+
     public void Dispose()
     {
+        _runtimeState.StateChanged -= OnRuntimeStateChanged;
         GC.SuppressFinalize(this);
     }
 }

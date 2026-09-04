@@ -46,6 +46,7 @@ const menuItems: MenuItem[] = [
       { path: '/config', name: '配置文件' },
       { path: '/config-overview', name: '配置概览' },
       { path: '/cluster-config', name: '配置集群' },
+      { path: '/multi-node', name: '节点管理' },
       { path: '/route-config', name: '配置路由' },
       { path: '/fileserver-config', name: '文件服务' },
       { path: '/simpleres-config', name: '简单响应' },

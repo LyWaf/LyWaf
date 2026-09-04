@@ -42,10 +42,25 @@ public class FileServerItem
     /// </summary>
     public bool Browse { get; set; } = false;
 
+    /// <summary>目录浏览最多列出的项目数，防止超大目录制造响应内存峰值。</summary>
+    public int MaxBrowseEntries { get; set; } = 1000;
+
     /// <summary>
     /// 是否启用预压缩文件（.gz, .br 等）
     /// </summary>
     public bool PreCompressed { get; set; } = false;
+
+    /// <summary>是否允许访问符号链接或 Windows 重解析点，默认拒绝。</summary>
+    public bool FollowLinks { get; set; }
+
+    /// <summary>是否允许访问点号开头或带 Hidden 属性的文件，默认拒绝。</summary>
+    public bool ShowHidden { get; set; }
+
+    /// <summary>发送给客户端的 Cache-Control，空字符串表示不设置。</summary>
+    public string CacheControl { get; set; } = "public, max-age=3600";
+
+    /// <summary>禁止公开下载的扩展名集合。</summary>
+    public HashSet<string> DeniedExtensions { get; set; } = CreateDefaultDeniedExtensions();
 
     /// <summary>
     /// URL 前缀（用于映射请求路径）
@@ -64,7 +79,18 @@ public class FileServerItem
             MaxFileSize = MaxFileSize,
             TryFiles = TryFiles,
             Browse = Browse,
-            PreCompressed = PreCompressed
+            MaxBrowseEntries = MaxBrowseEntries,
+            PreCompressed = PreCompressed,
+            FollowLinks = FollowLinks,
+            ShowHidden = ShowHidden,
+            CacheControl = CacheControl,
+            DeniedExtensions = new HashSet<string>(DeniedExtensions, StringComparer.OrdinalIgnoreCase)
         };
     }
+
+    internal static HashSet<string> CreateDefaultDeniedExtensions() => new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".config", ".cs", ".csproj", ".sln", ".user", ".env", ".key", ".pem", ".pfx",
+        ".p12", ".db", ".sqlite", ".sqlite3", ".duckdb", ".log", ".bak"
+    };
 }

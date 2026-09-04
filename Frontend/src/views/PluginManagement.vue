@@ -11,6 +11,9 @@ const router = useRouter()
 const plugins = ref<PluginItem[]>([])
 const loading = ref(true)
 const toggling = ref<string | null>(null)
+const packageInput = ref<HTMLInputElement | null>(null)
+const installingPackage = ref(false)
+const rollingBack = ref<string | null>(null)
 
 // =============== 配置编辑数据结构 ===============
 interface SimpleItem { type: 'simple'; key: string; value: string; defaultValue: string }
@@ -259,6 +262,34 @@ const togglePlugin = async (plugin: PluginItem) => {
     showError(error?.response?.data?.message || error?.message || '操作失败')
   } finally {
     toggling.value = null
+  }
+}
+
+const installPackage = async (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  installingPackage.value = true
+  try {
+    const result = await pluginApi.installPackage(file)
+    result.success ? showSuccess(result.message || '插件包已安装，重启后生效') : showError(result.message || '安装失败')
+  } catch (error: any) {
+    showError(error?.response?.data?.message || error?.message || '安装失败')
+  } finally {
+    installingPackage.value = false
+    input.value = ''
+  }
+}
+
+const rollbackPlugin = async (plugin: PluginItem) => {
+  rollingBack.value = plugin.id
+  try {
+    const result = await pluginApi.rollback(plugin.id)
+    result.success ? showSuccess(result.message || '已切换回滚版本，重启后生效') : showError(result.message || '回滚失败')
+  } catch (error: any) {
+    showError(error?.response?.data?.message || error?.message || '回滚失败')
+  } finally {
+    rollingBack.value = null
   }
 }
 
@@ -696,11 +727,17 @@ onMounted(loadPlugins)
         <h1 class="text-2xl font-bold text-gray-100">插件管理</h1>
         <p class="text-sm text-gray-500 mt-1">管理已加载的插件，控制启用和禁用状态</p>
       </div>
-      <button @click="loadPlugins" :disabled="loading"
-        class="btn btn-sm btn-secondary flex items-center gap-1.5">
-        <span v-if="loading" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-        <span>{{ loading ? '加载中...' : '刷新' }}</span>
-      </button>
+      <div class="flex items-center gap-2">
+        <input ref="packageInput" type="file" accept=".lyplugin" class="hidden" @change="installPackage" />
+        <button class="btn btn-sm btn-primary" :disabled="installingPackage" @click="packageInput?.click()">
+          {{ installingPackage ? '验证安装中...' : '安装插件包' }}
+        </button>
+        <button @click="loadPlugins" :disabled="loading"
+          class="btn btn-sm btn-secondary flex items-center gap-1.5">
+          <span v-if="loading" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+          <span>{{ loading ? '加载中...' : '刷新' }}</span>
+        </button>
+      </div>
     </div>
 
     <!-- 加载中 -->
@@ -743,6 +780,10 @@ onMounted(loadPlugins)
             </div>
           </div>
           <div class="flex items-center gap-3 flex-shrink-0 pt-1">
+            <button v-if="!plugin.isSystem" @click="rollbackPlugin(plugin)" :disabled="rollingBack === plugin.id"
+              class="text-xs text-gray-400 hover:text-primary-400 disabled:opacity-50" title="切换到上一安装版本，重启后生效">
+              {{ rollingBack === plugin.id ? '回滚中...' : '回滚' }}
+            </button>
             <!-- 插件操作按钮 -->
             <button v-for="action in (plugin.actions || [])" :key="action.id"
               @click="executePluginAction(plugin, action)"

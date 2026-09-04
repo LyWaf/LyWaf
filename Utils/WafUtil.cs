@@ -2,6 +2,7 @@ using LyWaf.Services;
 using LyWaf.Services.ErrorTemplate;
 using LyWaf.Services.Statistic;
 using LyWaf.Shared;
+using LyWaf.Services.RuntimeState;
 
 namespace LyWaf.Utils;
 
@@ -41,6 +42,7 @@ public class WafUtil
             }
         }
         SharedData.ClientFb.AddOrUpdate(ip, reason, timeout);
+        ServiceLocator.GetService<IRuntimeStateStore>()?.Set("ip.blocked", ip, reason, timeout);
         
         // 记录攻击IP（封禁的IP视为攻击来源）
         if (isAttack)
@@ -56,6 +58,9 @@ public class WafUtil
     public static string? GetFbReason(string ip)
     {
         SharedData.ClientFb.TryGetValue(ip, out var reason);
+        if (reason == null && ServiceLocator.GetService<IRuntimeStateStore>() is { } state
+            && state.TryGet<string>("ip.blocked", ip, out var distributedReason))
+            reason = distributedReason;
         return reason;
     }
 

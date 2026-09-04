@@ -2,6 +2,7 @@ using LyWaf.Shared;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
 using NLog;
+using LyWaf.Services.Metrics;
 
 namespace LyWaf.Services.DuckDb;
 
@@ -13,6 +14,7 @@ public class StatisticFlushService : BackgroundService
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly IDuckDbService _db;
     private readonly DuckDbOptions _options;
+    private readonly PrometheusMetrics _metrics;
 
     // 跟踪上次刷写的安全事件时间片时间，避免重复写入
     private DateTime _lastFlushedSlotTime = DateTime.MinValue;
@@ -20,10 +22,11 @@ public class StatisticFlushService : BackgroundService
     // FinalFlush 完成后置为 true，阻止后续循环再次刷写
     private volatile bool _finalFlushed;
 
-    public StatisticFlushService(IDuckDbService db, IOptions<DuckDbOptions> options)
+    public StatisticFlushService(IDuckDbService db, IOptions<DuckDbOptions> options, PrometheusMetrics metrics)
     {
         _db = db;
         _options = options.Value;
+        _metrics = metrics;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -60,9 +63,11 @@ public class StatisticFlushService : BackgroundService
                 }
             }
         }
-        catch (Exception e)
+        catch (Exception ex)
         {
+            _logger.Error(ex, "DuckDB 后台刷写服务启动失败");
             _db.IsEnabled = false;
+            _metrics.SetDuckDbEnabled(false);
         }
     }
 
@@ -88,21 +93,40 @@ public class StatisticFlushService : BackgroundService
         }
     }
 
+    /// <summary>
+    /// 先等待周期刷写循环结束，再执行唯一一次最终刷写，避免关闭时并发使用 DuckDB 连接。
+    /// </summary>
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken);
+        if (!_finalFlushed) FinalFlush();
+    }
+
     private void FlushAll()
     {
-        FlushTrafficSnapshot();
-        FlushQpsSnapshot();
-        FlushBandwidthSnapshot();
-        FlushSecurityCounters();
-        FlushSecurityTimeSlots();
-        FlushSecurityAttackSources();
-        FlushGeoTraffic();
-        FlushApiTimings();
-        FlushEndpointStats();
-        FlushInterceptEvents();
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            FlushTrafficSnapshot();
+            FlushQpsSnapshot();
+            FlushBandwidthSnapshot();
+            FlushSecurityCounters();
+            FlushSecurityTimeSlots();
+            FlushSecurityAttackSources();
+            FlushGeoTraffic();
+            FlushApiTimings();
+            FlushEndpointStats();
+            FlushInterceptEvents();
 
-        // 合并 WAL 进主库，防止 WAL 无限增长导致下次启动重放缓慢
-        _db.Checkpoint();
+            // 合并 WAL 进主库，防止 WAL 无限增长导致下次启动重放缓慢
+            _db.Checkpoint();
+            _metrics.ObserveDuckDbOperation("flush", true, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
+        }
+        catch
+        {
+            _metrics.ObserveDuckDbOperation("flush", false, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
+            throw;
+        }
     }
 
     // ===================== Traffic =====================

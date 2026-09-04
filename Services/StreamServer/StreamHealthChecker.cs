@@ -10,6 +10,7 @@ namespace LyWaf.Services.StreamServer;
 /// </summary>
 public class UpstreamHealth
 {
+    internal object Gate { get; } = new();
     /// <summary>
     /// 上游服务器地址
     /// </summary>
@@ -44,6 +45,12 @@ public class UpstreamHealth
     /// 最后错误信息
     /// </summary>
     public string? LastError { get; set; }
+
+    internal UpstreamHealth Snapshot() => new()
+    {
+        Upstream = Upstream, IsHealthy = IsHealthy, FailureCount = FailureCount, SuccessCount = SuccessCount,
+        LastCheckTime = LastCheckTime, LastCheckResult = LastCheckResult, LastError = LastError
+    };
 }
 
 /// <summary>
@@ -56,6 +63,7 @@ public class StreamHealthChecker : IDisposable
 
     private readonly StreamServerOptions _options;
     private readonly ConcurrentDictionary<string, UpstreamHealth> _healthStatus = new();
+    private readonly HashSet<string> _passiveOnly = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _cts = new();
     private Task? _checkTask;
     private bool _disposed;
@@ -74,14 +82,18 @@ public class StreamHealthChecker : IDisposable
             return;
 
         // 收集所有需要检查的上游服务器
-        var allUpstreams = new HashSet<string>();
+        var allUpstreams = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var tcpUpstreams = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var udpUpstreams = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var stream in _options.Streams.Values)
         {
-            foreach (var upstream in stream.Upstreams)
+            foreach (var upstream in stream.Upstreams.Concat(stream.SniUpstreams.Values.SelectMany(static value => value)))
             {
                 allUpstreams.Add(upstream);
+                if (stream.Protocol == StreamProtocol.Udp) udpUpstreams.Add(upstream); else tcpUpstreams.Add(upstream);
             }
         }
+        foreach (var upstream in udpUpstreams.Except(tcpUpstreams)) _passiveOnly.Add(upstream);
 
         // 初始化健康状态
         foreach (var upstream in allUpstreams)
@@ -105,7 +117,8 @@ public class StreamHealthChecker : IDisposable
     public void Stop()
     {
         _cts.Cancel();
-        _checkTask?.Wait(TimeSpan.FromSeconds(5));
+        try { _checkTask?.Wait(TimeSpan.FromSeconds(5)); }
+        catch (AggregateException ex) when (ex.InnerExceptions.All(static inner => inner is OperationCanceledException)) { }
         _logger.Info("Stream 健康检查已停止");
     }
 
@@ -116,7 +129,7 @@ public class StreamHealthChecker : IDisposable
     {
         if (_healthStatus.TryGetValue(upstream, out var health))
         {
-            return health.IsHealthy;
+            lock (health.Gate) return health.IsHealthy;
         }
         return true; // 未知的上游默认认为健康
     }
@@ -142,7 +155,10 @@ public class StreamHealthChecker : IDisposable
     /// </summary>
     public Dictionary<string, UpstreamHealth> GetAllHealthStatus()
     {
-        return new Dictionary<string, UpstreamHealth>(_healthStatus);
+        return _healthStatus.ToDictionary(pair => pair.Key, pair =>
+        {
+            lock (pair.Value.Gate) return pair.Value.Snapshot();
+        });
     }
 
     /// <summary>
@@ -152,6 +168,8 @@ public class StreamHealthChecker : IDisposable
     {
         if (_healthStatus.TryGetValue(upstream, out var health))
         {
+            lock (health.Gate)
+            {
             health.SuccessCount = 0;
             health.FailureCount++;
             health.LastError = error;
@@ -164,6 +182,7 @@ public class StreamHealthChecker : IDisposable
                     _logger.Warn("Stream 上游 {Upstream} 标记为不健康: {Error}", upstream, error ?? "连接失败");
                 }
             }
+            }
         }
     }
 
@@ -174,6 +193,8 @@ public class StreamHealthChecker : IDisposable
     {
         if (_healthStatus.TryGetValue(upstream, out var health))
         {
+            lock (health.Gate)
+            {
             health.FailureCount = 0;
             health.SuccessCount++;
             health.LastError = null;
@@ -185,6 +206,7 @@ public class StreamHealthChecker : IDisposable
                     health.IsHealthy = true;
                     _logger.Info("Stream 上游 {Upstream} 恢复健康", upstream);
                 }
+            }
             }
         }
     }
@@ -232,6 +254,7 @@ public class StreamHealthChecker : IDisposable
 
         foreach (var kvp in _healthStatus)
         {
+            if (_passiveOnly.Contains(kvp.Key)) continue;
             checkTasks.Add(CheckUpstreamAsync(kvp.Key, kvp.Value, cancellationToken));
         }
 
@@ -299,31 +322,31 @@ public class StreamHealthChecker : IDisposable
         }
 
         // 更新健康状态
-        health.LastCheckTime = DateTime.UtcNow;
-        health.LastCheckResult = success;
-
-        if (success)
+        lock (health.Gate)
         {
-            health.FailureCount = 0;
-            health.SuccessCount++;
-            health.LastError = null;
-
-            if (!health.IsHealthy && health.SuccessCount >= _options.HealthyThreshold)
+            health.LastCheckTime = DateTime.UtcNow;
+            health.LastCheckResult = success;
+            if (success)
             {
-                health.IsHealthy = true;
-                _logger.Info("Stream 上游 {Upstream} 恢复健康", upstream);
+                health.FailureCount = 0;
+                health.SuccessCount++;
+                health.LastError = null;
+                if (!health.IsHealthy && health.SuccessCount >= _options.HealthyThreshold)
+                {
+                    health.IsHealthy = true;
+                    _logger.Info("Stream 上游 {Upstream} 恢复健康", upstream);
+                }
             }
-        }
-        else
-        {
-            health.SuccessCount = 0;
-            health.FailureCount++;
-            health.LastError = error;
-
-            if (health.IsHealthy && health.FailureCount >= _options.UnhealthyThreshold)
+            else
             {
-                health.IsHealthy = false;
-                _logger.Warn("Stream 上游 {Upstream} 标记为不健康: {Error}", upstream, error);
+                health.SuccessCount = 0;
+                health.FailureCount++;
+                health.LastError = error;
+                if (health.IsHealthy && health.FailureCount >= _options.UnhealthyThreshold)
+                {
+                    health.IsHealthy = false;
+                    _logger.Warn("Stream 上游 {Upstream} 标记为不健康: {Error}", upstream, error);
+                }
             }
         }
     }

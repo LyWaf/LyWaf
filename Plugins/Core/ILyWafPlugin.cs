@@ -40,6 +40,24 @@ public enum PluginState
     Error
 }
 
+/// <summary>Declares privileged host capabilities a plugin intends to use.</summary>
+[Flags]
+public enum PluginPermission
+{
+    /// <summary>No privileged capability is requested.</summary>
+    None = 0,
+    /// <summary>Allows outbound network access through host-provided clients.</summary>
+    Network = 1,
+    /// <summary>Allows persistence inside the plugin's dedicated data directory.</summary>
+    DataDirectory = 2,
+    /// <summary>Allows handling requests through the unified console API proxy.</summary>
+    ConsoleApi = 4,
+    /// <summary>Allows reading configuration values classified as sensitive.</summary>
+    SensitiveConfiguration = 8,
+    /// <summary>Represents every currently defined permission.</summary>
+    All = Network | DataDirectory | ConsoleApi | SensitiveConfiguration
+}
+
 /// <summary>
 /// 插件元数据
 /// </summary>
@@ -53,6 +71,12 @@ public class PluginMetadata
     
     /// <summary>插件版本</summary>
     public string Version { get; init; } = "1.0.0";
+
+    /// <summary>Gets the schema version of persistent plugin data.</summary>
+    public int DataVersion { get; init; }
+
+    /// <summary>Gets the frontend asset version that must match this backend plugin.</summary>
+    public string? FrontendVersion { get; init; }
     
     /// <summary>插件描述</summary>
     public string Description { get; init; } = "";
@@ -68,6 +92,9 @@ public class PluginMetadata
     
     /// <summary>是否默认启用</summary>
     public bool EnabledByDefault { get; init; } = true;
+
+    /// <summary>Gets the privileged capabilities required before the plugin can be enabled.</summary>
+    public PluginPermission RequestedPermissions { get; init; } = PluginPermission.None;
 
     /// <summary>
     /// 插件默认配置选项实例
@@ -103,12 +130,32 @@ public class PluginAction
     public string? Path { get; init; }
 }
 
+/// <summary>Provides ordered migrations for a plugin's persistent data directory.</summary>
+public interface IPluginDataMigrationProvider
+{
+    /// <summary>Gets migrations ordered or orderable by their source version.</summary>
+    IReadOnlyList<IPluginDataMigration> GetMigrations();
+}
+
+/// <summary>Moves plugin-owned persistent data between two adjacent schema versions.</summary>
+public interface IPluginDataMigration
+{
+    /// <summary>Gets the source data schema version.</summary>
+    int FromVersion { get; }
+    /// <summary>Gets the destination data schema version.</summary>
+    int ToVersion { get; }
+    /// <summary>Runs the migration using storage constrained to the plugin directory.</summary>
+    Task MigrateAsync(IPluginStorage storage, CancellationToken cancellationToken);
+}
+
 /// <summary>
 /// 插件操作执行结果
 /// </summary>
 public class PluginActionResult
 {
+    /// <summary>获取或设置操作是否成功。</summary>
     public bool Success { get; set; } = true;
+    /// <summary>获取或设置供控制台展示的结果消息。</summary>
     public string? Message { get; set; }
     /// <summary>JSON 可序列化的数据（具体结构取决于操作类型）</summary>
     public object? Data { get; set; }
@@ -183,6 +230,10 @@ public interface ILyWafPlugin
 /// <summary>由插件实现，用于接收插件系统统一代理入口分派的控制台请求。</summary>
 public interface IPluginApiHandler
 {
+    /// <summary>处理插件统一代理入口转发的相对路径请求。</summary>
+    /// <param name="path">去除插件代理前缀后的相对路径。</param>
+    /// <param name="context">当前 HTTP 请求上下文。</param>
+    /// <returns>可由 ASP.NET Core 执行的响应结果。</returns>
     Task<IResult> HandleApiAsync(string path, HttpContext context);
 }
 
@@ -191,12 +242,16 @@ public interface IPluginApiHandler
 /// </summary>
 public abstract class LyWafPluginBase : ILyWafPlugin
 {
+    /// <inheritdoc />
     public abstract PluginMetadata Metadata { get; }
-    
+
+    /// <inheritdoc />
     public PluginState State { get; protected set; } = PluginState.Unloaded;
-    
+
+    /// <summary>获取插件初始化后可用的宿主上下文。</summary>
     protected IPluginContext? Context { get; private set; }
-    
+
+    /// <inheritdoc />
     public virtual void ConfigureServices(IServiceCollection services, IConfiguration configuration)
     {
         // 如果设置了 DefaultOptions，自动注册 services.Configure<T>(section)
@@ -214,6 +269,7 @@ public abstract class LyWafPluginBase : ILyWafPlugin
         }
     }
 
+    /// <inheritdoc />
     public virtual Task InitializeAsync(IPluginContext context)
     {
         Context = context;
@@ -244,22 +300,26 @@ public abstract class LyWafPluginBase : ILyWafPlugin
         configuration.GetSection($"Plugins:{Metadata.Id}").Bind(options);
     }
     
+    /// <inheritdoc />
     public virtual void ConfigureMiddleware(IApplicationBuilder app)
     {
         // 默认不配置中间件
     }
     
+    /// <inheritdoc />
     public virtual void ConfigureProxyPipeline(IApplicationBuilder proxyApp)
     {
         // 默认不配置代理管道
     }
     
+    /// <inheritdoc />
     public virtual Task StartAsync(CancellationToken cancellationToken)
     {
         State = PluginState.Running;
         return Task.CompletedTask;
     }
     
+    /// <inheritdoc />
     public virtual Task StopAsync(CancellationToken cancellationToken)
     {
         State = PluginState.Stopped;

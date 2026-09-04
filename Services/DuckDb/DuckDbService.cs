@@ -1,6 +1,7 @@
 using DuckDB.NET.Data;
 using Microsoft.Extensions.Options;
 using NLog;
+using LyWaf.Services.Metrics;
 
 namespace LyWaf.Services.DuckDb;
 
@@ -15,13 +16,16 @@ public class DuckDbService : IDuckDbService
     private volatile DuckDBConnection? _connection;
     private readonly object _lock = new();
     private bool _disposed;
+    private readonly PrometheusMetrics _metrics;
 
     public bool IsEnabled { get; set; }
 
-    public DuckDbService(IOptions<DuckDbOptions> options)
+    public DuckDbService(IOptions<DuckDbOptions> options, PrometheusMetrics metrics)
     {
         _options = options.Value;
+        _metrics = metrics;
         IsEnabled = _options.Enabled;
+        _metrics.SetDuckDbEnabled(IsEnabled);
 
         if (!_options.Enabled)
         {
@@ -44,6 +48,7 @@ public class DuckDbService : IDuckDbService
             if (_connection != null || !IsEnabled || _disposed) return;
             try
             {
+                var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
                 // 确保目录存在
                 var dir = Path.GetDirectoryName(Path.GetFullPath(_options.DatabasePath));
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -53,12 +58,15 @@ public class DuckDbService : IDuckDbService
                 var conn = new DuckDBConnection($"Data Source={_options.DatabasePath}");
                 conn.Open();
                 _connection = conn;
+                _metrics.ObserveDuckDbOperation("open", true, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
                 _logger.Info("DuckDB 连接已建立: {} (Open 耗时 {}ms)", _options.DatabasePath, sw.ElapsedMilliseconds);
             }
             catch (Exception ex)
             {
+                _metrics.ObserveDuckDbOperation("open", false, TimeSpan.Zero);
                 _logger.Error(ex, "DuckDB 初始化失败，将以纯内存模式运行");
                 IsEnabled = false;
+                _metrics.SetDuckDbEnabled(false);
                 _options.Enabled = false;
                 _connection = null;
             }
@@ -76,14 +84,17 @@ public class DuckDbService : IDuckDbService
     public void Checkpoint()
     {
         if (!IsEnabled || _connection == null || _disposed) return;
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
             using var cmd = _connection.CreateCommand();
             cmd.CommandText = "CHECKPOINT";
             cmd.ExecuteNonQuery();
+            _metrics.ObserveDuckDbOperation("checkpoint", true, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
         }
         catch (Exception ex)
         {
+            _metrics.ObserveDuckDbOperation("checkpoint", false, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
             // CHECKPOINT 可能因存在未完成事务而失败，下个周期会重试，记 Warn 即可
             _logger.Warn(ex, "DuckDB CHECKPOINT 失败");
         }
@@ -95,6 +106,7 @@ public class DuckDbService : IDuckDbService
         EnsureConnection();
         if (_connection == null) return;
 
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
             foreach (var sql in DuckDbSchema.CreateTableStatements)
@@ -112,9 +124,11 @@ public class DuckDbService : IDuckDbService
             }
 
             _logger.Info("DuckDB 表结构初始化完成");
+            _metrics.ObserveDuckDbOperation("schema", true, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
         }
         catch (Exception ex)
         {
+            _metrics.ObserveDuckDbOperation("schema", false, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
             _logger.Error(ex, "DuckDB Schema 初始化失败");
             throw;
         }
