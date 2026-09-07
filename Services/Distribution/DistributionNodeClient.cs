@@ -13,7 +13,9 @@ public interface IDistributionNodeClient
 }
 
 /// <summary>使用带 HMAC 签名的 HTTP 请求实现节点间分发协议。</summary>
-public sealed class DistributionNodeClient(IOptionsMonitor<DistributionOptions> options) : IDistributionNodeClient
+public sealed class DistributionNodeClient(
+    IOptionsMonitor<DistributionOptions> options,
+    IHttpClientFactory clients) : IDistributionNodeClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -44,10 +46,26 @@ public sealed class DistributionNodeClient(IOptionsMonitor<DistributionOptions> 
         };
         request.Content.Headers.ContentType = new("application/json");
         DistributionAuthentication.Sign(request, operation, secret, body);
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Clamp(current.RequestTimeoutSeconds, 1, 120)) };
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        var responseBody = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-        if (responseBody.Length > 1024 * 1024) throw new InvalidDataException($"节点 {nodeId} 响应过大");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(current.RequestTimeoutSeconds, 1, 120)));
+        using var response = await clients.CreateClient("distribution-node")
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+        response.EnsureSuccessStatusCode();
+        const int maxResponseBytes = 1024 * 1024;
+        if (response.Content.Headers.ContentLength > maxResponseBytes)
+            throw new InvalidDataException($"节点 {nodeId} 响应过大");
+        await using var responseStream = await response.Content.ReadAsStreamAsync(timeout.Token);
+        using var output = new MemoryStream();
+        var buffer = new byte[16 * 1024];
+        while (output.Length <= maxResponseBytes)
+        {
+            var remaining = Math.Min(buffer.Length, maxResponseBytes + 1 - (int)output.Length);
+            var read = await responseStream.ReadAsync(buffer.AsMemory(0, remaining), timeout.Token);
+            if (read == 0) break;
+            output.Write(buffer, 0, read);
+        }
+        if (output.Length > maxResponseBytes) throw new InvalidDataException($"节点 {nodeId} 响应过大");
+        var responseBody = output.ToArray();
         var result = JsonSerializer.Deserialize<TResponse>(responseBody, JsonOptions);
         if (result == null) throw new InvalidDataException($"节点 {nodeId} 返回空响应");
         return result;

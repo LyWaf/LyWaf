@@ -1,0 +1,10 @@
+[
+  { "name": "lywaf-pure-http1", "url": "http://127.0.0.1:19100", "protocol": "1.1", "metricsUrl": "http://127.0.0.1:17100/metrics" },
+  { "name": "lywaf-pure-http2", "url": "https://localhost:19101", "protocol": "2", "insecure": true, "metricsUrl": "http://127.0.0.1:17101/metrics" },
+  { "name": "lywaf-waf", "url": "http://127.0.0.1:19102", "protocol": "1.1", "metricsUrl": "http://127.0.0.1:17102/metrics" },
+  { "name": "lywaf-logging", "url": "http://127.0.0.1:19103", "protocol": "1.1", "metricsUrl": "http://127.0.0.1:17103/metrics" },
+  { "name": "lywaf-compression", "url": "http://127.0.0.1:19104", "protocol": "1.1", "metricsUrl": "http://127.0.0.1:17104/metrics" },
+  { "name": "lywaf-web-tamper", "url": "http://127.0.0.1:19105", "protocol": "1.1", "metricsUrl": "http://127.0.0.1:17105/metrics" },
+  { "name": "nginx", "url": "http://127.0.0.1:19200", "protocol": "1.1" },
+  { "name": "caddy", "url": "http://127.0.0.1:19300", "protocol": "1.1" }
+]

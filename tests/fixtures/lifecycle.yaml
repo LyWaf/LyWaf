@@ -1,0 +1,22 @@
+WafInfos:
+  Listens:
+    - Host: 127.0.0.1
+      Port: 18443
+      IsHttps: false
+  ControlListen:
+    Host: 127.0.0.1
+    Port: 18444
+    IsHttps: false
+Plugins:
+  Enabled: false
+DuckDb:
+  Enabled: false
+ProxyServer:
+  Enabled: false
+StreamServer:
+  Enabled: false
+Acme:
+  Enabled: false
+Lifecycle:
+  DrainTimeoutSeconds: 2
+  ShutdownTimeoutSeconds: 5

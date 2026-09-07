@@ -1,0 +1,39 @@
+WafInfos:
+  Listens:
+    - Host: 127.0.0.1
+      Port: 19500
+      IsHttps: false
+  ControlListen:
+    Host: 127.0.0.1
+    Port: 19510
+    IsHttps: false
+ReverseProxy:
+  Routes:
+    discovery-route:
+      ClusterId: discovery-cluster
+      Match:
+        Path: "{**catch-all}"
+  Clusters:
+    discovery-cluster:
+      Destinations:
+        fallback:
+          Address: http://127.0.0.1:19509
+ServiceDiscovery:
+  Enabled: true
+  DebounceMilliseconds: 100
+  Providers:
+    runtime-file:
+      Type: File
+      ClusterId: discovery-cluster
+      Path: tests/fixtures/discovery-active.json
+      RefreshSeconds: 1
+Plugins:
+  Enabled: false
+DuckDb:
+  Enabled: false
+ProxyServer:
+  Enabled: false
+StreamServer:
+  Enabled: false
+Acme:
+  Enabled: false

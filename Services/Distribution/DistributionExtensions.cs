@@ -9,6 +9,7 @@ public static class DistributionExtensions
     public static IServiceCollection AddLyWafDistribution(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<DistributionOptions>(configuration.GetSection("Distribution"));
+        services.AddHttpClient("distribution-node");
         services.AddSingleton<DistributionAuthentication>();
         services.AddSingleton<DistributionNodeService>();
         services.AddSingleton<IDistributionNodeClient, DistributionNodeClient>();

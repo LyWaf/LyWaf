@@ -145,8 +145,15 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
     {
         validator(targetPath, content);
         await _gate.WaitAsync(cancellationToken);
+        var targetExisted = false;
+        string? originalContent = null;
+        string? archivedContentPath = null;
         try
         {
+            targetExisted = File.Exists(targetPath);
+            originalContent = targetExisted
+                ? await File.ReadAllTextAsync(targetPath, cancellationToken)
+                : null;
             var versions = await ReadIndexAsync(cancellationToken);
             var previous = versions.Where(x => PathEquals(x.TargetPath, targetPath))
                 .OrderByDescending(x => x.CreatedAt).FirstOrDefault();
@@ -162,11 +169,27 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
 
             var historyDirectory = HistoryDirectory();
             Directory.CreateDirectory(historyDirectory);
-            await AtomicWriteAsync(Path.Combine(historyDirectory, info.ContentFile), content, cancellationToken);
+            archivedContentPath = Path.Combine(historyDirectory, info.ContentFile);
+            await AtomicWriteAsync(archivedContentPath, content, cancellationToken);
             versions.Add(info);
-            await PruneAndWriteIndexAsync(versions, cancellationToken);
             await AtomicWriteAsync(targetPath, content, cancellationToken);
+            try
+            {
+                await PruneAndWriteIndexAsync(versions, cancellationToken);
+            }
+            catch
+            {
+                if (targetExisted) await AtomicWriteAsync(targetPath, originalContent!, CancellationToken.None);
+                else if (File.Exists(targetPath)) File.Delete(targetPath);
+                throw;
+            }
             return info;
+        }
+        catch
+        {
+            if (archivedContentPath is not null && File.Exists(archivedContentPath))
+                File.Delete(archivedContentPath);
+            throw;
         }
         finally { _gate.Release(); }
     }
@@ -214,13 +237,14 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
     private async Task PruneAndWriteIndexAsync(List<ConfigVersionInfo> versions, CancellationToken cancellationToken)
     {
         var ordered = versions.OrderByDescending(x => x.CreatedAt).ToList();
-        foreach (var removed in ordered.Skip(MaxVersions))
+        var removedVersions = ordered.Skip(MaxVersions).ToArray();
+        var retained = ordered.Take(MaxVersions).OrderBy(x => x.CreatedAt).ToList();
+        await AtomicWriteAsync(IndexPath(), JsonSerializer.Serialize(retained, JsonOptions), cancellationToken);
+        foreach (var removed in removedVersions)
         {
             var path = Path.Combine(HistoryDirectory(), removed.ContentFile);
             if (File.Exists(path)) File.Delete(path);
         }
-        var retained = ordered.Take(MaxVersions).OrderBy(x => x.CreatedAt).ToList();
-        await AtomicWriteAsync(IndexPath(), JsonSerializer.Serialize(retained, JsonOptions), cancellationToken);
     }
 
     private static async Task AtomicWriteAsync(string path, string content, CancellationToken cancellationToken)

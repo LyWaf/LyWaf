@@ -1,0 +1,28 @@
+WafInfos:
+  Listens:
+    - Host: 127.0.0.1
+      Port: 19700
+      IsHttps: false
+  ControlListen:
+    Host: 127.0.0.1
+    Port: 19710
+    IsHttps: false
+RuntimeState:
+  Enabled: true
+  NodeId: state-node-a
+  SharedSecret: runtime-state-test-secret
+  StateDirectory: temp/runtime-state-node-a
+  QueueCapacity: 1000
+  Peers:
+    state-node-b:
+      Endpoint: http://127.0.0.1:19730
+Plugins:
+  Enabled: false
+DuckDb:
+  Enabled: false
+ProxyServer:
+  Enabled: false
+StreamServer:
+  Enabled: false
+Acme:
+  Enabled: false

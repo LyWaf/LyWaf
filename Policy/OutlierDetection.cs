@@ -79,8 +79,6 @@ public sealed class OutlierDetectionRegistry(PrometheusMetrics metrics)
 
                 _consecutiveFailures = connectionFailure ? _consecutiveFailures + 1 : 0;
                 _consecutive5xx = serverError ? _consecutive5xx + 1 : 0;
-                if (!failed) { _reason = null; _ejectedUntil = null; }
-
                 if (_consecutiveFailures >= policy.ConsecutiveFailures) return "consecutive_connection_failures";
                 if (_consecutive5xx >= policy.Consecutive5xx) return "consecutive_5xx";
                 if (_windowCount >= policy.MinimumVolume && _windowFailures * 100 >= _windowCount * policy.ErrorRatePercent)

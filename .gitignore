@@ -20,3 +20,19 @@ temp/*
 config.nginx.ly
 logs/*
 certs/*
+upgrades/
+.lywaf-distribution/
+.lywaf-runtime-state/
+.codex-build
+artifacts/
+# Local benchmark SDK/NuGet state and generated results
+benchmarks/.appdata/
+benchmarks/.artifacts/
+benchmarks/results/
+benchmarks/**/bin/
+benchmarks/**/obj/
+.pnpm-store/*
+tests/**/bin/
+tests/**/obj/
+sdk/**/bin/
+sdk/**/obj/

@@ -36,8 +36,25 @@ public sealed class ConfigurationLifecycleService
         IReadOnlyDictionary<string, string?> before)
     {
         root.Reload();
-        Validate(root);
-        return Analyze(before, Capture(root));
+        try
+        {
+            Validate(root);
+            return Analyze(before, Capture(root));
+        }
+        catch
+        {
+            RestoreActiveSnapshot(root, before);
+            throw;
+        }
+    }
+
+    private static void RestoreActiveSnapshot(
+        IConfigurationRoot root,
+        IReadOnlyDictionary<string, string?> snapshot)
+    {
+        var currentKeys = root.AsEnumerable().Select(static item => item.Key);
+        foreach (var key in currentKeys.Concat(snapshot.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
+            root[key] = snapshot.GetValueOrDefault(key);
     }
 
     /// <summary>验证当前配置中会影响路由选择和安全匹配的关键约束。</summary>

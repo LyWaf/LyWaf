@@ -1,0 +1,35 @@
+WafInfos:
+  Listens:
+    - Host: 127.0.0.1
+      Port: 19620
+      IsHttps: false
+  ControlListen:
+    Host: 127.0.0.1
+    Port: 19621
+    IsHttps: false
+Distribution:
+  Enabled: true
+  Role: Controller
+  NodeId: runtime-controller
+  SharedSecret: runtime-test-secret
+  StateDirectory: temp/distribution-controller-state
+  RequestTimeoutSeconds: 5
+  Nodes:
+    runtime-node:
+      Endpoint: http://127.0.0.1:19610
+  Permissions:
+    GlobalOperators:
+      - LyWaf
+    NodeOperators:
+      runtime-node:
+        - node-operator
+Plugins:
+  Enabled: false
+DuckDb:
+  Enabled: false
+ProxyServer:
+  Enabled: false
+StreamServer:
+  Enabled: false
+Acme:
+  Enabled: false

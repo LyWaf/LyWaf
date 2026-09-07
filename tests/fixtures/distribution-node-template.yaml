@@ -1,0 +1,27 @@
+WafInfos:
+  Listens:
+    - Host: 127.0.0.1
+      Port: 19600
+      IsHttps: false
+  ControlListen:
+    Host: 127.0.0.1
+    Port: 19610
+    IsHttps: false
+Distribution:
+  Enabled: true
+  Role: Node
+  NodeId: runtime-node
+  SharedSecret: runtime-test-secret
+  StateDirectory: temp/distribution-node-state
+  MaxConfigBytes: 4194304
+  AllowedClockSkewSeconds: 60
+Plugins:
+  Enabled: false
+DuckDb:
+  Enabled: false
+ProxyServer:
+  Enabled: false
+StreamServer:
+  Enabled: false
+Acme:
+  Enabled: false
