@@ -4,7 +4,6 @@ using System.Text.RegularExpressions;
 using System.Threading.RateLimiting;
 using LyWaf.Utils;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json.Linq;
@@ -74,6 +73,7 @@ public class ProtectService : IProtectService
 {
     private ProtectOptions _options;
     private readonly IMemoryCache _cache;
+    private readonly IRequestInspectionService _inspection;
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
 
     private List<Regex> argsRegexes;
@@ -89,12 +89,13 @@ public class ProtectService : IProtectService
     private List<string> _postFilePatterns = [];
 
     public ProtectService(
-        IOptionsMonitor<ProtectOptions> options, IMemoryCache cache)
+        IOptionsMonitor<ProtectOptions> options, IMemoryCache cache, IRequestInspectionService inspection)
     {
         argsRegexes = [];
         postRegexes = [];
         _options = options.CurrentValue;
         _cache = cache;
+        _inspection = inspection;
         // 可以订阅变更，但需注意生命周期和内存泄漏
         options.OnChange(newConfig =>
         {
@@ -267,15 +268,13 @@ public class ProtectService : IProtectService
         {
             return null;
         }
-        foreach (var q in context.Request.Query)
+        var snapshot = await _inspection.InspectAsync(context, context.RequestAborted);
+        foreach (var value in snapshot.QueryValues)
         {
-            foreach (var v in q.Value)
+            var reason = await CheckArgsRegexMatch(value);
+            if (reason != null)
             {
-                var reason = await CheckArgsRegexMatch(v ?? "");
-                if (reason != null)
-                {
-                    return reason;
-                }
+                return reason;
             }
         }
         return null;
@@ -287,45 +286,13 @@ public class ProtectService : IProtectService
         {
             return null;
         }
-        context.Request.EnableBuffering();
-        StreamReader sr = new(context.Request.Body);
-        var content = await sr.ReadToEndAsync();
-        context.Request.Body.Position = 0;
-        var contentType = context.Request.ContentType ?? "";
-        if (contentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase))
+        var snapshot = await _inspection.InspectAsync(context, context.RequestAborted);
+        foreach (var value in snapshot.BodyValues)
         {
-            try
+            var reason = await CheckPostRegexMatch(value);
+            if (reason != null)
             {
-                var obj = JObject.Parse(content);
-                foreach (JProperty targetProp in obj.Properties())
-                {
-                    var v = targetProp.Value.ToString();
-                    var reason = await CheckPostRegexMatch(v);
-                    if (reason != null)
-                    {
-                        return reason;
-                    }
-                }
-            }
-            catch (Exception)
-            {
-                // await context.Response.WriteAsync("不合法的JSON结构");
-                return null;
-            }
-        }
-        else if (contentType.StartsWith("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase))
-        {
-            var parsed = QueryHelpers.ParseQuery(content);
-            foreach (var q in parsed)
-            {
-                foreach (var v in q.Value)
-                {
-                    var reason = await CheckPostRegexMatch(v ?? "");
-                    if (reason != null)
-                    {
-                        return reason;
-                    }
-                }
+                return reason;
             }
         }
         return null;

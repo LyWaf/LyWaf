@@ -45,6 +45,7 @@ using LyWaf.Services.AuditLog;
 using LyWaf.Services.Metrics;
 using LyWaf.Services.RequestMirroring;
 using LyWaf.Services.ExternalAuthorization;
+using LyWaf.Control.Infrastructure;
 using LyWaf.Services.Protocols;
 using System.Net.Quic;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -1230,6 +1231,8 @@ public class Program
 
         builder.Services.Configure<WafInfoOptions>(builder.Configuration.GetSection("WafInfos"));
         builder.Services.Configure<ProtectOptions>(builder.Configuration.GetSection("Protect"));
+        builder.Services.Configure<LyWaf.Services.ResponseWaf.ResponseWafOptions>(builder.Configuration.GetSection("ResponseWaf"));
+        builder.Services.Configure<LyWaf.Services.AntiBot.AntiBotOptions>(builder.Configuration.GetSection("AntiBot"));
         builder.Services.Configure<SpeedLimitOptions>(builder.Configuration.GetSection("SpeedLimit"));
         builder.Services.Configure<FileProviderOptions>(builder.Configuration.GetSection("FileGlobal"));
         builder.Services.Configure<LyWaf.Services.Files.FileServerOptions>(builder.Configuration.GetSection("FileServer"));
@@ -1273,17 +1276,25 @@ public class Program
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton<LyWaf.Services.Configuration.ConfigVersionService>();
         builder.Services.AddSingleton<LyWaf.Services.Configuration.ConfigurationLifecycleService>();
+        builder.Services.AddSingleton<ControlConfigurationPatchService>();
         builder.Services.AddSingleton<LyWaf.Services.Lifecycle.GracefulShutdownCoordinator>();
         builder.Services.Configure<LyWaf.Services.Lifecycle.UpgradeOptions>(builder.Configuration.GetSection("Lifecycle:Upgrade"));
         builder.Services.AddSingleton<LyWaf.Services.Lifecycle.UpgradePackageService>();
         builder.Services.AddSingleton<IFileService, FileService>();
         builder.Services.AddSingleton<ISpeedLimitService, SpeedLimitService>();
         builder.Services.AddSingleton<IProtectService, ProtectService>();
+        builder.Services.AddSingleton<IRequestInspectionService, RequestInspectionService>();
+        builder.Services.AddSingleton<ISemanticThreatDetector, SemanticThreatDetector>();
+        builder.Services.AddSingleton<LyWaf.Services.ResponseWaf.IResponseWafDetector, LyWaf.Services.ResponseWaf.ResponseWafDetector>();
+        builder.Services.AddSingleton<LyWaf.Services.AntiBot.IAntiBotAnalyzer, LyWaf.Services.AntiBot.AntiBotAnalyzer>();
+        builder.Services.AddSingleton<LyWaf.Services.AntiBot.IAntiBotChallengeService, LyWaf.Services.AntiBot.AntiBotChallengeService>();
         builder.Services.AddSingleton<IStatisticService, StatisticService>();
         builder.Services.AddSingleton<ICaptchaService, CaptchaService>();
         builder.Services.AddSingleton<ICcRuleChecker, CcRuleChecker>();
         builder.Services.AddSingleton<IAccessControlService, AccessControlService>();
         builder.Services.AddSingleton<IIpGroupService, IpGroupService>();
+        builder.Services.Configure<RulePackageOptions>(builder.Configuration.GetSection("Protect:RulePackages"));
+        builder.Services.AddSingleton<IRulePackageService, RulePackageService>();
         builder.Services.AddSingleton<IWafRuleService, WafRuleService>();
         builder.Services.AddSingleton<IWafInfoService, WafInfoService>();
         builder.Services.AddSingleton<IAcmeService, AcmeService>();
@@ -1548,6 +1559,8 @@ public class Program
             proxyApp.UseMiddleware<ResponseCompressMiddleware>();
             // 缓存未压缩且经过内层安全响应处理的最终内容
             proxyApp.UseMiddleware<ResponseCacheMiddleware>();
+            // 在缓存写入前检查或脱敏上游响应，外层压缩随后处理最终内容。
+            proxyApp.UseMiddleware<LyWaf.Services.ResponseWaf.ResponseWafMiddleware>();
             // 高优先级插件（Highest, High）- 在核心中间件之前
             proxyApp.UseLyWafPluginsInProxyHigh();
             
@@ -1558,6 +1571,7 @@ public class Program
             // 自动 HTTPS 重定向
             proxyApp.UseMiddleware<AutoHttpsMiddleware>();
             proxyApp.UseMiddleware<WafControlMiddleware>();
+            proxyApp.UseMiddleware<LyWaf.Services.AntiBot.AntiBotMiddleware>();
             proxyApp.UseMiddleware<CaptchaMiddleware>();
             proxyApp.UseMiddleware<CcProtectionMiddleware>();
             proxyApp.UseMiddleware<ThrottledMiddleware>();

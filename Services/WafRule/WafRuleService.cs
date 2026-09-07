@@ -61,6 +61,7 @@ public class WafRuleService : IWafRuleService
     private readonly ICaptchaService _captchaService;
     private readonly IConfiguration _configuration;
     private readonly IRuntimeStateStore _runtimeState;
+    private readonly IRulePackageService? _rulePackages;
     private readonly object _lock = new();
 
     // 三个来源的规则列表
@@ -78,10 +79,15 @@ public class WafRuleService : IWafRuleService
     private static readonly ConcurrentDictionary<string, Regex> _regexCache = new();
 
     public WafRuleService(ICaptchaService captchaService, IConfiguration configuration, IRuntimeStateStore runtimeState)
+        : this(captchaService, configuration, runtimeState, null) { }
+
+    public WafRuleService(ICaptchaService captchaService, IConfiguration configuration, IRuntimeStateStore runtimeState,
+        IRulePackageService? rulePackages)
     {
         _captchaService = captchaService;
         _configuration = configuration;
         _runtimeState = runtimeState;
+        _rulePackages = rulePackages;
 
         // 监听 config.ly 变化，自动重新加载配置规则
         ChangeToken.OnChange(
@@ -201,6 +207,7 @@ public class WafRuleService : IWafRuleService
 
         List<WafCustomRule> rules;
         lock (_lock) rules = [.. _mergedRules];
+        if (_rulePackages != null) rules.AddRange(_rulePackages.GetRules(context));
 
         var enabledRules = rules
             .Where(r => r.Enabled)

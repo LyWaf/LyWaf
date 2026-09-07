@@ -13,7 +13,7 @@ using NLog;
 
 namespace LyWaf.Middleware;
 
-public class WafControlMiddleware(RequestDelegate next, IStatisticService statisticService, IProtectService protectService, ILyLogService logService, ICcRuleChecker ccRuleChecker, IWafRuleService wafRuleService, IAccessControlService accessControlService)
+public class WafControlMiddleware(RequestDelegate next, IStatisticService statisticService, IProtectService protectService, ILyLogService logService, ICcRuleChecker ccRuleChecker, IWafRuleService wafRuleService, IAccessControlService accessControlService, IRequestInspectionService inspectionService, ISemanticThreatDetector threatDetector)
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly RequestDelegate _next = next;
@@ -23,6 +23,8 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
     private readonly ICcRuleChecker _ccRuleChecker = ccRuleChecker;
     private readonly IWafRuleService _wafRuleService = wafRuleService;
     private readonly IAccessControlService _accessControlService = accessControlService;
+    private readonly IRequestInspectionService _inspectionService = inspectionService;
+    private readonly ISemanticThreatDetector _threatDetector = threatDetector;
 
     public async Task<bool> WhitePathCheck(HttpContext context)
     {
@@ -149,6 +151,41 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             {
                 await _next(context);
                 return;
+            }
+            if (protectService.GetOptions().RejectProtocolAnomalies)
+            {
+                var inspection = await _inspectionService.InspectAsync(context, context.RequestAborted);
+                if (inspection.ProtocolAnomalies.Count > 0)
+                {
+                    reason = $"协议异常: {inspection.ProtocolAnomalies[0]}";
+                    RecordWafHit(context, clientIp, reason);
+                    SetInterceptLogMark(context, reason);
+                    EnableCapture(context);
+                    await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason },
+                        isAttack: true, eventType: SecurityEventType.WafIntercept);
+                    return;
+                }
+            }
+            if (protectService.GetOptions().SemanticDetectionEnabled)
+            {
+                var inspection = await _inspectionService.InspectAsync(context, context.RequestAborted);
+                var finding = _threatDetector.Detect(inspection, context.Request.Path);
+                if (finding is not null)
+                {
+                    reason = $"{finding.Category}: {finding.RuleId} ({finding.Source})";
+                    RecordWafHit(context, clientIp, reason);
+                    if (protectService.GetOptions().SemanticDetectionAction.Equals("Reject", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _ccRuleChecker.RecordAttackEvent(clientIp);
+                        SetInterceptLogMark(context, reason);
+                        EnableCapture(context);
+                        await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason },
+                            isAttack: true, eventType: SecurityEventType.WafIntercept);
+                        return;
+                    }
+                    SetObserveLogMark(context, reason);
+                    EnableCapture(context);
+                }
             }
             if ((reason = await CheckArgsAttck(context)) != null)
             {

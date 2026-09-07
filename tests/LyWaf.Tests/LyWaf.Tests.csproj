@@ -20,5 +20,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\fixtures\response-cache.ly" Link="tests\fixtures\response-cache.ly" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\fixtures\security-corpus-v1.json" Link="tests\fixtures\security-corpus-v1.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
