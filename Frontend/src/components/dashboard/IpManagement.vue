@@ -11,6 +11,25 @@ const blacklist = ref<string[]>([])
 const groups = ref<IpGroup[]>([])
 const groupSearch = ref('')
 const groupLoading = ref(false)
+const expandedWhitelistGroups = ref<Set<string>>(new Set())
+const expandedBlacklistGroups = ref<Set<string>>(new Set())
+
+const whitelistGroupEntries = computed(() => new Set(
+  groups.value.filter(group => group.whitelistEnabled).flatMap(group => group.entries)
+))
+const blacklistGroupEntries = computed(() => new Set(
+  groups.value.filter(group => group.blacklistEnabled).flatMap(group => group.entries)
+))
+const directWhitelist = computed(() => whitelist.value.filter(ip => !whitelistGroupEntries.value.has(ip)))
+const directBlacklist = computed(() => blacklist.value.filter(ip => !blacklistGroupEntries.value.has(ip)))
+
+const toggleGroupExpanded = (id: string, target: 'white' | 'black') => {
+  const state = target === 'white' ? expandedWhitelistGroups : expandedBlacklistGroups
+  const next = new Set(state.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  state.value = next
+}
 
 const filteredGroups = computed(() => {
   const keyword = groupSearch.value.trim().toLowerCase()
@@ -110,6 +129,24 @@ const deleteGroup = async () => {
     pendingDeleteGroup.value = null
   } catch {
     showError('删除 IP 组失败')
+  }
+}
+
+const setGroupUsage = async (group: IpGroup, target: 'white' | 'black') => {
+  const whitelistEnabled = target === 'white' ? !group.whitelistEnabled : false
+  const blacklistEnabled = target === 'black' ? !group.blacklistEnabled : false
+  try {
+    const res = await ipApi.setGroupUsage(group.id, whitelistEnabled, blacklistEnabled)
+    if (!res.success || !res.group) {
+      showError(res.message || '更新名单绑定失败')
+      return
+    }
+    const index = groups.value.findIndex(item => item.id === group.id)
+    if (index >= 0) groups.value[index] = res.group
+    await loadData()
+    showSuccess(whitelistEnabled ? 'IP 组已加入白名单' : blacklistEnabled ? 'IP 组已加入黑名单' : 'IP 组已从名单移除')
+  } catch {
+    showError('更新名单绑定失败')
   }
 }
 
@@ -216,6 +253,7 @@ const doRemove = async () => {
             <th class="text-left font-medium px-4 py-3">名称</th>
             <th class="text-left font-medium px-4 py-3">内容</th>
             <th class="text-left font-medium px-4 py-3 w-32">更新时间</th>
+            <th class="text-left font-medium px-4 py-3 w-52">名单用途</th>
             <th class="text-right font-medium px-4 py-3 w-32">操作</th>
           </tr>
         </thead>
@@ -233,13 +271,27 @@ const doRemove = async () => {
               <div class="text-xs text-gray-500 mt-1">共 {{ group.entries.length }} 条</div>
             </td>
             <td class="px-4 py-4 text-gray-400 align-top whitespace-nowrap">{{ formatTime(group.updatedAt) }}</td>
+            <td class="px-4 py-4 align-top">
+              <div class="flex gap-2">
+                <button
+                  class="btn btn-sm"
+                  :class="group.whitelistEnabled ? 'bg-emerald-700 text-white' : 'btn-secondary'"
+                  @click="setGroupUsage(group, 'white')"
+                >白名单</button>
+                <button
+                  class="btn btn-sm"
+                  :class="group.blacklistEnabled ? 'bg-red-800 text-white' : 'btn-secondary'"
+                  @click="setGroupUsage(group, 'black')"
+                >黑名单</button>
+              </div>
+            </td>
             <td class="px-4 py-4 text-right align-top whitespace-nowrap">
               <button class="text-primary-400 hover:text-primary-300 mr-5" @click="openGroupDialog(group)">编辑</button>
               <button class="text-red-400 hover:text-red-300" @click="pendingDeleteGroup = group">删除</button>
             </td>
           </tr>
           <tr v-if="filteredGroups.length === 0">
-            <td colspan="4" class="px-4 py-12 text-center text-gray-500">
+            <td colspan="5" class="px-4 py-12 text-center text-gray-500">
               {{ groupSearch ? '没有匹配的 IP 组' : '暂无 IP 组' }}
             </td>
           </tr>
@@ -261,7 +313,27 @@ const doRemove = async () => {
         </div>
         <div class="space-y-2 max-h-[200px] overflow-y-auto">
           <div
-            v-for="ip in whitelist"
+            v-for="group in groups.filter(item => item.whitelistEnabled)"
+            :key="`group-${group.id}`"
+            class="border border-emerald-800/60 bg-emerald-950/20 rounded-lg overflow-hidden"
+          >
+            <div class="flex items-center justify-between p-3">
+              <button class="flex min-w-0 flex-1 items-center gap-2 text-left" @click="toggleGroupExpanded(group.id, 'white')">
+                <span class="w-4 text-gray-500 transition-transform" :class="{ 'rotate-90': expandedWhitelistGroups.has(group.id) }">›</span>
+                <span>
+                  <span class="text-green-400 text-sm">{{ group.name }} <span class="text-xs text-gray-500">IP 组</span></span>
+                  <span class="block text-xs text-gray-500 mt-1">包含 {{ group.entries.length }} 条 IP / CIDR</span>
+                </span>
+              </button>
+              <button class="text-gray-500 hover:text-red-400" title="从白名单移除" @click="setGroupUsage(group, 'white')">×</button>
+            </div>
+            <div v-if="expandedWhitelistGroups.has(group.id)" class="border-t border-emerald-900/50 px-9 py-2 space-y-1.5">
+              <code v-for="entry in group.entries" :key="entry" class="block text-xs text-green-300/90">{{ entry }}</code>
+              <div v-if="group.entries.length === 0" class="text-xs text-gray-500">该组暂无成员</div>
+            </div>
+          </div>
+          <div
+            v-for="ip in directWhitelist"
             :key="ip"
             class="flex items-center justify-between p-3 bg-dark-card-hover rounded-lg"
           >
@@ -273,7 +345,7 @@ const doRemove = async () => {
               ×
             </button>
           </div>
-          <div v-if="whitelist.length === 0" class="text-gray-500 text-sm text-center py-4">
+          <div v-if="whitelist.length === 0 && !groups.some(item => item.whitelistEnabled)" class="text-gray-500 text-sm text-center py-4">
             暂无白名单 IP
           </div>
         </div>
@@ -290,7 +362,27 @@ const doRemove = async () => {
         </div>
         <div class="space-y-2 max-h-[200px] overflow-y-auto">
           <div
-            v-for="ip in blacklist"
+            v-for="group in groups.filter(item => item.blacklistEnabled)"
+            :key="`group-${group.id}`"
+            class="border border-red-900/60 bg-red-950/20 rounded-lg overflow-hidden"
+          >
+            <div class="flex items-center justify-between p-3">
+              <button class="flex min-w-0 flex-1 items-center gap-2 text-left" @click="toggleGroupExpanded(group.id, 'black')">
+                <span class="w-4 text-gray-500 transition-transform" :class="{ 'rotate-90': expandedBlacklistGroups.has(group.id) }">›</span>
+                <span>
+                  <span class="text-red-400 text-sm">{{ group.name }} <span class="text-xs text-gray-500">IP 组</span></span>
+                  <span class="block text-xs text-gray-500 mt-1">包含 {{ group.entries.length }} 条 IP / CIDR</span>
+                </span>
+              </button>
+              <button class="text-gray-500 hover:text-red-300" title="从黑名单移除" @click="setGroupUsage(group, 'black')">×</button>
+            </div>
+            <div v-if="expandedBlacklistGroups.has(group.id)" class="border-t border-red-900/50 px-9 py-2 space-y-1.5">
+              <code v-for="entry in group.entries" :key="entry" class="block text-xs text-red-300/90">{{ entry }}</code>
+              <div v-if="group.entries.length === 0" class="text-xs text-gray-500">该组暂无成员</div>
+            </div>
+          </div>
+          <div
+            v-for="ip in directBlacklist"
             :key="ip"
             class="flex items-center justify-between p-3 bg-dark-card-hover rounded-lg"
           >
@@ -302,7 +394,7 @@ const doRemove = async () => {
               ×
             </button>
           </div>
-          <div v-if="blacklist.length === 0" class="text-gray-500 text-sm text-center py-4">
+          <div v-if="blacklist.length === 0 && !groups.some(item => item.blacklistEnabled)" class="text-gray-500 text-sm text-center py-4">
             暂无黑名单 IP
           </div>
         </div>

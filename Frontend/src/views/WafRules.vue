@@ -154,9 +154,13 @@ const formatSingleCondition = (c: { field: string; fieldName?: string; operator:
 
 // 格式化条件摘要
 const formatConditions = (rule: WafCustomRule): string => {
-  if (!rule.conditions || rule.conditions.length === 0) return '无条件'
-  const parts = rule.conditions.map(formatSingleCondition)
-  return parts.join(' AND ')
+  if (!rule.conditionGroups?.length) return '无条件'
+  const groups = rule.conditionGroups.map(group => {
+    const separator = group.operator === 'And' ? ' 且 ' : ' 或 '
+    return group.conditions.map(formatSingleCondition).join(separator)
+  })
+  const separator = rule.groupOperator === 'And' ? ' 且 ' : ' 或 '
+  return groups.map(group => groups.length > 1 ? `(${group})` : group).join(separator)
 }
 
 // 格式化时间

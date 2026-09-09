@@ -351,10 +351,14 @@ public class AccessControlService : IAccessControlService, IDisposable
     private readonly ConcurrentDictionary<string, int> _connectionsPerPath = new();
     private readonly object _connectionLock = new();
     private readonly RuntimeStateStore _runtimeState;
+    private readonly IIpGroupService? _ipGroups;
 
-    public AccessControlService(IOptionsMonitor<AccessControlOptions> options, RuntimeStateStore runtimeState)
+    public AccessControlService(IOptionsMonitor<AccessControlOptions> options, RuntimeStateStore runtimeState,
+        IIpGroupService? ipGroups = null)
     {
         _runtimeState = runtimeState;
+        _ipGroups = ipGroups;
+        if (_ipGroups != null) _ipGroups.Changed += BuildIpNetworks;
         _options = options.CurrentValue;
         _runtimeState.StateChanged += OnRuntimeStateChanged;
 
@@ -403,6 +407,7 @@ public class AccessControlService : IAccessControlService, IDisposable
     private void BuildIpNetworks()
     {
         var ipConfig = _options.IpControl;
+        var ipGroups = _ipGroups?.GetAll() ?? [];
 
         // 合并配置中的白名单和动态添加的白名单（排除被移除的）
         lock (_dynamicListLock)
@@ -412,6 +417,7 @@ public class AccessControlService : IAccessControlService, IDisposable
                 .ToList();
             allWhitelist.AddRange(_dynamicWhitelist);
             allWhitelist.AddRange(StateKeys(WhitelistDomain));
+            allWhitelist.AddRange(ipGroups.Where(group => group.WhitelistEnabled).SelectMany(group => group.Entries));
             _whitelistNetworks = ParseNetworks(allWhitelist);
         }
 
@@ -423,6 +429,7 @@ public class AccessControlService : IAccessControlService, IDisposable
                 .ToList();
             allBlacklist.AddRange(_dynamicBlacklist);
             allBlacklist.AddRange(StateKeys(BlacklistDomain));
+            allBlacklist.AddRange(ipGroups.Where(group => group.BlacklistEnabled).SelectMany(group => group.Entries));
             _blacklistNetworks = ParseNetworks(allBlacklist);
         }
 
@@ -1030,6 +1037,8 @@ public class AccessControlService : IAccessControlService, IDisposable
     /// </summary>
     public List<string> GetWhitelist()
     {
+        var groupEntries = _ipGroups?.GetAll()
+            .Where(group => group.WhitelistEnabled).SelectMany(group => group.Entries).ToArray() ?? [];
         lock (_dynamicListLock)
         {
             var allWhitelist = _options.Whitelist
@@ -1037,6 +1046,7 @@ public class AccessControlService : IAccessControlService, IDisposable
                 .ToList();
             allWhitelist.AddRange(_dynamicWhitelist);
             allWhitelist.AddRange(StateKeys(WhitelistDomain));
+            allWhitelist.AddRange(groupEntries);
             return allWhitelist.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
     }
@@ -1121,6 +1131,8 @@ public class AccessControlService : IAccessControlService, IDisposable
     /// </summary>
     public List<string> GetBlacklist()
     {
+        var groupEntries = _ipGroups?.GetAll()
+            .Where(group => group.BlacklistEnabled).SelectMany(group => group.Entries).ToArray() ?? [];
         lock (_dynamicListLock)
         {
             var allBlacklist = _options.IpControl.Blacklist
@@ -1128,6 +1140,7 @@ public class AccessControlService : IAccessControlService, IDisposable
                 .ToList();
             allBlacklist.AddRange(_dynamicBlacklist);
             allBlacklist.AddRange(StateKeys(BlacklistDomain));
+            allBlacklist.AddRange(groupEntries);
             return allBlacklist.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
     }
@@ -1451,6 +1464,7 @@ public class AccessControlService : IAccessControlService, IDisposable
     public void Dispose()
     {
         _runtimeState.StateChanged -= OnRuntimeStateChanged;
+        if (_ipGroups != null) _ipGroups.Changed -= BuildIpNetworks;
         GC.SuppressFinalize(this);
     }
 }

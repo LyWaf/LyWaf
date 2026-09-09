@@ -9,6 +9,8 @@ public sealed class IpGroup
     public string Name { get; set; } = "";
     public string Description { get; set; } = "";
     public List<string> Entries { get; set; } = [];
+    public bool WhitelistEnabled { get; set; }
+    public bool BlacklistEnabled { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
@@ -19,10 +21,13 @@ public interface IIpGroupService
     IpGroup Create(string name, string? description, IEnumerable<string> entries);
     IpGroup? Update(string id, string name, string? description, IEnumerable<string> entries);
     bool Delete(string id);
+    IpGroup? SetUsage(string id, bool whitelistEnabled, bool blacklistEnabled);
+    event Action? Changed;
 }
 
 public sealed class IpGroupService : IIpGroupService
 {
+    public event Action? Changed;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
@@ -32,11 +37,13 @@ public sealed class IpGroupService : IIpGroupService
     private readonly string _filePath;
     private List<IpGroup> _groups;
 
-    public IpGroupService()
+    public IpGroupService(string? filePath = null)
     {
-        var dataDirectory = Path.Combine(AppContext.BaseDirectory, "datas");
+        var dataDirectory = filePath == null
+            ? Path.Combine(AppContext.BaseDirectory, "datas")
+            : Path.GetDirectoryName(Path.GetFullPath(filePath))!;
         Directory.CreateDirectory(dataDirectory);
-        _filePath = Path.Combine(dataDirectory, "ip-groups.json");
+        _filePath = filePath ?? Path.Combine(dataDirectory, "ip-groups.json");
         _groups = Load();
     }
 
@@ -67,6 +74,7 @@ public sealed class IpGroupService : IIpGroupService
             };
             _groups.Add(group);
             Save();
+            Changed?.Invoke();
             return Clone(group);
         }
     }
@@ -83,6 +91,7 @@ public sealed class IpGroupService : IIpGroupService
             group.Entries = NormalizeEntries(entries);
             group.UpdatedAt = DateTime.UtcNow;
             Save();
+            Changed?.Invoke();
             return Clone(group);
         }
     }
@@ -92,8 +101,29 @@ public sealed class IpGroupService : IIpGroupService
         lock (_lock)
         {
             var removed = _groups.RemoveAll(group => group.Id == id) > 0;
-            if (removed) Save();
+            if (removed)
+            {
+                Save();
+                Changed?.Invoke();
+            }
             return removed;
+        }
+    }
+
+    public IpGroup? SetUsage(string id, bool whitelistEnabled, bool blacklistEnabled)
+    {
+        lock (_lock)
+        {
+            var group = _groups.FirstOrDefault(item => item.Id == id);
+            if (group == null) return null;
+            if (whitelistEnabled && blacklistEnabled)
+                throw new ArgumentException("同一个 IP 组不能同时加入白名单和黑名单");
+            group.WhitelistEnabled = whitelistEnabled;
+            group.BlacklistEnabled = blacklistEnabled;
+            group.UpdatedAt = DateTime.UtcNow;
+            Save();
+            Changed?.Invoke();
+            return Clone(group);
         }
     }
 
@@ -156,6 +186,8 @@ public sealed class IpGroupService : IIpGroupService
         Name = source.Name,
         Description = source.Description,
         Entries = [.. source.Entries],
+        WhitelistEnabled = source.WhitelistEnabled,
+        BlacklistEnabled = source.BlacklistEnabled,
         CreatedAt = source.CreatedAt,
         UpdatedAt = source.UpdatedAt
     };

@@ -1357,6 +1357,7 @@ public class Program
 
         // 注册认证服务
         builder.Services.AddSingleton<LyWaf.Services.Auth.IAuthService, LyWaf.Services.Auth.AuthService>();
+        builder.Services.AddSingleton<LyWaf.Services.Auth.IManagementTokenService, LyWaf.Services.Auth.ManagementTokenService>();
 
         // 注册插件系统
         var startupSw = Stopwatch.StartNew();

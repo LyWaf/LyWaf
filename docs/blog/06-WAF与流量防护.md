@@ -13,9 +13,12 @@ Protect {
     WafRules {
         observe_sensitive_file {
             Enabled = true
-            Field = "UriPath"
-            Operator = "Regex"
-            Value = "(?i)/(\\.env|\\.git|config\\.json)$"
+            GroupOperator = "Or"
+            ConditionGroups = [
+                { Operator = "And"; Conditions = [
+                    { Field = "UriPath"; Operator = "Regex"; Value = "(?i)/(\\.env|\\.git|config\\.json)$" },
+                ]},
+            ]
             Action = "Observe"
         }
     }
@@ -26,7 +29,7 @@ Protect {
 
 ```ly
 Action = "Reject"
-StatusCode = 403
+ResponseCode = 403
 ```
 
 ## 动作层级

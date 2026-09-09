@@ -104,6 +104,31 @@ public static partial class ControlApi
             if (authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             {
                 var token = authHeader["Bearer ".Length..];
+                if (token.StartsWith("lywaf_pat_", StringComparison.Ordinal))
+                {
+                    var apiTokens = context.RequestServices.GetRequiredService<IManagementTokenService>();
+                    var identity = apiTokens.Authenticate(token);
+                    if (identity is null)
+                    {
+                        context.Response.StatusCode = 401;
+                        await context.Response.WriteAsJsonAsync(ManagementApiContract.CreateError(
+                            context, "invalid_api_token", "API Token 无效、已过期或已吊销"));
+                        return;
+                    }
+                    if (IsWriteRequest(context.Request.Method) &&
+                        !identity.Scopes.Contains("write") && !identity.Scopes.Contains("admin"))
+                    {
+                        context.Response.StatusCode = 403;
+                        await context.Response.WriteAsJsonAsync(ManagementApiContract.CreateError(
+                            context, "insufficient_scope", "当前 API Token 只有只读权限"));
+                        return;
+                    }
+                    context.Items["Username"] = $"token:{identity.Name}";
+                    context.Items["ManagementRole"] = identity.Scopes.Contains("admin") ? "admin" : "automation";
+                    context.Items["ManagementScopes"] = identity.Scopes;
+                    await next();
+                    return;
+                }
                 if (!authService.ValidateToken(token))
                 {
                     context.Response.StatusCode = 401;
@@ -111,6 +136,8 @@ public static partial class ControlApi
                     return;
                 }
                 context.Items["Username"] = authService.GetUsername(token) ?? "unknown";
+                context.Items["ManagementRole"] = "admin";
+                context.Items["ManagementScopes"] = new[] { "admin" };
                 await next();
                 return;
             }
@@ -131,6 +158,8 @@ public static partial class ControlApi
                         if (result.Success)
                         {
                             context.Items["Username"] = basicUser;
+                            context.Items["ManagementRole"] = "admin";
+                            context.Items["ManagementScopes"] = new[] { "admin" };
                             await next();
                             return;
                         }
@@ -197,5 +226,7 @@ public static partial class ControlApi
         }).RequireHost($"*:{controlPort}");
 
     }
-}
 
+    private static bool IsWriteRequest(string method) =>
+        !HttpMethods.IsGet(method) && !HttpMethods.IsHead(method) && !HttpMethods.IsOptions(method);
+}

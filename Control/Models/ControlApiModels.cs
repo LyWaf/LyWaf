@@ -19,6 +19,12 @@ public class SaveIpGroupRequest
     public List<string> Entries { get; set; } = [];
 }
 
+public class SetIpGroupUsageRequest
+{
+    public bool WhitelistEnabled { get; set; }
+    public bool BlacklistEnabled { get; set; }
+}
+
 public class BlockIpRequest
 {
     public string Ip { get; set; } = "";
@@ -427,4 +433,3 @@ public class PcapToggleRequest
     public bool Enabled { get; set; }
     public List<string>? PcapHosts { get; set; }
 }
-

@@ -211,7 +211,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             }
 
             // ── 自定义 WAF 规则检查（用户规则 + 配置规则 + 系统规则）──
-            var ruleResult = _wafRuleService.CheckRequest(context, clientIp);
+            var ruleResult = await _wafRuleService.CheckRequest(context, clientIp);
             if (ruleResult.IsTriggered)
             {
                 var wafReason = $"WAF规则: {ruleResult.TriggeredRule?.Name}";

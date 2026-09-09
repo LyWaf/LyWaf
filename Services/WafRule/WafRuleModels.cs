@@ -100,6 +100,14 @@ public enum WafRuleSource
     System,
 }
 
+/// <summary>条件或条件组之间的逻辑关系。</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum WafLogicalOperator
+{
+    And,
+    Or,
+}
+
 /// <summary>
 /// WAF 匹配条件
 /// </summary>
@@ -119,6 +127,16 @@ public class WafCondition
 
     /// <summary>忽略大小写</summary>
     public bool IgnoreCase { get; set; } = true;
+}
+
+/// <summary>一组具有相同逻辑关系的 WAF 匹配条件。</summary>
+public class WafConditionGroup
+{
+    /// <summary>组内条件关系。</summary>
+    public WafLogicalOperator Operator { get; set; } = WafLogicalOperator.And;
+
+    /// <summary>组内条件。</summary>
+    public List<WafCondition> Conditions { get; set; } = [];
 }
 
 /// <summary>
@@ -145,8 +163,11 @@ public class WafCustomRule
     [JsonIgnore]
     public WafRuleSource Source { get; set; } = WafRuleSource.User;
 
-    /// <summary>条件列表（AND 关系，全部满足才触发）</summary>
-    public List<WafCondition> Conditions { get; set; } = [];
+    /// <summary>条件组之间的逻辑关系。</summary>
+    public WafLogicalOperator GroupOperator { get; set; } = WafLogicalOperator.Or;
+
+    /// <summary>分组条件。</summary>
+    public List<WafConditionGroup> ConditionGroups { get; set; } = [];
 
     /// <summary>触发动作</summary>
     public WafRuleAction Action { get; set; } = WafRuleAction.Observe;

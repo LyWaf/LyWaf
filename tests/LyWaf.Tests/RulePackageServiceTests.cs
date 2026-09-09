@@ -76,7 +76,7 @@ public sealed class RulePackageServiceTests : IDisposable
             Rules = [new PackagedWafRule
             {
                 Rule = new WafCustomRule { Id = ruleId, Name = ruleId,
-                    Conditions = [new WafCondition { Field = WafMatchField.UriPath, Value = "/admin" }] },
+                    ConditionGroups = [new WafConditionGroup { Conditions = [new WafCondition { Field = WafMatchField.UriPath, Value = "/admin" }] }] },
                 Cves = ["CVE-2026-0001"], Explanation = "Blocks the vulnerable endpoint",
             }],
         };

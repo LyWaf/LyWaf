@@ -467,6 +467,13 @@ export interface WafCondition {
   ignoreCase: boolean
 }
 
+export type WafLogicalOperator = 'And' | 'Or'
+
+export interface WafConditionGroup {
+  operator: WafLogicalOperator
+  conditions: WafCondition[]
+}
+
 export interface WafCustomRule {
   id: string
   name: string
@@ -474,7 +481,8 @@ export interface WafCustomRule {
   enabled: boolean
   priority: number
   source?: WafRuleSource
-  conditions: WafCondition[]
+  groupOperator: WafLogicalOperator
+  conditionGroups: WafConditionGroup[]
   action: WafRuleAction
   actionSeconds: number
   responseCode: number

@@ -1,33 +1,21 @@
 namespace LyWaf.Services.WafRule;
 
 /// <summary>
-/// 单条 WAF 配置规则（简化格式），位于 Protect.WafRules 块下
+/// 单条 WAF 配置规则，位于 Protect.WafRules 块下。
 /// <para>
-/// ■ 单条件简写（最常用）：
-/// <code>
-/// Protect {
-///     WafRules {
-///         block-git {
-///             Name = "拦截 .git 访问"
-///             Field = UriPath
-///             Value = "/.git/"
-///         }
-///     }
-/// }
-/// </code>
-/// 默认：Operator = Contains, Action = Reject, IgnoreCase = true
-/// </para>
-/// <para>
-/// ■ 多条件 AND（Conditions 数组，全部满足才触发）：
+/// 条件按组配置；Operator 控制组内关系，GroupOperator 控制组间关系。
 /// <code>
 /// Protect {
 ///     WafRules {
 ///         block-admin-post {
 ///             Name = "拦截 admin POST 请求"
 ///             Action = Reject
-///             Conditions = [
-///                 { Field = UriPath;  Operator = StartsWith; Value = "/admin" },
-///                 { Field = Method;   Operator = Equal;      Value = "POST"   },
+///             GroupOperator = Or
+///             ConditionGroups = [
+///                 { Operator = And; Conditions = [
+///                     { Field = UriPath; Operator = StartsWith; Value = "/admin" },
+///                     { Field = Method; Operator = Equal; Value = "POST" },
+///                 ]},
 ///             ]
 ///         }
 ///     }
@@ -49,30 +37,11 @@ public class WafRuleConfigItem
     /// <summary>优先级，数值越小越高（默认 100）</summary>
     public int Priority { get; set; } = 100;
 
-    // ── 单条件简写（最简用法）──
+    /// <summary>条件组之间的关系：And / Or。</summary>
+    public string GroupOperator { get; set; } = "Or";
 
-    /// <summary>匹配字段：UriPath / QueryString / Method / ClientIp / UserAgent 等</summary>
-    public string? Field { get; set; }
-
-    /// <summary>匹配操作符（默认 Contains）</summary>
-    public string Operator { get; set; } = "Contains";
-
-    /// <summary>匹配值</summary>
-    public string? Value { get; set; }
-
-    /// <summary>字段名称（仅 Header / Cookie / QueryParam 时需要）</summary>
-    public string? FieldName { get; set; }
-
-    /// <summary>忽略大小写（默认 true）</summary>
-    public bool IgnoreCase { get; set; } = true;
-
-    // ── 多条件写法 ──
-
-    /// <summary>
-    /// 多条件列表（AND 关系，优先于单条件简写）
-    /// <para>config.ly: Conditions = [{ Field=...; Value=... }, { ... }]</para>
-    /// </summary>
-    public List<WafConditionConfigItem>? Conditions { get; set; }
+    /// <summary>条件组，最多 5 组、总计 20 个条件。</summary>
+    public List<WafConditionGroupConfigItem> ConditionGroups { get; set; } = [];
 
     // ── 动作 ──
 
@@ -89,6 +58,7 @@ public class WafRuleConfigItem
     public WafCustomRule ToRule(string configKey)
     {
         Enum.TryParse<WafRuleAction>(Action, true, out var action);
+        Enum.TryParse<WafLogicalOperator>(GroupOperator, true, out var groupOperator);
 
         var rule = new WafCustomRule
         {
@@ -101,35 +71,33 @@ public class WafRuleConfigItem
             Action = action,
             ActionSeconds = ActionSeconds,
             ResponseCode = ResponseCode,
+            GroupOperator = groupOperator,
         };
 
-        if (Conditions is { Count: > 0 })
-        {
-            // 多条件 AND
-            foreach (var c in Conditions)
-                rule.Conditions.Add(c.ToCondition());
-        }
-        else if (!string.IsNullOrWhiteSpace(Field))
-        {
-            // 单条件简写
-            Enum.TryParse<WafMatchField>(Field, true, out var field);
-            Enum.TryParse<WafMatchOperator>(Operator, true, out var op);
-            rule.Conditions.Add(new WafCondition
-            {
-                Field = field,
-                FieldName = FieldName,
-                Operator = op,
-                Value = Value ?? "",
-                IgnoreCase = IgnoreCase,
-            });
-        }
+        rule.ConditionGroups = ConditionGroups.Select(group => group.ToGroup()).ToList();
 
         return rule;
     }
 }
 
+public class WafConditionGroupConfigItem
+{
+    public string Operator { get; set; } = "And";
+    public List<WafConditionConfigItem> Conditions { get; set; } = [];
+
+    public WafConditionGroup ToGroup()
+    {
+        Enum.TryParse<WafLogicalOperator>(Operator, true, out var logicalOperator);
+        return new WafConditionGroup
+        {
+            Operator = logicalOperator,
+            Conditions = Conditions.Select(condition => condition.ToCondition()).ToList()
+        };
+    }
+}
+
 /// <summary>
-/// 配置条件项（用于 Conditions 列表中的单条条件）
+/// 配置条件项（用于条件组中的单条条件）。
 /// </summary>
 public class WafConditionConfigItem
 {

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using LyWaf.Services.Captcha;
+using LyWaf.Services.Protect;
 using LyWaf.Services.RuntimeState;
 using LyWaf.Shared;
 using LyWaf.Utils;
@@ -38,7 +39,7 @@ public interface IWafRuleService
     bool ToggleRule(string id);
 
     /// <summary>检查请求是否命中规则</summary>
-    WafRuleCheckResult CheckRequest(HttpContext context, string clientIp);
+    Task<WafRuleCheckResult> CheckRequest(HttpContext context, string clientIp);
 
     /// <summary>执行规则动作</summary>
     Task ExecuteAction(HttpContext context, WafRuleCheckResult result, string clientIp);
@@ -61,6 +62,7 @@ public class WafRuleService : IWafRuleService
     private readonly ICaptchaService _captchaService;
     private readonly IConfiguration _configuration;
     private readonly IRuntimeStateStore _runtimeState;
+    private readonly IRequestInspectionService _inspection;
     private readonly IRulePackageService? _rulePackages;
     private readonly object _lock = new();
 
@@ -78,15 +80,17 @@ public class WafRuleService : IWafRuleService
     // 正则缓存
     private static readonly ConcurrentDictionary<string, Regex> _regexCache = new();
 
-    public WafRuleService(ICaptchaService captchaService, IConfiguration configuration, IRuntimeStateStore runtimeState)
-        : this(captchaService, configuration, runtimeState, null) { }
+    public WafRuleService(ICaptchaService captchaService, IConfiguration configuration, IRuntimeStateStore runtimeState,
+        IRequestInspectionService inspection)
+        : this(captchaService, configuration, runtimeState, inspection, null) { }
 
     public WafRuleService(ICaptchaService captchaService, IConfiguration configuration, IRuntimeStateStore runtimeState,
-        IRulePackageService? rulePackages)
+        IRequestInspectionService inspection, IRulePackageService? rulePackages)
     {
         _captchaService = captchaService;
         _configuration = configuration;
         _runtimeState = runtimeState;
+        _inspection = inspection;
         _rulePackages = rulePackages;
 
         // 监听 config.ly 变化，自动重新加载配置规则
@@ -128,7 +132,7 @@ public class WafRuleService : IWafRuleService
 
     public bool AddRule(WafCustomRule rule)
     {
-        if (string.IsNullOrWhiteSpace(rule.Name)) return false;
+        if (string.IsNullOrWhiteSpace(rule.Name) || !HasValidConditions(rule)) return false;
         rule.Source = WafRuleSource.User; // 强制设为用户规则
 
         lock (_lock)
@@ -145,6 +149,7 @@ public class WafRuleService : IWafRuleService
 
     public bool UpdateRule(WafCustomRule rule)
     {
+        if (string.IsNullOrWhiteSpace(rule.Name) || !HasValidConditions(rule)) return false;
         lock (_lock)
         {
             var index = _userRules.FindIndex(r => r.Id == rule.Id);
@@ -201,7 +206,7 @@ public class WafRuleService : IWafRuleService
 
     // ============ 请求检查 ============
 
-    public WafRuleCheckResult CheckRequest(HttpContext context, string clientIp)
+    public async Task<WafRuleCheckResult> CheckRequest(HttpContext context, string clientIp)
     {
         var result = new WafRuleCheckResult { IsTriggered = false };
 
@@ -212,23 +217,16 @@ public class WafRuleService : IWafRuleService
         var enabledRules = rules
             .Where(r => r.Enabled)
             .ToList(); // _mergedRules 已按优先级排好序
+        RequestInspectionSnapshot? snapshot = null;
+        if (enabledRules.Any(rule => rule.ConditionGroups.Any(group =>
+                group.Conditions.Any(condition => condition.Field is WafMatchField.QueryString or WafMatchField.Body))))
+            snapshot = await _inspection.InspectAsync(context, context.RequestAborted);
 
         foreach (var rule in enabledRules)
         {
-            if (rule.Conditions == null || rule.Conditions.Count == 0) continue;
+            if (!HasConditions(rule)) continue;
 
-            // AND: 所有条件都要满足
-            var allMatch = true;
-            foreach (var condition in rule.Conditions)
-            {
-                if (!MatchCondition(context, condition, clientIp))
-                {
-                    allMatch = false;
-                    break;
-                }
-            }
-
-            if (allMatch)
+            if (MatchRule(context, rule, clientIp, snapshot))
             {
                 result.IsTriggered = true;
                 result.TriggeredRule = rule;
@@ -240,6 +238,33 @@ public class WafRuleService : IWafRuleService
         }
 
         return result;
+    }
+
+    private static bool HasConditions(WafCustomRule rule) =>
+        rule.ConditionGroups?.Any(group => group.Conditions?.Count > 0) == true;
+
+    internal static bool HasValidConditions(WafCustomRule rule)
+    {
+        return rule.ConditionGroups is { Count: > 0 and <= 5 } &&
+               rule.ConditionGroups.All(group => group.Conditions is { Count: > 0 }) &&
+               rule.ConditionGroups.Sum(group => group.Conditions?.Count ?? 0) <= 20;
+    }
+
+    internal static bool MatchRule(HttpContext context, WafCustomRule rule, string clientIp,
+        RequestInspectionSnapshot? snapshot = null)
+    {
+        var matches = rule.ConditionGroups.Select(group =>
+            MatchConditions(context, group.Conditions, group.Operator, clientIp, snapshot));
+        return rule.GroupOperator == WafLogicalOperator.And ? matches.All(x => x) : matches.Any(x => x);
+    }
+
+    private static bool MatchConditions(HttpContext context, IReadOnlyList<WafCondition> conditions,
+        WafLogicalOperator logicalOperator, string clientIp, RequestInspectionSnapshot? snapshot)
+    {
+        if (conditions.Count == 0) return false;
+        return logicalOperator == WafLogicalOperator.And
+            ? conditions.All(condition => MatchCondition(context, condition, clientIp, snapshot))
+            : conditions.Any(condition => MatchCondition(context, condition, clientIp, snapshot));
     }
 
     // ============ 动作执行 ============
@@ -296,9 +321,15 @@ public class WafRuleService : IWafRuleService
 
     // ============ 条件匹配 ============
 
-    private static bool MatchCondition(HttpContext context, WafCondition condition, string clientIp)
+    private static bool MatchCondition(HttpContext context, WafCondition condition, string clientIp,
+        RequestInspectionSnapshot? snapshot)
     {
         var request = context.Request;
+        if (condition.Field == WafMatchField.Body)
+            return MatchCandidateValues(snapshot?.BodyValues ?? [], condition);
+        if (condition.Field == WafMatchField.QueryString && snapshot is not null)
+            return MatchCandidateValues([request.QueryString.Value ?? "", .. snapshot.QueryValues], condition);
+
         string? targetValue = condition.Field switch
         {
             WafMatchField.UriPath => request.Path.Value,
@@ -314,12 +345,22 @@ public class WafRuleService : IWafRuleService
             WafMatchField.Cookie => GetCookieValue(request, condition.FieldName),
             WafMatchField.Header => GetHeaderValue(request, condition.FieldName),
             WafMatchField.QueryParam => GetQueryParamValue(request, condition.FieldName),
-            WafMatchField.Body => null, // Body 需要特殊处理，暂不支持同步读取
             WafMatchField.ServerPort => context.Connection.LocalPort.ToString(),
             _ => null
         };
 
-        // 存在性检查
+        return MatchTargetValue(targetValue, condition);
+    }
+
+    private static bool MatchCandidateValues(IReadOnlyList<string> values, WafCondition condition)
+    {
+        if (condition.Operator is WafMatchOperator.NotExists or WafMatchOperator.NotEqual or WafMatchOperator.NotContains)
+            return values.All(value => MatchTargetValue(value, condition));
+        return values.Any(value => MatchTargetValue(value, condition));
+    }
+
+    private static bool MatchTargetValue(string? targetValue, WafCondition condition)
+    {
         if (condition.Operator == WafMatchOperator.Exists)
             return !string.IsNullOrEmpty(targetValue);
         if (condition.Operator == WafMatchOperator.NotExists)
@@ -394,40 +435,15 @@ public class WafRuleService : IWafRuleService
             if (File.Exists(RulesFilePath))
             {
                 var json = File.ReadAllText(RulesFilePath);
-                _userRules = JsonSerializer.Deserialize<List<WafCustomRule>>(json, _jsonOptions) ?? [];
+                var loadedRules = JsonSerializer.Deserialize<List<WafCustomRule>>(json, _jsonOptions) ?? [];
+                _userRules = loadedRules.Where(HasValidConditions).ToList();
+                var ignoredCount = loadedRules.Count - _userRules.Count;
+                if (ignoredCount > 0)
+                    _logger.Warn("忽略 {Count} 条旧格式或条件组无效的用户 WAF 规则", ignoredCount);
 
-                // 向后兼容：旧 JSON 可能含 conditionGroups，需手动迁移
-                var needsSave = false;
-                using var doc = JsonDocument.Parse(json);
-                var rulesArr = doc.RootElement;
-                for (int i = 0; i < _userRules.Count && i < rulesArr.GetArrayLength(); i++)
+                foreach (var rule in _userRules)
                 {
-                    var rule = _userRules[i];
                     rule.Source = WafRuleSource.User;
-
-                    if ((rule.Conditions == null || rule.Conditions.Count == 0)
-                        && rulesArr[i].TryGetProperty("conditionGroups", out var groups))
-                    {
-                        // 将所有组的条件合并为扁平列表
-                        rule.Conditions = [];
-                        foreach (var group in groups.EnumerateArray())
-                        {
-                            if (group.TryGetProperty("conditions", out var conds))
-                            {
-                                foreach (var c in conds.EnumerateArray())
-                                {
-                                    var condition = JsonSerializer.Deserialize<WafCondition>(c.GetRawText(), _jsonOptions);
-                                    if (condition != null) rule.Conditions.Add(condition);
-                                }
-                            }
-                        }
-                        needsSave = true;
-                    }
-                }
-                if (needsSave)
-                {
-                    _logger.Info("已自动迁移旧版 WAF 规则（conditionGroups → Conditions）");
-                    SaveUserRules();
                 }
             }
             else
@@ -458,21 +474,18 @@ public class WafRuleService : IWafRuleService
     /// <summary>
     /// 加载配置规则（从 config.ly 的 Protect.WafRules 块，直接遍历子节点）
     /// <para>
-    /// config.ly 格式（每条规则是一个命名块）：
+    /// config.ly 格式（每条规则是一个命名块，仅支持条件组格式）：
     /// <code>
     /// Protect {
     ///     WafRules {
-    ///         block-scanners {
-    ///             Name = "封禁扫描器"
-    ///             Field = UserAgent
-    ///             Operator = Regex
-    ///             Value = "(?i)(sqlmap|nikto)"
-    ///         }
     ///         block-admin-post {
     ///             Name = "拦截 admin POST"
-    ///             Conditions = [
-    ///                 { Field = UriPath; Operator = StartsWith; Value = "/admin" },
-    ///                 { Field = Method;  Operator = Equal;      Value = "POST"   },
+    ///             GroupOperator = Or
+    ///             ConditionGroups = [
+    ///                 { Operator = And; Conditions = [
+    ///                     { Field = UriPath; Operator = StartsWith; Value = "/admin" },
+    ///                     { Field = Method; Operator = Equal; Value = "POST" },
+    ///                 ]},
     ///             ]
     ///         }
     ///     }
@@ -498,13 +511,15 @@ public class WafRuleService : IWafRuleService
                 var item = new WafRuleConfigItem();
                 child.Bind(item);
 
-                // 跳过无效规则：两种条件来源都为空
-                var hasConditions = item.Conditions is { Count: > 0 };
-                var hasSingleField = !string.IsNullOrWhiteSpace(item.Field);
-                if (!hasConditions && !hasSingleField)
+                if (item.ConditionGroups.Count == 0)
                     continue;
 
                 var rule = item.ToRule(child.Key);
+                if (!HasValidConditions(rule))
+                {
+                    _logger.Warn("配置规则 [{Key}] 条件组无效，已跳过", child.Key);
+                    continue;
+                }
                 // 应用开关覆盖
                 if (_toggleOverrides.TryGetValue(rule.Id, out var enabled))
                     rule.Enabled = enabled;

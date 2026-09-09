@@ -44,6 +44,7 @@ public static class WafRuleEndpoints
         {
             var rule = await context.Request.ReadFromJsonAsync<WafCustomRule>(context.RequestAborted);
             if (rule == null || string.IsNullOrWhiteSpace(rule.Name)) return Bad("规则名称不能为空");
+            if (!HasValidConditionGroups(rule)) return Bad("条件组无效：最多 5 组、总计 20 个条件，且每组至少包含一个条件");
             if (!service.AddRule(rule)) return Bad("创建失败");
             Audit(context, $"创建WAF规则: {rule.Name}");
             return Results.Json(new { success = true, message = "规则已创建", id = rule.Id });
@@ -60,6 +61,7 @@ public static class WafRuleEndpoints
                 return Results.Json(new { success = false, message = "非用户规则不可编辑" }, statusCode: 403);
             var rule = await context.Request.ReadFromJsonAsync<WafCustomRule>(context.RequestAborted);
             if (rule == null) return Bad("无效的规则数据");
+            if (!HasValidConditionGroups(rule)) return Bad("条件组无效：最多 5 组、总计 20 个条件，且每组至少包含一个条件");
             rule.Id = id;
             if (!service.UpdateRule(rule)) return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
             Audit(context, $"更新WAF规则: {rule.Name} ({id})");
@@ -90,12 +92,22 @@ public static class WafRuleEndpoints
     {
         id = rule.Id, name = rule.Name, description = rule.Description, enabled = rule.Enabled,
         priority = rule.Priority, source = rule.Source.ToString(),
-        conditions = (rule.Conditions ?? []).Select(x => new { field = x.Field.ToString(), x.FieldName,
-            @operator = x.Operator.ToString(), x.Value, x.IgnoreCase }),
+        groupOperator = rule.GroupOperator.ToString(),
+        conditionGroups = (rule.ConditionGroups ?? []).Select(group => new
+        {
+            @operator = group.Operator.ToString(),
+            conditions = (group.Conditions ?? []).Select(x => new { field = x.Field.ToString(), x.FieldName,
+                @operator = x.Operator.ToString(), x.Value, x.IgnoreCase })
+        }),
         action = rule.Action.ToString(), rule.ActionSeconds, rule.ResponseCode, rule.CreatedAt, rule.UpdatedAt,
     };
 
     private static IResult Bad(string message) => Results.Json(new { success = false, message }, statusCode: 400);
+    private static bool HasValidConditionGroups(WafCustomRule rule) =>
+        rule.ConditionGroups is { Count: > 0 and <= 5 } &&
+        rule.ConditionGroups.All(group => group.Conditions is { Count: > 0 }) &&
+        rule.ConditionGroups.Sum(group => group.Conditions?.Count ?? 0) <= 20;
+
     private static void Audit(HttpContext context, string action) => context.RequestServices.GetRequiredService<IAuditLogService>()
         .Log(context.Items["Username"]?.ToString() ?? "unknown", action, context.Connection.RemoteIpAddress?.ToString() ?? "");
 

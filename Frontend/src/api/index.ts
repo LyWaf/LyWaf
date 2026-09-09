@@ -108,6 +108,8 @@ export interface IpGroup {
   name: string
   description: string
   entries: string[]
+  whitelistEnabled: boolean
+  blacklistEnabled: boolean
   createdAt: string
   updatedAt: string
 }
@@ -137,6 +139,12 @@ export const ipApi = {
 
   deleteGroup: (id: string) =>
     api.delete<{ success: boolean; message?: string }>(`/ip-groups/${encodeURIComponent(id)}`),
+
+  setGroupUsage: (id: string, whitelistEnabled: boolean, blacklistEnabled: boolean) =>
+    api.put<{ success: boolean; group?: IpGroup; message?: string }>(
+      `/ip-groups/${encodeURIComponent(id)}/usage`,
+      { whitelistEnabled, blacklistEnabled }
+    ),
 
   // 白名单
   getWhitelist: () =>

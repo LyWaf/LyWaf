@@ -20,6 +20,7 @@ public static partial class ControlApi
         
         MapFrontendEndpoints(app, controlPort);
         MapAuthenticationEndpoints(app, controlPort);
+        MapManagementIdentityEndpoints(app, controlPort);
         // 业务端点必须在认证管线之后注册。
         MapErrorTemplateEndpoints(app, controlPort);
         app.MapWafRuleEndpoints(controlPort);

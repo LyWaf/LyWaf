@@ -122,6 +122,26 @@ public static partial class ControlApi
             return Results.Json(new { success = true, message = "IP 组已删除" });
         }).RequireHost($"*:{controlPort}");
 
+        app.MapPut("/api/ip-groups/{id}/usage", async (string id, HttpContext ctx, IIpGroupService ipGroupService) =>
+        {
+            try
+            {
+                var request = await ctx.Request.ReadFromJsonAsync<SetIpGroupUsageRequest>();
+                if (request == null) return Results.BadRequest(new { success = false, message = "请求内容不能为空" });
+                var group = ipGroupService.SetUsage(id, request.WhitelistEnabled, request.BlacklistEnabled);
+                if (group == null) return Results.NotFound(new { success = false, message = "IP 组不存在" });
+                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
+                    ctx.Items["Username"]?.ToString() ?? "unknown",
+                    $"更新 IP 组名单绑定: {group.Name}, 白名单={group.WhitelistEnabled}, 黑名单={group.BlacklistEnabled}",
+                    ctx.Connection.RemoteIpAddress?.ToString() ?? "");
+                return Results.Json(new { success = true, group, message = "IP 组名单绑定已更新" });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { success = false, message = ex.Message });
+            }
+        }).RequireHost($"*:{controlPort}");
+
         // 获取所有访问控制数据（黑白名单页面用）
         app.MapGet("/api/ac/all", (HttpContext ctx, IAccessControlService accessControlService) =>
         {
@@ -352,4 +372,3 @@ public static partial class ControlApi
 
     }
 }
-
