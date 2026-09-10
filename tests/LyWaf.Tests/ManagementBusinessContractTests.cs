@@ -59,12 +59,15 @@ public sealed class ManagementBusinessContractTests
                 [app, 12345, new LyWaf.Services.WafInfo.WafInfoOptions()]);
         app.MapLyWafResponseCacheApi(12345);
         app.MapLyWafRuntimeStateApi(12345);
+        typeof(ControlApi).GetMethod("MapUpstreamHealthEndpoints", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [app, 12345]);
         using var source = new CompositeEndpointDataSource(((IEndpointRouteBuilder)app).DataSources);
         foreach (var endpoint in source.Endpoints.OfType<RouteEndpoint>())
         {
             var isBackup = endpoint.RoutePattern.RawText!.StartsWith("/api/backups", StringComparison.Ordinal);
-            Assert.Equal(isBackup, endpoint.Metadata.GetMetadata<LyWaf.Services.Auth.ManagementStepUpExemption>() != null);
-            if (isBackup)
+            var isHealthUpdate = endpoint.RoutePattern.RawText!.TrimEnd('/') == "/api/lb/clusters/{clusterId}/health-check" &&
+                endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods.Contains("PUT");
+            Assert.Equal(isBackup || isHealthUpdate, endpoint.Metadata.GetMetadata<LyWaf.Services.Auth.ManagementStepUpExemption>() != null);
+            if (isBackup || isHealthUpdate)
                 Assert.Contains(endpoint.Metadata.GetOrderedMetadata<LyWaf.Services.Auth.ManagementPermissionRequirement>(),
                     permission => permission.Permission == LyWaf.Services.Auth.ManagementPermissions.ManageSystem);
         }

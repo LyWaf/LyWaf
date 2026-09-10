@@ -130,9 +130,9 @@ public class CcRuleChecker : ICcRuleChecker
             // 根据规则类型检查
             bool conditionsMatch = rule.Type switch
             {
-                CcRuleType.FrequentAccess => MatchConditions(context, rule.Conditions, clientIp),
-                CcRuleType.FrequentAttack => MatchConditions(context, rule.Conditions, clientIp),
-                CcRuleType.FrequentError => MatchConditions(context, rule.Conditions, clientIp),
+                CcRuleType.FrequentAccess => MatchRuleConditions(context, rule, clientIp),
+                CcRuleType.FrequentAttack => MatchRuleConditions(context, rule, clientIp),
+                CcRuleType.FrequentError => MatchRuleConditions(context, rule, clientIp),
                 _ => false
             };
             
@@ -312,7 +312,20 @@ public class CcRuleChecker : ICcRuleChecker
     /// <summary>
     /// 匹配所有条件（AND 关系）
     /// </summary>
-    private bool MatchConditions(HttpContext context, List<CcCondition> conditions, string clientIp)
+    internal static bool MatchRuleConditions(HttpContext context, AdvancedCcRule rule, string clientIp)
+    {
+        if (rule.ConditionGroups is not { } groups) return MatchConditions(context, rule.Conditions, clientIp);
+        if (groups.Count == 0) return false;
+        bool Matches(CcConditionGroup group) => group.Conditions.Count > 0 && (group.Operator switch
+        {
+            "And" => group.Conditions.All(c => MatchCondition(context, c, clientIp)),
+            "Or" => group.Conditions.Any(c => MatchCondition(context, c, clientIp)),
+            _ => false
+        });
+        return rule.GroupOperator switch { "And" => groups.All(Matches), "Or" => groups.Any(Matches), _ => false };
+    }
+
+    private static bool MatchConditions(HttpContext context, List<CcCondition> conditions, string clientIp)
     {
         // 没有条件时默认匹配所有请求
         if (conditions.Count == 0) return true;

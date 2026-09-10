@@ -108,6 +108,8 @@ export interface CcCondition {
 
 // 高级 CC 规则
 export interface AdvancedCcRule {
+  groupOperator?: 'And' | 'Or'
+  conditionGroups?: Array<{ operator: 'And' | 'Or'; conditions: CcCondition[] }>
   id: string
   name: string
   enabled: boolean

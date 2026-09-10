@@ -356,6 +356,8 @@ interface CcEnumsResponse {
 }
 
 export interface CreateAdvancedCcRuleRequest {
+  groupOperator?: 'And' | 'Or'
+  conditionGroups?: AdvancedCcRule['conditionGroups']
   name: string
   enabled?: boolean
   type?: string

@@ -69,6 +69,10 @@ const needsFieldName = (target: CcMatchTarget) =>
 const noValueOperators: CcMatchOperator[] = ['Exists', 'NotExists']
 
 // 表单数据
+type FormCondition = { target: CcMatchTarget; operator: CcMatchOperator; value: string; fieldName: string }
+const groups = ref<Array<{ operator: 'And' | 'Or'; conditions: FormCondition[] }>>([])
+const groupOperator = ref<'And' | 'Or'>('Or')
+const relationshipClass = (op: string) => op === 'And' ? 'border-blue-400/50 bg-blue-500 text-white hover:bg-blue-400' : 'border-amber-400/50 bg-amber-500 text-gray-950 hover:bg-amber-400'
 const form = ref({
   name: '',
   enabled: true,
@@ -137,8 +141,8 @@ const conditionsToForm = (conditions: CcCondition[]) => {
 }
 
 // 将表单格式转回后端 CcCondition
-const formToConditions = (): CcCondition[] => {
-  return form.value.conditions.map(c => {
+const formToConditions = (conditions: FormCondition[]): CcCondition[] => {
+  return conditions.map(c => {
     const isKeyed = needsFieldName(c.target)
     const rawValues = c.value.split(',').map(v => v.trim()).filter(Boolean)
     return {
@@ -151,6 +155,8 @@ const formToConditions = (): CcCondition[] => {
 
 // 重置表单
 const resetForm = () => {
+  groups.value = []
+  groupOperator.value = 'Or'
   form.value = {
     name: '',
     enabled: true,
@@ -167,6 +173,9 @@ const resetForm = () => {
 // 监听编辑规则变化
 watch(() => props.editRule, (rule) => {
   if (rule) {
+    groupOperator.value = rule.groupOperator || 'Or'
+    groups.value = rule.conditionGroups?.map(g => ({ operator: g.operator, conditions: conditionsToForm(g.conditions) })) ||
+      (rule.conditions?.length ? [{ operator: 'And', conditions: conditionsToForm(rule.conditions) }] : [])
     form.value = {
       name: rule.name,
       enabled: rule.enabled,
@@ -196,13 +205,14 @@ const createDefaultCondition = () => ({
 })
 
 // 添加条件
-const addCondition = () => {
-  form.value.conditions.push(createDefaultCondition())
+const addCondition = (index: number) => {
+  groups.value[index].conditions.push(createDefaultCondition())
 }
+const addGroup = () => groups.value.push({ operator: 'And', conditions: [createDefaultCondition()] })
 
 // 删除条件
-const removeCondition = (index: number) => {
-  form.value.conditions.splice(index, 1)
+const removeCondition = (group: number, index: number) => {
+  groups.value[group].conditions.splice(index, 1)
 }
 
 // 提交保存
@@ -216,7 +226,8 @@ const handleSubmit = async () => {
   }
 
   // 检查条件值
-  for (const c of form.value.conditions) {
+  if (groups.value.some(g => !g.conditions.length)) { saveError.value = '条件组不能为空'; return }
+  for (const c of groups.value.flatMap(g => g.conditions)) {
     if (!noValueOperators.includes(c.operator) && !c.value.trim()) {
       saveError.value = '请填写所有条件的匹配值'
       return
@@ -235,7 +246,9 @@ const handleSubmit = async () => {
       name: form.value.name,
       enabled: form.value.enabled,
       type: form.value.type,
-      conditions: formToConditions(),
+      conditions: [],
+      groupOperator: groupOperator.value,
+      conditionGroups: groups.value.length ? groups.value.map(g => ({ operator: g.operator, conditions: formToConditions(g.conditions) })) : undefined,
       period: form.value.period,
       threshold: form.value.threshold,
       action: form.value.action,
@@ -301,25 +314,26 @@ const handleClose = () => {
           <div>
             <h3 class="text-sm font-medium text-gray-300 mb-3">
               匹配条件
-              <span class="text-xs text-gray-500 ml-1">满足全部条件时触发（AND 关系）</span>
+              <button type="button" class="ml-3 px-3 py-1 border rounded" :class="relationshipClass(groupOperator)" title="切换组间关系" @click="groupOperator = groupOperator === 'And' ? 'Or' : 'And'">{{ groupOperator === 'And' ? '且' : '或' }} ▾</button>
             </h3>
 
-            <div class="bg-dark-card-hover rounded-lg border border-dark-border p-4 space-y-3">
+            <div v-for="(group, groupIndex) in groups" :key="groupIndex" class="bg-dark-card-hover rounded-lg border border-dark-border p-4 space-y-3 mb-3">
+              <div class="flex justify-between items-center"><h4>条件组 {{ groupIndex + 1 }}</h4><button type="button" class="text-red-400" @click="groups.splice(groupIndex, 1)">删除条件组</button></div>
               <!-- 列标题 -->
-              <div v-if="form.conditions.length > 0" class="flex items-center gap-2 text-xs text-gray-500 pl-10">
+              <div v-if="group.conditions.length > 0" class="flex items-center gap-2 text-xs text-gray-500 pl-10">
                 <div class="w-[130px]">匹配字段</div>
                 <div class="w-[110px]">匹配方式</div>
                 <div class="flex-1">匹配值</div>
               </div>
 
               <!-- 条件列表 -->
-              <div v-for="(condition, idx) in form.conditions" :key="idx" class="space-y-2">
+              <div v-for="(condition, idx) in group.conditions" :key="idx" class="space-y-2">
                 <!-- AND 分隔 -->
-                <div v-if="idx > 0" class="text-xs text-primary-400 font-medium py-0.5 pl-10">AND</div>
+                <button v-if="idx > 0" type="button" class="px-3 py-1 border rounded" :class="relationshipClass(group.operator)" title="切换组内关系" @click="group.operator = group.operator === 'And' ? 'Or' : 'And'">{{ group.operator === 'And' ? '且' : '或' }} ▾</button>
 
-                <div class="flex items-center gap-2">
+                <div class="flex flex-wrap items-center gap-2">
                   <!-- 删除按钮（红色减号） -->
-                  <button type="button" @click="removeCondition(idx)"
+                  <button type="button" @click="removeCondition(groupIndex, idx)"
                     class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/20 hover:border-red-400 transition-colors"
                     title="删除此条件">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
@@ -356,20 +370,21 @@ const handleClose = () => {
               </div>
 
               <!-- 空状态 -->
-              <div v-if="form.conditions.length === 0"
+              <div v-if="group.conditions.length === 0"
                 class="text-center py-4 text-gray-600 text-sm">
-                暂无条件，不添加条件将匹配所有请求
+                条件组不能为空
               </div>
 
               <!-- 添加 AND 条件按钮 -->
-              <button @click="addCondition"
+              <button type="button" @click="addCondition(groupIndex)" :disabled="groups.reduce((n, g) => n + g.conditions.length, 0) >= 20"
                 class="flex items-center gap-1.5 px-3 py-1.5 text-xs text-primary-400 border border-primary-500/30 rounded hover:bg-primary-500/10 transition-colors">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                 </svg>
-                添加 AND 条件
+                添加条件
               </button>
             </div>
+            <button type="button" :disabled="groups.length >= 5 || groups.reduce((n, g) => n + g.conditions.length, 0) >= 20" class="px-3 py-2 border border-primary-500/30 text-primary-400 rounded" @click="addGroup">添加条件组</button>
           </div>
 
           <!-- 触发条件 -->

@@ -247,6 +247,9 @@ const actionLabels: Record<string, string> = {
 
 // 格式化条件文本
 const formatConditions = (rule: AdvancedCcRule): string => {
+  if (rule.conditionGroups?.length) return rule.conditionGroups.map(g => '(' + g.conditions.map(c =>
+    `${targetLabels[c.target] || c.target}${operatorLabels[c.operator] || c.operator} [${c.values.join(', ')}]`
+  ).join(g.operator === 'And' ? ' 且 ' : ' 或 ') + ')').join(rule.groupOperator === 'And' ? ' 且 ' : ' 或 ')
   if (!rule.conditions || rule.conditions.length === 0) return ''
   return rule.conditions.map(c => {
     const target = targetLabels[c.target] || c.target

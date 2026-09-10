@@ -29,6 +29,9 @@ public class AdvancedCcRule
     /// 匹配条件列表（AND 关系）
     /// </summary>
     public List<CcCondition> Conditions { get; set; } = [];
+    /// <summary>Group relationship; legacy flat conditions apply only when groups are absent.</summary>
+    public string GroupOperator { get; set; } = "Or";
+    public List<CcConditionGroup>? ConditionGroups { get; set; }
     
     /// <summary>
     /// 统计周期（秒）
@@ -106,6 +109,7 @@ public class CcCondition
 /// <summary>
 /// 匹配目标
 /// </summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter<CcMatchTarget>))]
 public enum CcMatchTarget
 {
     /// <summary>
@@ -167,6 +171,7 @@ public enum CcMatchTarget
 /// <summary>
 /// 匹配方式
 /// </summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter<CcMatchOperator>))]
 public enum CcMatchOperator
 {
     /// <summary>

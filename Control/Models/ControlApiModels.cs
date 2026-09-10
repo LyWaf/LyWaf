@@ -123,6 +123,11 @@ public class CcConditionRequest
 
 public class AddAdvancedCcRuleRequest
 {
+    [RegularExpression("^(And|Or)$")]
+    public string? GroupOperator { get; set; }
+    [MinLength(1), MaxLength(5)]
+    [LyWaf.Services.Statistic.CcConditionGroups(ErrorMessage = "条件组必须为 1-5 组，总条件最多 20 条，且条件字段和关系必须有效")]
+    public List<LyWaf.Services.Statistic.CcConditionGroup>? ConditionGroups { get; set; }
     [Required, StringLength(200)]
     public string Name { get; set; } = "";
     public bool? Enabled { get; set; }
@@ -143,6 +148,11 @@ public class AddAdvancedCcRuleRequest
 
 public class UpdateAdvancedCcRuleRequest
 {
+    [RegularExpression("^(And|Or)$")]
+    public string? GroupOperator { get; set; }
+    [MinLength(1), MaxLength(5)]
+    [LyWaf.Services.Statistic.CcConditionGroups(ErrorMessage = "条件组必须为 1-5 组，总条件最多 20 条，且条件字段和关系必须有效")]
+    public List<LyWaf.Services.Statistic.CcConditionGroup>? ConditionGroups { get; set; }
     [Required, StringLength(128)]
     public string Id { get; set; } = "";
     [StringLength(200, MinimumLength = 1)]

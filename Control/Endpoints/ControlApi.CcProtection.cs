@@ -38,7 +38,7 @@ public static partial class ControlApi
     private sealed record CcBasicRemovedResponse(bool Success, string Message, string Path, DateTime Timestamp);
     private sealed record CcConditionView(string Target, string Operator, List<string> Values);
     private sealed record CcRuleView(string Id, string Name, bool Enabled, string Type, CcConditionView[] Conditions,
-        int Period, int Threshold, string Action, int ActionSeconds, int Priority, DateTime CreatedAt);
+        int Period, int Threshold, string Action, int ActionSeconds, int Priority, DateTime CreatedAt, string GroupOperator, List<CcConditionGroup>? ConditionGroups);
     private sealed record CcDetailResponse(bool Success, CcRuleView Rule, DateTime Timestamp);
     private sealed record CcMutationResponse(bool Success, string Message, string RuleId, DateTime Timestamp, bool? Enabled = null);
     private static void MapCcProtectionEndpoints(WebApplication app, int controlPort)
@@ -215,6 +215,8 @@ public static partial class ControlApi
                 name = r.Name,
                 enabled = r.Enabled,
                 type = r.Type.ToString(),
+                groupOperator = r.GroupOperator,
+                conditionGroups = r.ConditionGroups,
                 conditions = r.Conditions.Select(c => new
                 {
                     target = c.Target.ToString(),
@@ -249,6 +251,8 @@ public static partial class ControlApi
                 name = r.Name,
                 enabled = r.Enabled,
                 type = r.Type.ToString(),
+                groupOperator = r.GroupOperator,
+                conditionGroups = r.ConditionGroups,
                 conditions = r.Conditions.Select(c => new
                 {
                     target = c.Target.ToString(),
@@ -285,6 +289,8 @@ public static partial class ControlApi
                     name = rule.Name,
                     enabled = rule.Enabled,
                     type = rule.Type.ToString(),
+                    groupOperator = rule.GroupOperator,
+                    conditionGroups = rule.ConditionGroups,
                     conditions = rule.Conditions.Select(c => new
                     {
                         target = c.Target.ToString(),
@@ -316,6 +322,8 @@ public static partial class ControlApi
                 Name = request.Name,
                 Enabled = request.Enabled ?? true,
                 Type = Enum.TryParse<CcRuleType>(request.Type, true, out var t) ? t : CcRuleType.FrequentAccess,
+                GroupOperator = request.GroupOperator ?? "Or",
+                ConditionGroups = request.ConditionGroups,
                 Period = request.Period ?? 10,
                 Threshold = request.Threshold ?? 100,
                 Action = Enum.TryParse<CcAction>(request.Action, true, out var a) ? a : CcAction.Captcha,
@@ -366,6 +374,8 @@ public static partial class ControlApi
                 Name = request.Name ?? existingRule.Name,
                 Enabled = request.Enabled ?? existingRule.Enabled,
                 Type = request.Type != null && Enum.TryParse<CcRuleType>(request.Type, true, out var t) ? t : existingRule.Type,
+                GroupOperator = request.GroupOperator ?? existingRule.GroupOperator,
+                ConditionGroups = request.ConditionGroups ?? (request.Conditions != null ? null : existingRule.ConditionGroups),
                 Period = request.Period ?? existingRule.Period,
                 Threshold = request.Threshold ?? existingRule.Threshold,
                 Action = request.Action != null && Enum.TryParse<CcAction>(request.Action, true, out var a) ? a : existingRule.Action,

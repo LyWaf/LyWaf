@@ -613,6 +613,8 @@ public class StatisticService : IStatisticService
                     Enabled = enabled,
                     Type = configRule.Type,
                     Conditions = configRule.Conditions,
+                    GroupOperator = configRule.GroupOperator,
+                    ConditionGroups = configRule.ConditionGroups,
                     Period = configRule.Period,
                     Threshold = configRule.Threshold,
                     Action = configRule.Action,

@@ -8,7 +8,7 @@
 
 例如：路径 `/ready`，方法 `POST`，类型 `application/json`，数据 `{"probe":true}`，健康状态码 `204`。此时仅返回 204 才算成功，200 也会计为失败。
 
-配置通过集群补丁持久化并重载，不覆盖站点路由或被动检查配置；修改要求管理权限和现有的身份再次验证。GET/PUT 接口为 `/api/lb/clusters/{clusterId}/health-check`，业务实现独立放在 `Control/Endpoints/ControlApi.UpstreamHealth.cs`。
+配置通过集群补丁持久化并重载，不覆盖站点路由或被动检查配置；修改要求登录和管理权限，不再要求二次密码验证。GET/PUT 接口为 `/api/lb/clusters/{clusterId}/health-check`，业务实现独立放在 `Control/Endpoints/ControlApi.UpstreamHealth.cs`。
 
 ## 文件配置
 

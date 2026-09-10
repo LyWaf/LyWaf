@@ -7,6 +7,8 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record UpstreamHealthResponse(bool Success, UpstreamHealthSettings Data);
+    private sealed record UpstreamHealthSaveResponse(bool Success, string Message);
     public sealed record UpstreamHealthSettings(
         bool Enabled = true,
         [property: Required, RegularExpression(@"^/[^\r\n?#]*$"), MaxLength(2048)] string Path = "/",
@@ -33,7 +35,7 @@ public static partial class ControlApi
             return Results.Ok(new { success = true, data = new UpstreamHealthSettings(active?.Enabled == true,
                 active?.Path ?? "/", Read("Method", "GET"), Read("Body", ""), Read("ContentType", "application/json"),
                 Read("AvalidCode", "2xx"), (int)(active?.Interval?.TotalSeconds ?? 30), (int)(active?.Timeout?.TotalSeconds ?? 5), Number("Passes"), Number("Fails")) });
-        });
+        }).Produces<UpstreamHealthResponse>();
         group.MapPut("", async (string clusterId, UpstreamHealthSettings settings, IConfiguration config) =>
         {
             var errors = new List<ValidationResult>();
@@ -63,6 +65,6 @@ public static partial class ControlApi
                 metadata["LyxActiveHealth.Fails"] = settings.Fails.ToString();
                 return null;
             });
-        });
+        }).Produces<UpstreamHealthSaveResponse>().WithMetadata(new ManagementStepUpExemption());
     }
 }
