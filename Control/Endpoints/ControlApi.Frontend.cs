@@ -29,7 +29,7 @@ public static partial class ControlApi
         app.MapGet("/", (HttpContext ctx) =>
         {
             return Results.Content(GetIndexHtml(), "text/html; charset=utf-8");
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
         
         // SPA 子路由支持（security, api-timing 等）
         app.MapGet("/{*path}", (HttpContext ctx, string? path) =>
@@ -44,7 +44,10 @@ public static partial class ControlApi
             if (path != null)
             {
                 var distDir = GetFrontendDistPath();
-                var filePath = Path.Combine(distDir, path);
+                var root = Path.GetFullPath(distDir) + Path.DirectorySeparatorChar;
+                var filePath = Path.GetFullPath(Path.Combine(distDir, path));
+                if (!filePath.StartsWith(root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                    return Results.NotFound();
                 if (File.Exists(filePath))
                 {
                     var ext = Path.GetExtension(filePath).ToLowerInvariant();
@@ -65,8 +68,7 @@ public static partial class ControlApi
             
             // 返回 SPA index.html
             return Results.Content(GetIndexHtml(), "text/html; charset=utf-8");
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }
-

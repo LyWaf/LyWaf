@@ -1,7 +1,9 @@
+using LyWaf.Services.Auth;
 using LyWaf.Control.Infrastructure;
 using LyWaf.Services.AuditLog;
 using LyWaf.Services.Protect;
 using Microsoft.Extensions.Options;
+using System.ComponentModel.DataAnnotations;
 
 namespace LyWaf.Control.Endpoints;
 
@@ -10,11 +12,11 @@ public static class RequestSecurityEndpoints
 {
     public static IEndpointRouteBuilder MapRequestSecurityEndpoints(this IEndpointRouteBuilder app, int controlPort)
     {
-        var group = app.MapGroup("/api/request-security").RequireHost($"*:{controlPort}");
+        var group = app.MapGroup("/api/request-security").RequireHost($"*:{controlPort}").RequireManagementPermission();
         group.MapGet("", (IOptionsMonitor<ProtectOptions> options) =>
         {
             var x = options.CurrentValue;
-            return Results.Json(new { success = true, config = new
+            return TypedResults.Ok(new { success = true, config = new
             {
                 x.InspectionMaxBodyBytes, x.InspectionMaxValueLength, x.InspectionMaxCandidates,
                 x.InspectionDecodeDepth, x.RejectProtocolAnomalies,
@@ -55,11 +57,16 @@ public static class RequestSecurityEndpoints
 
 public sealed class RequestSecurityUpdateRequest
 {
+    [Range(1024, 16 * 1024 * 1024)]
     public int InspectionMaxBodyBytes { get; set; } = 1024 * 1024;
+    [Range(256, 1024 * 1024)]
     public int InspectionMaxValueLength { get; set; } = 64 * 1024;
+    [Range(1, 2048)]
     public int InspectionMaxCandidates { get; set; } = 128;
+    [Range(0, 5)]
     public int InspectionDecodeDepth { get; set; } = 3;
     public bool RejectProtocolAnomalies { get; set; } = true;
     public bool SemanticDetectionEnabled { get; set; } = true;
+    [Required, RegularExpression("^(Observe|Reject)$")]
     public string SemanticDetectionAction { get; set; } = "Observe";
 }

@@ -3,6 +3,12 @@ import type { RouteRecordRaw } from 'vue-router'
 import { pluginRoutes } from '@/plugins'
 
 const routes: RouteRecordRaw[] = [
+  { path: '/notifications', name: 'Notifications', component: () => import('@/views/Notifications.vue'), meta: { title: '通知告警' } },
+  { path: '/backups', name: 'Backups', component: () => import('@/views/Backups.vue'), meta: { title: '配置备份' } },
+  { path: '/security-incidents', name: 'SecurityIncidents', component: () => import('@/views/SecurityIncidents.vue'), meta: { title: '事件处置' } },
+  { path: '/sites', name: 'Sites', component: () => import('@/views/Sites.vue'), meta: { title: '站点管理' } },
+  { path: '/system-health', name: 'SystemHealth', component: () => import('@/views/SystemHealth.vue'), meta: { title: '系统健康' } },
+  { path: '/management-tasks', name: 'ManagementTasks', component: () => import('@/views/ManagementTasks.vue'), meta: { title: '任务中心' } },
   {
     path: '/login',
     name: 'Login',

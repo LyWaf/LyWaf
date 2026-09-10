@@ -431,11 +431,11 @@ public static class LbPatchConfig
 /// <summary>
 /// 负载均衡补丁配置源
 /// </summary>
-public class LbPatchSource : IConfigurationSource
+public class LbPatchSource(string? filePath = null, bool validateSource = true) : IConfigurationSource
 {
     public IConfigurationProvider Build(IConfigurationBuilder builder)
     {
-        return new LbPatchProvider();
+        return new LbPatchProvider(filePath, validateSource);
     }
 }
 
@@ -462,7 +462,7 @@ public class LbPatchSource : IConfigurationSource
 ///   }
 /// }
 /// </summary>
-public class LbPatchProvider : ConfigurationProvider
+public class LbPatchProvider(string? filePath = null, bool validateSource = true) : ConfigurationProvider
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
 
@@ -471,7 +471,7 @@ public class LbPatchProvider : ConfigurationProvider
         // 清空旧数据，确保删除的补丁项不会残留在内存中
         Data.Clear();
 
-        var patchPath = LbPatchConfig.GetPatchFilePath();
+        var patchPath = filePath ?? LbPatchConfig.GetPatchFilePath();
         if (!File.Exists(patchPath))
             return;
 
@@ -482,7 +482,7 @@ public class LbPatchProvider : ConfigurationProvider
             var root = doc.RootElement;
 
             // 检查源文件跟踪：如果源文件已更新，补丁失效
-            if (root.TryGetProperty("_source", out var sourceEl))
+            if (validateSource && root.TryGetProperty("_source", out var sourceEl))
             {
                 if (sourceEl.TryGetProperty("file", out var fileEl) &&
                     sourceEl.TryGetProperty("lastModified", out var lastModEl))

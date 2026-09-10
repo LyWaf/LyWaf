@@ -110,6 +110,12 @@ public class DuckDbQueryService : IDuckDbQueryService
         _db = db;
     }
 
+    private static List<T> BoundedHistory<T>(List<T> rows, int limit = 20000)
+    {
+        if (rows.Count > limit) throw new ArgumentException($"历史结果超过 {limit} 条，请缩小时间范围或增大聚合粒度", "from");
+        return rows;
+    }
+
     public List<TrafficSnapshotRow> GetTrafficHistory(DateTime from, DateTime to, string granularity = "hour")
     {
         var result = new List<TrafficSnapshotRow>();
@@ -128,7 +134,7 @@ public class DuckDbQueryService : IDuckDbQueryService
                 MAX(error_4xx) as error_4xx, MAX(error_5xx) as error_5xx
                 FROM traffic_snapshots
                 WHERE snapshot_time >= $1 AND snapshot_time <= $2
-                GROUP BY t ORDER BY t ASC";
+                GROUP BY t ORDER BY t ASC LIMIT 20001";
             cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(from));
             cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(to));
             using var reader = cmd.ExecuteReader();
@@ -151,8 +157,9 @@ public class DuckDbQueryService : IDuckDbQueryService
         catch (Exception ex)
         {
             _logger.Error(ex, "查询流量历史失败");
+            throw;
         }
-        return result;
+        return BoundedHistory(result);
     }
 
     public List<SecurityTimeSlot> GetSecurityTimeSlots(DateTime from, DateTime to)
@@ -168,7 +175,7 @@ public class DuckDbQueryService : IDuckDbQueryService
                 crawler_detect, geo_block, rate_limit
                 FROM security_timeslots
                 WHERE slot_time >= $1 AND slot_time <= $2
-                ORDER BY slot_time ASC";
+                ORDER BY slot_time ASC LIMIT 20001";
             cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(from));
             cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(to));
             using var reader = cmd.ExecuteReader();
@@ -189,8 +196,9 @@ public class DuckDbQueryService : IDuckDbQueryService
         catch (Exception ex)
         {
             _logger.Error(ex, "查询安全事件时间片失败");
+            throw;
         }
-        return result;
+        return BoundedHistory(result);
     }
 
     public List<ApiTimingRow> GetApiTimingHistory(DateTime from, DateTime to, string? pathFilter = null)
@@ -204,18 +212,18 @@ public class DuckDbQueryService : IDuckDbQueryService
             using var cmd = conn.CreateCommand();
             var whereClause = "WHERE snapshot_time >= $1 AND snapshot_time <= $2";
             if (!string.IsNullOrEmpty(pathFilter))
-                whereClause += " AND path LIKE $3";
+                whereClause += " AND contains(lower(path), lower($3))";
 
             cmd.CommandText = $@"SELECT snapshot_time, path, method, backend, original_host,
                 request_count, total_time, backend_time, min_total_time, max_total_time,
                 min_backend_time, max_backend_time, status_codes
                 FROM api_timing_snapshots
                 {whereClause}
-                ORDER BY snapshot_time DESC LIMIT 1000";
+                ORDER BY snapshot_time DESC LIMIT 1001";
             cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(from));
             cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(to));
             if (!string.IsNullOrEmpty(pathFilter))
-                cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter($"%{pathFilter}%"));
+                cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(pathFilter));
 
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
@@ -246,8 +254,9 @@ public class DuckDbQueryService : IDuckDbQueryService
         catch (Exception ex)
         {
             _logger.Error(ex, "查询API耗时历史失败");
+            throw;
         }
-        return result;
+        return BoundedHistory(result, 1000);
     }
 
     public GeoTrafficSnapshot GetGeoTrafficHistory()
@@ -413,6 +422,7 @@ public class DuckDbQueryService : IDuckDbQueryService
 
     public List<EndpointStatRow> GetEndpointStatsHistory(string statType, DateTime from, DateTime to, int topN = 50)
     {
+        if (topN is < 1 or > 100) throw new ArgumentException("topN 必须在 1 到 100 之间", nameof(topN));
         var result = new List<EndpointStatRow>();
         if (!_db.IsEnabled) return result;
 
@@ -445,6 +455,7 @@ public class DuckDbQueryService : IDuckDbQueryService
         catch (Exception ex)
         {
             _logger.Error(ex, "查询端点统计历史失败");
+            throw;
         }
         return result;
     }
@@ -470,7 +481,7 @@ public class DuckDbQueryService : IDuckDbQueryService
                 SUM(request_count) as total
                 FROM qps_snapshots
                 WHERE snapshot_time >= $1 AND snapshot_time <= $2
-                GROUP BY t ORDER BY t ASC";
+                GROUP BY t ORDER BY t ASC LIMIT 20001";
             cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(from));
             cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(to));
 
@@ -487,8 +498,9 @@ public class DuckDbQueryService : IDuckDbQueryService
         catch (Exception ex)
         {
             _logger.Error(ex, "查询 QPS 历史失败");
+            throw;
         }
-        return result;
+        return BoundedHistory(result);
     }
 
     public List<BandwidthSnapshotRow> GetBandwidthHistory(DateTime from, DateTime to, string granularity = "1min")
@@ -513,7 +525,7 @@ public class DuckDbQueryService : IDuckDbQueryService
                 SUM(outbound_bytes) as total_out
                 FROM bandwidth_snapshots
                 WHERE snapshot_time >= $1 AND snapshot_time <= $2
-                GROUP BY t ORDER BY t ASC";
+                GROUP BY t ORDER BY t ASC LIMIT 20001";
             cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(from));
             cmd.Parameters.Add(new DuckDB.NET.Data.DuckDBParameter(to));
 
@@ -531,7 +543,8 @@ public class DuckDbQueryService : IDuckDbQueryService
         catch (Exception ex)
         {
             _logger.Error(ex, "查询带宽历史失败");
+            throw;
         }
-        return result;
+        return BoundedHistory(result);
     }
 }

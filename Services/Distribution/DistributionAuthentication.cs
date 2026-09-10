@@ -21,16 +21,22 @@ public sealed class DistributionAuthentication(IOptionsMonitor<DistributionOptio
         if (!long.TryParse(context.Request.Headers["X-LyWaf-Timestamp"], out var timestamp))
             return (default, "缺少有效时间戳");
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        if (Math.Abs(now - timestamp) > Math.Clamp(current.AllowedClockSkewSeconds, 5, 300))
+        if (Math.Abs((decimal)now - timestamp) > Math.Clamp(current.AllowedClockSkewSeconds, 5, 300))
             return (default, "请求时间戳超出允许范围");
         var nonce = context.Request.Headers["X-LyWaf-Nonce"].ToString();
         var signature = context.Request.Headers["X-LyWaf-Signature"].ToString();
         if (nonce.Length is < 16 or > 128 || signature.Length != 64) return (default, "签名头无效");
-        if (context.Request.ContentLength > current.MaxConfigBytes)
+        var maximumBytes = Math.Clamp(current.MaxConfigBytes, 1024, 8 * 1024 * 1024);
+        if (context.Request.ContentLength > maximumBytes)
             return (default, "请求体超过节点限制");
         using var memory = new MemoryStream();
-        await context.Request.Body.CopyToAsync(memory, cancellationToken);
-        if (memory.Length > current.MaxConfigBytes) return (default, "请求体超过节点限制");
+        var buffer = new byte[16384];
+        int count;
+        while ((count = await context.Request.Body.ReadAsync(buffer, cancellationToken)) != 0)
+        {
+            if (memory.Length + count > maximumBytes) return (default, "请求体超过节点限制");
+            await memory.WriteAsync(buffer.AsMemory(0, count), cancellationToken);
+        }
         var body = memory.ToArray();
         var bodyHash = Convert.ToHexString(SHA256.HashData(body)).ToLowerInvariant();
         var canonical = $"{operation}\n{timestamp}\n{nonce}\n{bodyHash}";
@@ -38,9 +44,13 @@ public sealed class DistributionAuthentication(IOptionsMonitor<DistributionOptio
         if (!CryptographicOperations.FixedTimeEquals(
             Encoding.ASCII.GetBytes(expected), Encoding.ASCII.GetBytes(signature.ToLowerInvariant())))
             return (default, "签名无效");
-        foreach (var stale in _nonces.Where(x => now - x.Value > current.AllowedClockSkewSeconds * 2))
-            _nonces.TryRemove(stale.Key, out _);
-        if (!_nonces.TryAdd(nonce, timestamp)) return (default, "nonce 已使用");
+        lock (_nonces)
+        {
+            foreach (var stale in _nonces.Where(x => now - x.Value > Math.Clamp(current.AllowedClockSkewSeconds, 5, 300) * 2))
+                _nonces.TryRemove(stale.Key, out _);
+            if (_nonces.Count >= 10000) return (default, "节点认证请求过于频繁");
+            if (!_nonces.TryAdd(nonce, timestamp)) return (default, "nonce 已使用");
+        }
         try { return (JsonSerializer.Deserialize<T>(body, JsonOptions), null); }
         catch (JsonException ex) { return (default, $"JSON 无效: {ex.Message}"); }
     }

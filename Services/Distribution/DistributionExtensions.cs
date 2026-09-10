@@ -1,5 +1,6 @@
 using LyWaf.Services.AuditLog;
 using LyWaf.Services.ManagementApi;
+using LyWaf.Services.Auth;
 
 namespace LyWaf.Services.Distribution;
 
@@ -70,22 +71,20 @@ public static class DistributionExtensions
             {
                 return ManagementApiContract.Error(context, 409, "distribution_not_controller", ex.Message);
             }
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission(ManagementPermissions.Read);
 
         app.MapGet("/api/distribution/deployments", async (HttpContext context, DistributionControllerService controller) =>
             Results.Json(new { success = true, deployments = await controller.ListAsync(context.RequestAborted) }))
-            .RequireHost($"*:{controlPort}");
+            .RequireHost($"*:{controlPort}").RequireManagementPermission(ManagementPermissions.Read);
 
         app.MapGet("/api/distribution/nodes", async (HttpContext context, DistributionControllerService controller) =>
             Results.Json(new { success = true, nodes = await controller.GetNodeStatusesAsync(context.RequestAborted) }))
-            .RequireHost($"*:{controlPort}");
+            .RequireHost($"*:{controlPort}").RequireManagementPermission(ManagementPermissions.Read);
 
-        app.MapPost("/api/distribution/deployments", async (HttpContext context, DistributionControllerService controller, MultiNodeDashboardService dashboard) =>
+        app.MapPost("/api/distribution/deployments", async (HttpContext context, DistributionControllerService controller, MultiNodeDashboardService dashboard, CreateDistributionRequest request) =>
         {
             try
             {
-                var request = await context.Request.ReadFromJsonAsync<CreateDistributionRequest>(context.RequestAborted)
-                    ?? throw new ArgumentException("请求内容为空");
                 var username = context.Items["Username"]?.ToString() ?? "unknown";
                 var permitted = request.NodeIds is null || request.NodeIds.Count == 0
                     ? dashboard.CanOperateGlobally(username)
@@ -99,8 +98,9 @@ public static class DistributionExtensions
                 Audit(context, $"创建配置分发任务: {result.Id}");
                 return Results.Json(new { success = true, deployment = result });
             }
-            catch (Exception ex) { return ManagementApiContract.Error(context, 400, "distribution_create_failed", ex.Message); }
-        }).RequireHost($"*:{controlPort}");
+            catch (KeyNotFoundException ex) { return ManagementApiContract.Error(context, 404, "not_found", ex.Message); }
+            catch (InvalidOperationException ex) { return ManagementApiContract.Error(context, 409, "conflict", ex.Message); }
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission(ManagementPermissions.ManageSystem);
 
         foreach (var command in new[] { "pause", "resume", "rollback" })
         {
@@ -127,8 +127,9 @@ public static class DistributionExtensions
                     Audit(context, $"{operation} 配置分发任务: {id}");
                     return Results.Json(new { success = true, deployment = result });
                 }
-                catch (Exception ex) { return ManagementApiContract.Error(context, 400, $"distribution_{operation}_failed", ex.Message); }
-            }).RequireHost($"*:{controlPort}");
+                catch (KeyNotFoundException ex) { return ManagementApiContract.Error(context, 404, "not_found", ex.Message); }
+                catch (InvalidOperationException ex) { return ManagementApiContract.Error(context, 409, "conflict", ex.Message); }
+            }).RequireHost($"*:{controlPort}").RequireManagementPermission(ManagementPermissions.ManageSystem);
         }
         return app;
     }

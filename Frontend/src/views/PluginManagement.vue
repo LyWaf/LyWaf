@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { pluginApi } from '@/api'
+import ListToolbar from '@/components/common/ListToolbar.vue'
 import type { PluginItem, PluginLogEntry, PluginLogFile, PluginActionItem } from '@/api'
 import { useToast } from '@/composables/useToast'
 import { useRouter } from 'vue-router'
@@ -9,6 +10,11 @@ const { showSuccess, showError } = useToast()
 const router = useRouter()
 
 const plugins = ref<PluginItem[]>([])
+const page = ref(1)
+const search = ref('')
+const total = ref(0)
+let listRequest = 0
+onUnmounted(() => { listRequest++ })
 const loading = ref(true)
 const toggling = ref<string | null>(null)
 const packageInput = ref<HTMLInputElement | null>(null)
@@ -236,14 +242,23 @@ function flattenItems(items: ConfigItem[]): Record<string, string> {
 
 // =============== 插件列表 ===============
 const loadPlugins = async () => {
+  const request = ++listRequest
   loading.value = true
   try {
-    const res = await pluginApi.getPlugins()
-    if (res.success) plugins.value = res.plugins
+    const res = await pluginApi.list(page.value, search.value)
+    if (request !== listRequest) return
+    if (res.success) {
+      plugins.value = res.data
+      total.value = res.total
+      if (!res.data.length && page.value > 1) {
+        page.value = Math.max(1, Math.ceil(res.total / 20))
+        await loadPlugins()
+      }
+    }
   } catch {
-    showError('获取插件列表失败')
+    if (request === listRequest) showError('获取插件列表失败')
   } finally {
-    loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
 
@@ -741,6 +756,7 @@ onMounted(loadPlugins)
     </div>
 
     <!-- 加载中 -->
+    <ListToolbar v-model:page="page" v-model:search="search" :total="total" :busy="loading" @refresh="loadPlugins" />
     <div v-if="loading && plugins.length === 0" class="flex items-center justify-center py-20">
       <span class="w-6 h-6 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></span>
       <span class="ml-3 text-gray-400">加载插件列表...</span>

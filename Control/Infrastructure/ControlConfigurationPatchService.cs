@@ -12,7 +12,7 @@ public sealed class ControlConfigurationPatchService(
     ConfigVersionService versions,
     ConfigurationLifecycleService lifecycle)
 {
-    private static readonly SemaphoreSlim Gate = new(1, 1);
+    private static readonly SemaphoreSlim Gate = ConfigurationMutationGate.Patch;
 
     public async Task<ConfigurationChangeImpact> SetSectionAsync<T>(string section, T value, string action,
         CancellationToken cancellationToken = default)
@@ -61,7 +61,9 @@ public sealed class ControlConfigurationPatchService(
             }
             catch
             {
-                if (version.PreviousVersionId != null) await versions.RollbackAsync(version.PreviousVersionId, cancellationToken);
+                // Recovery must finish even when the caller has disconnected.
+                if (version.PreviousVersionId != null) await versions.RollbackAsync(version.PreviousVersionId, CancellationToken.None);
+                else File.Delete(path);
                 root.Reload();
                 throw;
             }

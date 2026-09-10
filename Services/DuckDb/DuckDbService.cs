@@ -19,6 +19,8 @@ public class DuckDbService : IDuckDbService
     private readonly PrometheusMetrics _metrics;
 
     public bool IsEnabled { get; set; }
+    public string HealthStatus => _disposed ? "stopped" : !IsEnabled ? "disabled" :
+        _connection?.State == System.Data.ConnectionState.Open ? "ready" : "initializing";
 
     public DuckDbService(IOptions<DuckDbOptions> options, PrometheusMetrics metrics)
     {

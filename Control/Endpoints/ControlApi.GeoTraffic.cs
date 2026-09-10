@@ -42,10 +42,8 @@ public static partial class ControlApi
 
         app.MapGet("/api/geo-traffic/stats", (HttpContext ctx) =>
         {
-            try
-            {
                 var snapshot = SharedData.GeoTraffic.GetSnapshot();
-                return Results.Json(new
+                return TypedResults.Ok(new
                 {
                     success = true,
                     countryVisits = snapshot.CountryVisits
@@ -61,12 +59,7 @@ public static partial class ControlApi
                         .OrderByDescending(kv => kv.Value)
                         .Select(kv => new { name = kv.Key, value = kv.Value }),
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message });
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }

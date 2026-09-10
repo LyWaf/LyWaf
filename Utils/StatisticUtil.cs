@@ -144,6 +144,7 @@ public class StatisticUtil
     /// </summary>
     public static void RecordIntercept(HttpContext context, int statusCode, bool isAttack = false)
     {
+        context.Items["LyWaf.Intercepted"] = true;
         var clientIp = RequestUtil.GetClientIp(context.Request);
         SharedData.Traffic.RecordIntercept(clientIp, statusCode, isAttack);
 

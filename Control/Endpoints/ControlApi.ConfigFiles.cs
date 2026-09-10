@@ -36,6 +36,9 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record ConfigurationFileResponse(bool Success, string FileName, string Format, string Content,
+        string? DraftContent, bool HasDraft, bool DraftLoaded);
+    private sealed record ConfigurationSavedResponse(bool Success, string Message, string DraftFile, string VersionId);
     private static void MapConfigFileEndpoints(WebApplication app, int controlPort, WafInfoOptions wafInfos)
     {
         // =============== 配置文件管理 API ===============
@@ -43,8 +46,6 @@ public static partial class ControlApi
         // 获取配置文件内容（优先返回草稿内容，同时返回原始文件内容）
         app.MapGet("/api/config/file", (HttpContext ctx) =>
         {
-            try
-            {
                 var filePath = SharedData.ConfigFilePath;
                 if (!File.Exists(filePath))
                 {
@@ -76,71 +77,37 @@ public static partial class ControlApi
                     hasDraft = draftExists,
                     draftLoaded = SharedData.ExistsDraftConfig
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"读取配置文件失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<ConfigurationFileResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 保存配置文件内容（保存到草稿文件，不覆盖原始配置）
-        app.MapPost("/api/config/file", async (HttpContext ctx, IConfiguration config) =>
+        app.MapPost("/api/config/file", async (HttpContext ctx, IConfiguration config, SaveConfigRequest request) =>
         {
             try
             {
-                var request = await ctx.Request.ReadFromJsonAsync<SaveConfigRequest>();
+
                 if (request == null || string.IsNullOrEmpty(request.Content))
                 {
                     return Results.Json(new { success = false, message = "请求内容为空" }, statusCode: 400);
                 }
 
-                var originalPath = SharedData.ConfigFilePath;
+                if (request.Reload) return QueueConfigurationChange(ctx, config, request.Content, null);
+
                 var versionService = ctx.RequestServices.GetRequiredService<ConfigVersionService>();
                 var version = await versionService.WriteDraftAsync(request.Content,
-                    request.Reload ? "save-and-reload" : "save", ctx.RequestAborted);
+                    "save", ctx.RequestAborted);
                 var draftPath = version.TargetPath;
 
                 var message = $"草稿已保存到 {Path.GetFileName(draftPath)}";
-                var portsChanged = false;
-                ConfigurationChangeImpact? changeImpact = null;
-
-                // 如果需要重载配置，直接 Reload
-                // LyConfigProvider / DraftAwareYamlProvider 会自动检测草稿文件并优先读取
-                if (request.Reload)
-                {
-                    if (config is IConfigurationRoot configRoot)
-                    {
-                        var lifecycle = ctx.RequestServices.GetRequiredService<ConfigurationLifecycleService>();
-                        var before = lifecycle.Capture(configRoot);
-                        changeImpact = await ApplyVersionReloadOrRollback(version, configRoot, before);
-                        message = "草稿已保存，配置已重新加载";
-
-                        // 检测端口是否变化（仅通知前端，由用户确认后调用 /api/restart 重启）
-                        var newWafInfos = new WafInfoOptions();
-                        config.GetSection("WafInfos").Bind(newWafInfos);
-                        var oldPorts = wafInfos.Listens.Select(l => (l.Host, l.Port, l.IsHttps)).OrderBy(x => x).ToList();
-                        var newPorts = newWafInfos.Listens.Select(l => (l.Host, l.Port, l.IsHttps)).OrderBy(x => x).ToList();
-                        portsChanged = !oldPorts.SequenceEqual(newPorts);
-
-                        if (portsChanged)
-                        {
-                            message = "草稿已保存，配置已重新加载，检测到端口变更，需要重启服务才能生效";
-                        }
-                    }
-                }
 
                 var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
                 var username = ctx.Items["Username"]?.ToString() ?? "unknown";
                 var clientIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
-                audit.Log(username, request.Reload ? "保存并重载配置" : "保存配置草稿", clientIp);
+                audit.Log(username, "保存配置草稿", clientIp);
 
                 return Results.Json(new
                 {
                     success = true,
                     message,
-                    portsChanged,
-                    restartRequired = changeImpact?.RequiresRestart ?? false,
-                    changeImpact,
                     draftFile = Path.GetFileName(draftPath),
                     versionId = version.Id
                 });
@@ -153,18 +120,16 @@ public static partial class ControlApi
             {
                 return Results.Json(new { success = false, message = $"配置校验失败: {ex.Message}" }, statusCode: 400);
             }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"保存配置失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<LyWaf.Services.ManagementTasks.ManagementJobResponse>(202)
+            .Produces<ConfigurationSavedResponse>()
+            .RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 将 .ly 内容转换为 YAML 预览
-        app.MapPost("/api/config/convert", async (HttpContext ctx) =>
+        app.MapPost("/api/config/convert", async (HttpContext ctx, ConvertConfigRequest request) =>
         {
             try
             {
-                var request = await ctx.Request.ReadFromJsonAsync<ConvertConfigRequest>();
+
                 if (request == null || string.IsNullOrEmpty(request.Content))
                 {
                     return Results.Json(new { success = false, message = "请求内容为空" }, statusCode: 400);
@@ -294,11 +259,7 @@ public static partial class ControlApi
             {
                 return Results.Json(new { success = false, message = $"转换失败（语法错误）: {ex.Message}" }, statusCode: 400);
             }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"转换失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         app.MapGet("/api/statistics", (HttpContext ctx, IAccessControlService accessControlService) =>
         {
@@ -323,7 +284,7 @@ public static partial class ControlApi
 
             // 获取客户端统计数据
             var clientStatsSnapshot = SharedData.ClientStas.GetSnapshot();
-            
+
             if (isFilterByIp)
             {
                 clientStatsSnapshot = clientStatsSnapshot
@@ -386,7 +347,7 @@ public static partial class ControlApi
 
             // 获取被封禁的IP（如果指定了IP，只返回该IP是否被封禁）
             var blockedIpsSnapshot = SharedData.ClientFb.GetSnapshot();
-            
+
             if (isFilterByIp)
             {
                 blockedIpsSnapshot = blockedIpsSnapshot
@@ -404,7 +365,7 @@ public static partial class ControlApi
 
             // 获取CC限制统计（如果指定了IP，只返回该IP相关的）
             var ccLimitStatsSnapshot = SharedData.LimitCcStas.GetSnapshot();
-            
+
             if (isFilterByIp)
             {
                 ccLimitStatsSnapshot = ccLimitStatsSnapshot
@@ -424,7 +385,7 @@ public static partial class ControlApi
 
             // 获取客户端访问次数（如果指定了IP，只返回该IP的）
             var clientVisitsSnapshot = SharedData.NewClientVisits.GetSnapshot();
-            
+
             if (isFilterByIp)
             {
                 clientVisitsSnapshot = clientVisitsSnapshot
@@ -444,7 +405,7 @@ public static partial class ControlApi
 
             // 获取客户端最后访问时间（从 ClientStas 的 LastAccessTime 字段获取）
             var clientStasForLastAccess = SharedData.ClientStas.GetSnapshot();
-            
+
             if (isFilterByIp)
             {
                 clientStasForLastAccess = clientStasForLastAccess
@@ -489,9 +450,8 @@ public static partial class ControlApi
                 result["destinationStats"] = destinationStats;
             }
 
-            return Results.Json(result);
-        }).RequireHost($"*:{controlPort}");
+            return TypedResults.Ok(result);
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }
-

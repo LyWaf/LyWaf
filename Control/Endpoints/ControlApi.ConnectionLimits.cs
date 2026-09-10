@@ -32,16 +32,17 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record FeatureToggleResponse(bool Success, string Feature, bool Enabled, string Message, DateTime Timestamp);
+    private sealed record ConnectionToggleResponse(bool Success, bool Enabled, string Message);
+    private sealed record ConnectionLimitResponse(bool Success, string Message);
     private static void MapConnectionLimitEndpoints(WebApplication app, int controlPort)
     {
         // =============== 功能状态切换 API ===============
-        
+
         // 切换 IP 访问控制状态
-        app.MapPost("/api/feature/ip-control/toggle", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        app.MapPost("/api/feature/ip-control/toggle", (HttpContext ctx, IAccessControlService accessControlService, ToggleFeatureRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<ToggleFeatureRequest>();
+
                 var enabled = request?.Enabled ?? !accessControlService.GetOptions().IpControl.Enabled;
                 accessControlService.SetIpControlEnabled(enabled);
                 return Results.Json(new
@@ -52,19 +53,12 @@ public static partial class ControlApi
                     message = enabled ? "IP 访问控制已启用" : "IP 访问控制已禁用",
                     timestamp = DateTime.Now
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"切换失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<FeatureToggleResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 切换地理位置访问控制状态
-        app.MapPost("/api/feature/geo-control/toggle", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        app.MapPost("/api/feature/geo-control/toggle", (HttpContext ctx, IAccessControlService accessControlService, ToggleFeatureRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<ToggleFeatureRequest>();
+
                 var enabled = request?.Enabled ?? !accessControlService.GetOptions().GeoControl.Enabled;
                 accessControlService.SetGeoControlEnabled(enabled);
                 return Results.Json(new
@@ -75,12 +69,7 @@ public static partial class ControlApi
                     message = enabled ? "地理位置访问控制已启用" : "地理位置访问控制已禁用",
                     timestamp = DateTime.Now
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"切换失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<FeatureToggleResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // ==================== 连接限制 API ====================
 
@@ -90,7 +79,7 @@ public static partial class ControlApi
             var options = accessControlService.GetOptions();
             var config = options.ConnectionLimit;
             var stats = accessControlService.GetConnectionStats();
-            return Results.Json(new
+            return TypedResults.Ok(new
             {
                 success = true,
                 enabled = config.Enabled,
@@ -106,14 +95,12 @@ public static partial class ControlApi
                     connectionsPerDestination = stats.ConnectionsPerDestination.Count
                 }
             });
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 切换连接限制启用状态
-        app.MapPost("/api/connection-limit/toggle", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        app.MapPost("/api/connection-limit/toggle", (HttpContext ctx, IAccessControlService accessControlService, ToggleFeatureRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<ToggleFeatureRequest>();
+
                 var enabled = request?.Enabled ?? !accessControlService.GetOptions().ConnectionLimit.Enabled;
                 accessControlService.SetConnectionLimitEnabled(enabled);
                 return Results.Json(new
@@ -122,19 +109,12 @@ public static partial class ControlApi
                     enabled,
                     message = enabled ? "连接限制已启用" : "连接限制已禁用"
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"操作失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<ConnectionToggleResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 更新连接限制配置
-        app.MapPost("/api/connection-limit/update", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        app.MapPost("/api/connection-limit/update", (HttpContext ctx, IAccessControlService accessControlService, UpdateConnectionLimitRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<UpdateConnectionLimitRequest>();
+
                 if (request == null) return Results.Json(new { success = false, message = "无效请求" });
                 accessControlService.SetConnectionLimitConfig(
                     request.MaxConnectionsPerIp,
@@ -142,54 +122,33 @@ public static partial class ControlApi
                     request.MaxTotalConnections,
                     request.RejectStatusCode);
                 return Results.Json(new { success = true, message = "连接限制配置已更新" });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"更新失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<ConnectionLimitResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 添加路径连接限制
-        app.MapPost("/api/connection-limit/path/add", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        app.MapPost("/api/connection-limit/path/add", (HttpContext ctx, IAccessControlService accessControlService, PathConnectionLimitRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<PathConnectionLimitRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Path) || request.MaxConnections <= 0)
                     return Results.Json(new { success = false, message = "无效参数" });
                 accessControlService.SetPathConnectionLimit(request.Path, request.MaxConnections);
                 return Results.Json(new { success = true, message = $"已设置路径 {request.Path} 最大连接数: {request.MaxConnections}" });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<ConnectionLimitResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 移除路径连接限制
-        app.MapPost("/api/connection-limit/path/remove", async (HttpContext ctx, IAccessControlService accessControlService) =>
+        app.MapPost("/api/connection-limit/path/remove", (HttpContext ctx, IAccessControlService accessControlService, RemovePathConnectionLimitRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<RemovePathConnectionLimitRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Path))
                     return Results.Json(new { success = false, message = "无效参数" });
                 if (accessControlService.RemovePathConnectionLimit(request.Path))
                     return Results.Json(new { success = true, message = $"已移除路径 {request.Path} 连接限制" });
-                return Results.Json(new { success = false, message = "路径不在限制列表中" });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+                return Results.Json(new { success = false, message = "路径不在限制列表中" }, statusCode: 404);
+        }).Produces<ConnectionLimitResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 切换 WAF Args 检测状态
-        app.MapPost("/api/feature/waf-args/toggle", async (HttpContext ctx, IProtectService protectService) =>
+        app.MapPost("/api/feature/waf-args/toggle", (HttpContext ctx, IProtectService protectService, ToggleFeatureRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<ToggleFeatureRequest>();
+
                 var enabled = request?.Enabled ?? !protectService.GetOptions().OpenArgsCheck;
                 protectService.SetArgsCheckEnabled(enabled);
                 return Results.Json(new
@@ -200,19 +159,12 @@ public static partial class ControlApi
                     message = enabled ? "WAF Args 检测已启用" : "WAF Args 检测已禁用",
                     timestamp = DateTime.Now
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"切换失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<FeatureToggleResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 切换 WAF Post 检测状态
-        app.MapPost("/api/feature/waf-post/toggle", async (HttpContext ctx, IProtectService protectService) =>
+        app.MapPost("/api/feature/waf-post/toggle", (HttpContext ctx, IProtectService protectService, ToggleFeatureRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<ToggleFeatureRequest>();
+
                 var enabled = request?.Enabled ?? !protectService.GetOptions().OpenPostCheck;
                 protectService.SetPostCheckEnabled(enabled);
                 return Results.Json(new
@@ -223,13 +175,7 @@ public static partial class ControlApi
                     message = enabled ? "WAF Post 检测已启用" : "WAF Post 检测已禁用",
                     timestamp = DateTime.Now
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"切换失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<FeatureToggleResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }
-

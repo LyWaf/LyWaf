@@ -1,3 +1,4 @@
+using LyWaf.Services.Auth;
 using System.Security.Cryptography;
 using System.Text.Json;
 using LyWaf.Services.AuditLog;
@@ -10,15 +11,33 @@ public static class RulePackageEndpoints
 {
     public static IEndpointRouteBuilder MapRulePackageEndpoints(this IEndpointRouteBuilder app, int controlPort)
     {
-        var group = app.MapGroup("/api/rule-packages").RequireHost($"*:{controlPort}");
+        var group = app.MapGroup("/api/rule-packages").RequireHost($"*:{controlPort}").RequireManagementPermission();
 
-        group.MapGet("", (IRulePackageService packages) => Results.Json(new
+        group.MapGet("", (IRulePackageService packages) => TypedResults.Ok(new
         {
             success = true, state = packages.GetState(), packages = packages.List(),
         }));
 
         group.MapPost("/install", InstallAsync);
         group.MapPost("/download", DownloadAsync);
+        group.MapPost("/download-task", (RulePackageDownloadRequest request, HttpContext ctx, IRulePackageService packages,
+            LyWaf.Services.ManagementTasks.ManagementJobService jobs) =>
+        {
+            if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uri) || uri.Scheme != "https")
+                return Results.BadRequest(new { success = false, message = "规则包地址必须为 HTTPS" });
+            try
+            {
+                var job = jobs.Enqueue("rule-package-download", ctx.Items["Username"]?.ToString() ?? "unknown", async (log, ct) =>
+                {
+                    log("开始下载并验证规则包");
+                    await packages.DownloadAndInstallAsync(uri, ct);
+                    log("规则包安装完成");
+                });
+                Audit(ctx, $"创建规则更新任务: {job.Id}");
+                return Results.Accepted($"/api/v1/tasks/{job.Id}", new { success = true, data = job });
+            }
+            catch (InvalidOperationException ex) { return Results.Conflict(new { success = false, message = ex.Message }); }
+        }).RequireManagementPermission(ManagementPermissions.ManageSystem);
         group.MapPost("/{version}/activate", Activate);
         group.MapPost("/rollback", Rollback);
         group.MapGet("/{version}/rules/{ruleId}", Explain);
@@ -108,10 +127,12 @@ public static class RulePackageEndpoints
 
 public sealed class RulePackageDownloadRequest
 {
+    [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(8192), HttpEndpoint]
     public string Url { get; set; } = "";
 }
 
 public sealed class RulePackageActivateRequest
 {
+    [System.ComponentModel.DataAnnotations.Range(0, 100)]
     public int CanaryPercentage { get; set; }
 }

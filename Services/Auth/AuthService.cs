@@ -16,6 +16,8 @@ public class AuthResult
     public string? Username { get; set; }
     public DateTime? ExpiresAt { get; set; }
     public string? Message { get; set; }
+    public string? Role { get; set; }
+    public IReadOnlyCollection<string> Permissions { get; set; } = [];
     /// <summary>暴力破解锁定剩余秒数（0=未锁定）</summary>
     public int RetryAfterSeconds { get; set; }
 }
@@ -32,7 +34,32 @@ public class AuthConfig
     public int TokenExpiryHours { get; set; } = 24;
     public DateTime CreatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
+    public string Role { get; set; } = ManagementRoles.Admin;
+    public bool Disabled { get; set; }
+    public int SessionVersion { get; set; } = 1;
+    public List<ManagementUser> Users { get; set; } = [];
+    public List<ManagementLoginRecord> LoginHistory { get; set; } = [];
+    public List<ManagementRoleDefinition> Roles { get; set; } = [];
 }
+
+public sealed class ManagementUser
+{
+    public string? TotpSecret { get; set; }
+    public string? PendingTotpSecret { get; set; }
+    public DateTime? PendingTotpExpiresAt { get; set; }
+    public long LastTotpStep { get; set; } = -1;
+    public List<string> RecoveryHashes { get; set; } = [];
+    public string Id { get; set; } = Guid.NewGuid().ToString("N")[..12];
+    public string Username { get; set; } = "";
+    public string PasswordHash { get; set; } = "";
+    public string Role { get; set; } = ManagementRoles.Auditor;
+    public bool Disabled { get; set; }
+    public int SessionVersion { get; set; } = 1;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? LastLoginAt { get; set; }
+}
+
+public sealed record ManagementLoginRecord(string Username, DateTime OccurredAt, bool Success, string ClientIp);
 
 /// <summary>
 /// 登录失败追踪（内存中，按用户名）
@@ -56,7 +83,13 @@ public interface IAuthService
     /// 验证登录哈希，返回 JWT token。
     /// passwordHash = SHA256(SHA256(password) + timestamp)
     /// </summary>
-    AuthResult Login(string username, string passwordHash, long timestamp);
+    AuthResult Login(string username, string passwordHash, long timestamp, string? secondFactor = null);
+    TotpEnrollment BeginTotp(string username, string password);
+    string[] ConfirmTotp(string username, string password, string code);
+    bool DisableTotp(string username, string password, string code);
+    bool IsTotpEnabled(string username);
+    string CreateStepUp(string username, string password, string? code, string sessionToken);
+    bool ValidateStepUp(string sessionToken, string? proof);
 
     /// <summary>验证 JWT token，返回是否有效</summary>
     bool ValidateToken(string token);
@@ -65,10 +98,13 @@ public interface IAuthService
     AuthResult RefreshToken(string token);
 
     /// <summary>修改密码（需认证，明文传入）</summary>
-    bool ChangePassword(string currentPassword, string newPassword);
+    bool ChangePassword(string username, string currentPassword, string newPassword);
 
     /// <summary>从 token 中提取用户名</summary>
     string? GetUsername(string token);
+
+    /// <summary>读取并验证令牌中的管理身份。</summary>
+    ManagementIdentity? GetIdentity(string token);
 
     /// <summary>获取服务器当前 Unix 时间戳（秒）</summary>
     long GetServerTimestamp();
@@ -89,15 +125,33 @@ public interface IAuthService
 
     /// <summary>获取上次登录时间</summary>
     DateTime? GetLastLoginAt();
+    IReadOnlyList<ManagementUser> GetUsers();
+    IReadOnlyList<ManagementLoginRecord> GetLoginHistory(int limit = 100);
+    void RecordLoginAttempt(string username, bool success, string clientIp);
+    ManagementUser CreateUser(string username, string password, string role);
+    bool SetUserDisabled(string id, bool disabled);
+    bool SetUserRole(string id, string role);
+    string? ResetUserPassword(string id);
+    bool RevokeUserSessions(string id);
+    IReadOnlyList<ManagementRoleDefinition> GetRoles();
+    void SaveRole(string name, string[] permissions);
+    bool DeleteRole(string name);
 }
+
+public sealed record ManagementIdentity(string Username, string Role, IReadOnlySet<string> Permissions);
 
 /// <summary>
 /// JWT 认证服务实现
 /// </summary>
-public class AuthService : IAuthService
+public partial class AuthService : IAuthService
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
-    private static readonly string AuthFilePath = Path.Combine(Directory.GetCurrentDirectory(), ".lywaf.auth.json");
+    private readonly string AuthFilePath;
+    private string? _persistedConfig;
+
+    public AuthService() : this(Path.Combine(Directory.GetCurrentDirectory(), ".lywaf.auth.json")) { }
+
+    internal AuthService(string path) => AuthFilePath = Path.GetFullPath(path);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -123,6 +177,7 @@ public class AuthService : IAuthService
 
     // =============== 初始化 ===============
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
     public void Initialize()
     {
         if (File.Exists(AuthFilePath))
@@ -132,13 +187,16 @@ public class AuthService : IAuthService
                 var json = File.ReadAllText(AuthFilePath, Encoding.UTF8);
                 _config = JsonSerializer.Deserialize<AuthConfig>(json, JsonOptions) ?? new AuthConfig();
                 _jwtSecretBytes = Convert.FromBase64String(_config.JwtSecret);
+                if (_jwtSecretBytes.Length < 32) throw new InvalidDataException("认证签名密钥无效");
+                _persistedConfig = json;
+                EnsureUserStore();
                 _configLoadedAt = DateTime.UtcNow;
                 _logger.Info("已加载认证配置 ({File})", AuthFilePath);
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "加载认证配置失败，将重新生成");
-                CreateDefaultConfig();
+                _logger.Error(ex, "加载认证配置失败，保留原文件");
+                throw;
             }
         }
         else
@@ -164,7 +222,18 @@ public class AuthService : IAuthService
             JwtSecret = Convert.ToBase64String(_jwtSecretBytes),
             TokenExpiryHours = 24,
             CreatedAt = DateTime.UtcNow,
-            LastLoginAt = null
+            LastLoginAt = null,
+            Role = ManagementRoles.Admin,
+            SessionVersion = 1,
+            Users =
+            [
+                new ManagementUser
+                {
+                    Username = "LyWaf",
+                    PasswordHash = ComputeSha256(password),
+                    Role = ManagementRoles.Admin
+                }
+            ]
         };
 
         SaveConfig();
@@ -182,21 +251,44 @@ public class AuthService : IAuthService
             ╚══════════════════════════════════════╝
             """;
         Console.WriteLine(banner);
-        _logger.Warn("控制台初始密码已生成，用户名: LyWaf，密码: {Password}", password);
+        _logger.Warn("控制台初始密码已生成，请从启动控制台获取并及时修改");
     }
 
     private void SaveConfig()
     {
+        var temporaryPath = AuthFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             var json = JsonSerializer.Serialize(_config, JsonOptions);
-            File.WriteAllText(AuthFilePath, json, Encoding.UTF8);
+            File.WriteAllText(temporaryPath, json, Encoding.UTF8);
+            File.Move(temporaryPath, AuthFilePath, true);
+            _persistedConfig = json;
             _configLoadedAt = DateTime.UtcNow;
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "保存认证配置失败");
+            if (_persistedConfig is not null)
+                _config = JsonSerializer.Deserialize<AuthConfig>(_persistedConfig, JsonOptions)!;
+            throw;
         }
+        finally { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
+    }
+
+    private void EnsureUserStore()
+    {
+        if (_config.Users.Count > 0) return;
+        _config.Users.Add(new ManagementUser
+        {
+            Username = _config.Username,
+            PasswordHash = _config.PasswordHash,
+            Role = string.IsNullOrWhiteSpace(_config.Role) ? ManagementRoles.Admin : _config.Role,
+            Disabled = _config.Disabled,
+            SessionVersion = Math.Max(1, _config.SessionVersion),
+            CreatedAt = _config.CreatedAt,
+            LastLoginAt = _config.LastLoginAt
+        });
+        SaveConfig();
     }
 
     /// <summary>
@@ -216,8 +308,12 @@ public class AuthService : IAuthService
             var newConfig = JsonSerializer.Deserialize<AuthConfig>(json, JsonOptions);
             if (newConfig != null)
             {
+                var secret = Convert.FromBase64String(newConfig.JwtSecret);
+                if (secret.Length < 32) throw new InvalidOperationException("JWT 密钥长度不足");
                 _config = newConfig;
-                _jwtSecretBytes = Convert.FromBase64String(_config.JwtSecret);
+                _jwtSecretBytes = secret;
+                _persistedConfig = json;
+                EnsureUserStore();
             }
         }
         catch (Exception ex)
@@ -278,6 +374,7 @@ public class AuthService : IAuthService
 
     // =============== 服务器时间 ===============
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
     public long GetServerTimestamp()
     {
         return DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -289,7 +386,8 @@ public class AuthService : IAuthService
     /// 验证登录。前端发送 passwordHash = SHA256(SHA256(password) + timestamp.toString())
     /// 服务端用存储的 PasswordHash + timestamp 计算期望值进行比对。
     /// </summary>
-    public AuthResult Login(string username, string passwordHash, long timestamp)
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
+    public AuthResult Login(string username, string passwordHash, long timestamp, string? secondFactor = null)
     {
         ReloadConfigIfStale();
 
@@ -308,7 +406,7 @@ public class AuthService : IAuthService
 
         // 2. 验证时间戳（防协议重放）
         var serverTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var timeDiff = Math.Abs(serverTime - timestamp);
+        var timeDiff = Math.Abs((decimal)serverTime - timestamp);
         if (timeDiff > TimestampToleranceSeconds)
         {
             _logger.Warn("登录失败：时间戳偏差过大 ({Diff}s)，客户端={ClientTs}，服务端={ServerTs}",
@@ -321,15 +419,23 @@ public class AuthService : IAuthService
         }
 
         // 3. 验证用户名
-        if (!string.Equals(username, _config.Username, StringComparison.OrdinalIgnoreCase))
+        var user = _config.Users.FirstOrDefault(item =>
+            string.Equals(item.Username, username, StringComparison.OrdinalIgnoreCase));
+        if (user is null)
         {
             RecordLoginFailure(username);
             _logger.Warn("登录失败：用户名不存在 ({Username})", username);
             return new AuthResult { Success = false, Message = "用户名或密码错误" };
         }
 
+        if (user.Disabled)
+        {
+            _logger.Warn("登录失败：用户已禁用 ({Username})", username);
+            return new AuthResult { Success = false, Message = "用户已禁用" };
+        }
+
         // 4. 验证密码哈希：SHA256(storedPasswordHash + timestamp)
-        var expectedHash = ComputeSha256(_config.PasswordHash + timestamp.ToString());
+        var expectedHash = ComputeSha256(user.PasswordHash + timestamp.ToString());
         if (!string.Equals(expectedHash, passwordHash, StringComparison.OrdinalIgnoreCase))
         {
             RecordLoginFailure(username);
@@ -349,23 +455,32 @@ public class AuthService : IAuthService
             return new AuthResult { Success = false, Message = "用户名或密码错误" };
         }
 
+        if (user.TotpSecret is not null && !VerifySecondFactor(user, secondFactor))
+        {
+            RecordLoginFailure(username);
+            return new AuthResult { Success = false, Message = "请输入有效的动态码或恢复码" };
+        }
+
         // 5. 登录成功
         ResetLoginAttempts(username);
 
-        _config.LastLoginAt = DateTime.UtcNow;
+        user.LastLoginAt = DateTime.UtcNow;
+        _config.LastLoginAt = user.LastLoginAt;
         SaveConfig();
 
         var expiresAt = DateTime.UtcNow.AddHours(_config.TokenExpiryHours);
-        var token = GenerateToken(_config.Username, expiresAt);
+        var token = GenerateToken(user.Username, user.Role, user.SessionVersion, expiresAt);
 
-        _logger.Info("用户 {Username} 登录成功", _config.Username);
+        _logger.Info("用户 {Username} 登录成功", user.Username);
 
         return new AuthResult
         {
             Success = true,
             Token = token,
-            Username = _config.Username,
-            ExpiresAt = expiresAt
+            Username = user.Username,
+            ExpiresAt = expiresAt,
+            Role = user.Role,
+            Permissions = ResolvePermissions(user.Role).ToArray()
         };
     }
 
@@ -375,6 +490,7 @@ public class AuthService : IAuthService
     /// 直接验证用户名密码（HTTP Basic Auth），受暴力破解防护。
     /// 验证成功返回 Success=true（不生成 token，仅放行请求）。
     /// </summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
     public AuthResult ValidateCredentials(string username, string password)
     {
         ReloadConfigIfStale();
@@ -391,24 +507,33 @@ public class AuthService : IAuthService
             };
         }
 
-        if (!string.Equals(username, _config.Username, StringComparison.OrdinalIgnoreCase))
+        var user = _config.Users.FirstOrDefault(item =>
+            string.Equals(item.Username, username, StringComparison.OrdinalIgnoreCase));
+        if (user is null || user.Disabled)
         {
             RecordLoginFailure(username);
             return new AuthResult { Success = false, Message = "用户名或密码错误" };
         }
 
-        if (ComputeSha256(password) != _config.PasswordHash)
+        if (user.TotpSecret is not null || ComputeSha256(password) != user.PasswordHash)
         {
             RecordLoginFailure(username);
             return new AuthResult { Success = false, Message = "用户名或密码错误" };
         }
 
         ResetLoginAttempts(username);
-        return new AuthResult { Success = true, Username = _config.Username };
+        return new AuthResult
+        {
+            Success = true,
+            Username = user.Username,
+            Role = user.Role,
+            Permissions = ResolvePermissions(user.Role).ToArray()
+        };
     }
 
     // =============== Token 验证 ===============
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
     public bool ValidateToken(string token)
     {
         ReloadConfigIfStale();
@@ -423,7 +548,7 @@ public class AuthService : IAuthService
             if (expectedSig != parts[2]) return false;
 
             var payload = DecodeBase64Url(parts[1]);
-            var doc = JsonDocument.Parse(payload);
+            using var doc = JsonDocument.Parse(payload);
 
             if (doc.RootElement.TryGetProperty("exp", out var expEl))
             {
@@ -435,7 +560,11 @@ public class AuthService : IAuthService
                 return false;
             }
 
-            return true;
+            var sub = doc.RootElement.TryGetProperty("sub", out var subEl) ? subEl.GetString() : null;
+            var version = doc.RootElement.TryGetProperty("ver", out var versionEl) ? versionEl.GetInt32() : 0;
+            var user = _config.Users.FirstOrDefault(item =>
+                string.Equals(item.Username, sub, StringComparison.OrdinalIgnoreCase));
+            return user is { Disabled: false } && version == user.SessionVersion;
         }
         catch
         {
@@ -445,6 +574,7 @@ public class AuthService : IAuthService
 
     // =============== Token 刷新 ===============
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
     public AuthResult RefreshToken(string token)
     {
         ReloadConfigIfStale();
@@ -454,61 +584,180 @@ public class AuthService : IAuthService
         var username = GetUsername(token);
         if (username == null) return new AuthResult { Success = false, Message = "令牌无效" };
 
+        var user = _config.Users.First(item => string.Equals(item.Username, username, StringComparison.OrdinalIgnoreCase));
         var expiresAt = DateTime.UtcNow.AddHours(_config.TokenExpiryHours);
-        var newToken = GenerateToken(username, expiresAt);
+        var newToken = GenerateToken(username, user.Role, user.SessionVersion, expiresAt);
 
         return new AuthResult
         {
             Success = true,
             Token = newToken,
             Username = username,
-            ExpiresAt = expiresAt
+            ExpiresAt = expiresAt,
+            Role = user.Role,
+            Permissions = ResolvePermissions(user.Role).ToArray()
         };
     }
 
     // =============== 修改密码 ===============
 
-    public bool ChangePassword(string currentPassword, string newPassword)
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
+    public bool ChangePassword(string username, string currentPassword, string newPassword)
     {
         ReloadConfigIfStale();
 
-        if (ComputeSha256(currentPassword) != _config.PasswordHash)
+        var user = _config.Users.FirstOrDefault(item =>
+            string.Equals(item.Username, username, StringComparison.OrdinalIgnoreCase));
+        if (user is null || ComputeSha256(currentPassword) != user.PasswordHash)
         {
             _logger.Warn("修改密码失败：当前密码错误");
             return false;
         }
 
-        _config.PasswordHash = ComputeSha256(newPassword);
+        user.PasswordHash = ComputeSha256(newPassword);
+        user.SessionVersion++;
         SaveConfig();
-        _logger.Info("用户 {Username} 修改了密码", _config.Username);
+        _logger.Info("用户 {Username} 修改了密码", user.Username);
         return true;
     }
 
     // =============== 重置密码（CLI） ===============
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
     public string ResetPassword()
     {
         ReloadConfigIfStale();
+        var admin = _config.Users.First(user => user.Role == ManagementRoles.Admin);
+        return ResetPasswordCore(admin);
+    }
 
-        var passwordChars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-        var passwordBytes = RandomNumberGenerator.GetBytes(16);
-        var newPassword = new string(passwordBytes.Select(b => passwordChars[b % passwordChars.Length]).ToArray());
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
+    public IReadOnlyList<ManagementUser> GetUsers()
+    {
+        ReloadConfigIfStale();
+        return _config.Users.OrderBy(user => user.Username, StringComparer.OrdinalIgnoreCase)
+            .Select(user => new ManagementUser
+            {
+                Id = user.Id, Username = user.Username, Role = user.Role, Disabled = user.Disabled,
+                CreatedAt = user.CreatedAt, LastLoginAt = user.LastLoginAt, SessionVersion = user.SessionVersion
+            }).ToArray();
+    }
 
-        _config.PasswordHash = ComputeSha256(newPassword);
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
+    public IReadOnlyList<ManagementLoginRecord> GetLoginHistory(int limit = 100)
+    {
+        ReloadConfigIfStale();
+        return _config.LoginHistory.OrderByDescending(item => item.OccurredAt)
+            .Take(Math.Clamp(limit, 1, 500)).ToArray();
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
+    public void RecordLoginAttempt(string username, bool success, string clientIp)
+    {
+        ReloadConfigIfStale();
+        AddLoginHistory(username, success, clientIp);
         SaveConfig();
+    }
 
-        _logger.Info("用户 {Username} 的密码已通过命令行重置", _config.Username);
-        return newPassword;
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
+    public ManagementUser CreateUser(string username, string password, string role)
+    {
+        ReloadConfigIfStale();
+        if (string.IsNullOrWhiteSpace(username)) throw new ArgumentException("用户名不能为空", nameof(username));
+        if (password is not { Length: >= 8 and <= 1024 }) throw new ArgumentException("密码长度须为 8 至 1024 字符", nameof(password));
+        if (string.IsNullOrWhiteSpace(role)) throw new ArgumentException("角色不能为空", nameof(role));
+        username = username.Trim();
+        role = role.Trim().ToLowerInvariant();
+        if (username.Length is < 3 or > 64) throw new ArgumentException("用户名长度必须为 3-64 个字符");
+        if (password.Length < 8) throw new ArgumentException("密码长度至少 8 位");
+        if (!RoleExists(role)) throw new ArgumentException("角色无效");
+        if (_config.Users.Any(user => string.Equals(user.Username, username, StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException("用户名已存在");
+        var user = new ManagementUser { Username = username, PasswordHash = ComputeSha256(password), Role = role };
+        _config.Users.Add(user);
+        SaveConfig();
+        return new ManagementUser { Id = user.Id, Username = user.Username, Role = user.Role,
+            CreatedAt = user.CreatedAt, Disabled = user.Disabled, SessionVersion = user.SessionVersion };
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
+    public bool SetUserDisabled(string id, bool disabled)
+    {
+        ReloadConfigIfStale();
+        var user = _config.Users.FirstOrDefault(item => item.Id == id);
+        if (user is null || disabled && IsLastEnabledAdmin(user)) return false;
+        user.Disabled = disabled;
+        if (disabled) user.SessionVersion++;
+        SaveConfig();
+        return true;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
+    public bool SetUserRole(string id, string role)
+    {
+        ReloadConfigIfStale();
+        role = role.Trim().ToLowerInvariant();
+        if (!RoleExists(role)) return false;
+        var user = _config.Users.FirstOrDefault(item => item.Id == id);
+        if (user is null || role != ManagementRoles.Admin && IsLastEnabledAdmin(user)) return false;
+        user.Role = role;
+        user.SessionVersion++;
+        SaveConfig();
+        return true;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
+    public string? ResetUserPassword(string id)
+    {
+        ReloadConfigIfStale();
+        var user = _config.Users.FirstOrDefault(item => item.Id == id);
+        return user is null ? null : ResetPasswordCore(user);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
+    public bool RevokeUserSessions(string id)
+    {
+        ReloadConfigIfStale();
+        var user = _config.Users.FirstOrDefault(item => item.Id == id);
+        if (user is null) return false;
+        user.SessionVersion++;
+        SaveConfig();
+        return true;
+    }
+
+    private bool IsLastEnabledAdmin(ManagementUser user) =>
+        user.Role == ManagementRoles.Admin && !user.Disabled &&
+        _config.Users.Count(item => item.Role == ManagementRoles.Admin && !item.Disabled) == 1;
+
+    private string ResetPasswordCore(ManagementUser user)
+    {
+        const string chars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        var bytes = RandomNumberGenerator.GetBytes(16);
+        var password = new string(bytes.Select(value => chars[value % chars.Length]).ToArray());
+        user.PasswordHash = ComputeSha256(password);
+        user.SessionVersion++;
+        SaveConfig();
+        _logger.Info("用户 {Username} 的密码已重置", user.Username);
+        return password;
+    }
+
+    private void AddLoginHistory(string username, bool success, string clientIp)
+    {
+        _config.LoginHistory.Add(new(username, DateTime.UtcNow, success, clientIp));
+        if (_config.LoginHistory.Count > 1000)
+            _config.LoginHistory.RemoveRange(0, _config.LoginHistory.Count - 1000);
     }
 
     // =============== 配置信息查询 ===============
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
     public string GetCurrentUsername()
     {
         ReloadConfigIfStale();
         return _config.Username;
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
     public DateTime? GetLastLoginAt()
     {
         ReloadConfigIfStale();
@@ -517,6 +766,7 @@ public class AuthService : IAuthService
 
     // =============== 从 Token 提取用户名 ===============
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
     public string? GetUsername(string token)
     {
         try
@@ -525,7 +775,7 @@ public class AuthService : IAuthService
             if (parts.Length != 3) return null;
 
             var payload = DecodeBase64Url(parts[1]);
-            var doc = JsonDocument.Parse(payload);
+            using var doc = JsonDocument.Parse(payload);
 
             return doc.RootElement.TryGetProperty("sub", out var sub) ? sub.GetString() : null;
         }
@@ -535,14 +785,33 @@ public class AuthService : IAuthService
         }
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.Synchronized)]
+    public ManagementIdentity? GetIdentity(string token)
+    {
+        if (!ValidateToken(token)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(DecodeBase64Url(token.Split('.')[1]));
+            var payload = document.RootElement;
+            var username = payload.GetProperty("sub").GetString();
+            var role = payload.TryGetProperty("role", out var roleElement)
+                ? roleElement.GetString() ?? ManagementRoles.Auditor
+                : ManagementRoles.Auditor;
+            return string.IsNullOrWhiteSpace(username)
+                ? null
+                : new ManagementIdentity(username, role, ResolvePermissions(role));
+        }
+        catch { return null; }
+    }
+
     // =============== JWT 内部方法 ===============
 
-    private string GenerateToken(string username, DateTime expiresAt)
+    private string GenerateToken(string username, string role, int sessionVersion, DateTime expiresAt)
     {
         var header = EncodeBase64Url("""{"alg":"HS256","typ":"JWT"}""");
         var iat = new DateTimeOffset(DateTime.UtcNow).ToUnixTimeSeconds();
         var exp = new DateTimeOffset(expiresAt).ToUnixTimeSeconds();
-        var payloadJson = $$$"""{"sub":"{{{username}}}","iat":{{{iat}}},"exp":{{{exp}}}}""";
+        var payloadJson = JsonSerializer.Serialize(new { sub = username, role, ver = sessionVersion, iat, exp });
         var payload = EncodeBase64Url(payloadJson);
 
         var signature = ComputeHmacSha256($"{header}.{payload}");

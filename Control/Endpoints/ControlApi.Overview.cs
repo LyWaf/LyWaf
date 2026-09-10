@@ -36,13 +36,14 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record ServiceReloadResponse(bool Success, string Message, bool PortsChanged, bool RestartRequired,
+        ConfigurationChangeImpact ChangeImpact, DateTime Timestamp);
+    private sealed record ReadinessResponse(bool Success, LyWaf.Services.Lifecycle.DrainSnapshot State);
     private static void MapOverviewEndpoints(WebApplication app, int controlPort, WafInfoOptions wafInfos)
     {
         // =============== 配置概览 API ===============
         app.MapGet("/api/overview", (HttpContext ctx, IConfiguration config) =>
         {
-            try
-            {
                 // 控制台监听
                 var cl = wafInfos.GetControlListen();
 
@@ -233,7 +234,7 @@ public static partial class ControlApi
                     });
                 }
 
-                return Results.Json(new
+                return TypedResults.Ok(new
                 {
                     success = true,
                     listens,
@@ -242,12 +243,7 @@ public static partial class ControlApi
                     clusters = allClusters.Values.ToList(),
                     timestamp = DateTime.Now
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"获取概览数据失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         app.MapGet("/api/config", (HttpContext ctx, IConfiguration config) =>
         {
@@ -266,16 +262,16 @@ public static partial class ControlApi
             var yaml = serializer.Serialize(configDict);
             
             return Results.Text(yaml, "text/yaml", Encoding.UTF8);
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<string>(200, "text/yaml").RequireHost($"*:{controlPort}").RequireManagementPermission();
         
-        app.MapGet("/api/stop", (HttpContext ctx, IHostApplicationLifetime lifetime) =>
+        app.MapPost("/api/stop", (HttpContext ctx, IHostApplicationLifetime lifetime) =>
         {
             // 停止应用会触发插件系统停止（包括 AnalysisPlugin）
             lifetime.StopApplication();
-            return Results.Json(new { message = "服务正在停止..." });
-        }).RequireHost($"*:{controlPort}");
+            return TypedResults.Ok(new { message = "服务正在停止..." });
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
         
-        app.MapGet("/api/reload", (HttpContext ctx, IConfiguration config) =>
+        app.MapPost("/api/reload", (HttpContext ctx, IConfiguration config) =>
         {
             if (config is not IConfigurationRoot configRoot)
             {
@@ -312,126 +308,62 @@ public static partial class ControlApi
                 changeImpact = impact,
                 timestamp = DateTime.Now
             });
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<ServiceReloadResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         app.MapGet("/api/health/ready", (HttpContext ctx) =>
         {
             var coordinator = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.GracefulShutdownCoordinator>();
             var state = coordinator.Snapshot();
             return Results.Json(new { success = state.Ready, state }, statusCode: state.Ready ? 200 : 503);
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<ReadinessResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         app.MapGet("/api/openapi.json", (EndpointDataSource endpoints) =>
-            Results.Json(ManagementApiContract.BuildOpenApiDocument(endpoints)))
-            .RequireHost($"*:{controlPort}");
+            TypedResults.Ok(ManagementApiContract.BuildOpenApiDocument(endpoints)))
+            .RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         app.MapGet("/api/lifecycle/drain", (HttpContext ctx) =>
         {
             var coordinator = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.GracefulShutdownCoordinator>();
-            return Results.Json(new { success = true, state = coordinator.Snapshot() });
-        }).RequireHost($"*:{controlPort}");
+            return TypedResults.Ok(new { success = true, state = coordinator.Snapshot() });
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         app.MapGet("/api/upgrade/releases", async (HttpContext ctx) =>
         {
             var service = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.UpgradePackageService>();
-            return Results.Json(new { success = true, releases = await service.ListAsync(ctx.RequestAborted), pointers = await service.GetPointersAsync(ctx.RequestAborted) });
-        }).RequireHost($"*:{controlPort}");
+            return TypedResults.Ok(ManagementLists.From(await service.ListAsync(ctx.RequestAborted))
+                .Sort("version", item => item.Version).Sort("stagedAt", item => item.StagedAt)
+                .Sort("status", item => item.Status).Search(item => $"{item.Version} {item.Status} {item.EntryPoint}")
+                .Timestamp(item => item.StagedAt).Read(ctx.Request.Query, "stagedAt", descending: true));
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
-        app.MapPost("/api/upgrade/stage", async (HttpContext ctx) =>
+        app.MapGet("/api/upgrade/pointers", async (HttpContext ctx) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<StageUpgradeRequest>(ctx.RequestAborted);
-                if (request == null) return Results.BadRequest(new { success = false, message = "请求内容为空" });
-                var service = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.UpgradePackageService>();
-                var release = await service.StageAsync(request.PackageName, request.Version, request.Sha256, SharedData.ConfigFilePath, ctx.RequestAborted);
-                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
-                    ctx.Items["Username"]?.ToString() ?? "unknown", $"校验并入库程序版本: {release.Version}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-                return Results.Json(new { success = true, message = "候选版本已校验并入库", release });
-            }
-            catch (Exception ex) { return Results.Json(new { success = false, message = $"候选版本入库失败: {ex.Message}" }, statusCode: 400); }
-        }).RequireHost($"*:{controlPort}");
+            var service = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.UpgradePackageService>();
+            return TypedResults.Ok(await service.GetPointersAsync(ctx.RequestAborted));
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
-        app.MapPost("/api/upgrade/activate", async (HttpContext ctx, IHostApplicationLifetime lifetime, IConfiguration config) =>
-        {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<ActivateUpgradeRequest>(ctx.RequestAborted);
-                if (request == null) return Results.BadRequest(new { success = false, message = "请求内容为空" });
-                var service = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.UpgradePackageService>();
-                var release = (await service.ListAsync(ctx.RequestAborted)).SingleOrDefault(x => x.Version == request.Version)
-                    ?? throw new KeyNotFoundException("候选版本不存在");
-                var assembly = System.Reflection.Assembly.GetEntryAssembly();
-                var probe = await service.StartReadinessProbeAsync(release, config, SharedData.ConfigFilePath, ctx.RequestAborted);
-                try
-                {
-                    await service.MarkPendingAsync(release.Version, assembly?.GetName().Version?.ToString() ?? "current", GetRunningEntryPoint(), ctx.RequestAborted);
-                }
-                catch
-                {
-                    try { Process.GetProcessById(probe.ProcessId).Kill(entireProcessTree: true); } catch { }
-                    throw;
-                }
-                SharedData.PendingUpgradeVersion = release.Version;
-                SharedData.PendingUpgradeEntryPoint = release.EntryPoint;
-                SharedData.PendingUpgradeProbeProcessId = probe.ProcessId;
-                SharedData.UpgradeRequested = true;
-                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
-                    ctx.Items["Username"]?.ToString() ?? "unknown", $"激活程序版本: {release.Version}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-                ScheduleDrainAndStop(ctx, lifetime, config);
-                return Results.Json(new { success = true, message = "候选版本将在当前实例排空后启动", version = release.Version });
-            }
-            catch (Exception ex) { return Results.Json(new { success = false, message = $"激活失败: {ex.Message}" }, statusCode: 400); }
-        }).RequireHost($"*:{controlPort}");
+        app.MapPost("/api/upgrade/stage", EnqueueUpgradeStage)
+            .Produces<LyWaf.Services.ManagementTasks.ManagementJobResponse>(202)
+            .RequireHost($"*:{controlPort}").RequireManagementPermission();
 
-        app.MapPost("/api/upgrade/rollback", async (HttpContext ctx, IHostApplicationLifetime lifetime, IConfiguration config) =>
-        {
-            try
-            {
-                var service = ctx.RequestServices.GetRequiredService<LyWaf.Services.Lifecycle.UpgradePackageService>();
-                var currentPointers = await service.GetPointersAsync(ctx.RequestAborted);
-                var entryPoint = currentPointers.PreviousEntryPoint;
-                if (string.IsNullOrWhiteSpace(currentPointers.Previous) || string.IsNullOrWhiteSpace(entryPoint) || !File.Exists(entryPoint))
-                    throw new InvalidOperationException("没有可用的上一程序版本");
-                var rollbackRelease = new LyWaf.Services.Lifecycle.UpgradeReleaseInfo(
-                    currentPointers.Previous, Path.GetDirectoryName(entryPoint)!, entryPoint, "rollback", DateTimeOffset.UtcNow, "validated", "previous-version");
-                var probe = await service.StartReadinessProbeAsync(rollbackRelease, config, SharedData.ConfigFilePath, ctx.RequestAborted);
-                LyWaf.Services.Lifecycle.UpgradePointers pointers;
-                try { (pointers, entryPoint) = await service.MarkPreviousPendingAsync(ctx.RequestAborted); }
-                catch
-                {
-                    try { Process.GetProcessById(probe.ProcessId).Kill(entireProcessTree: true); } catch { }
-                    throw;
-                }
-                SharedData.PendingUpgradeVersion = pointers.Pending;
-                SharedData.PendingUpgradeEntryPoint = entryPoint;
-                SharedData.PendingUpgradeProbeProcessId = probe.ProcessId;
-                SharedData.UpgradeRequested = true;
-                ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
-                    ctx.Items["Username"]?.ToString() ?? "unknown", $"回退程序版本: {pointers.Pending}", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-                ScheduleDrainAndStop(ctx, lifetime, config);
-                return Results.Json(new { success = true, message = "上一版本将在当前实例排空后启动", version = pointers.Pending });
-            }
-            catch (Exception ex) { return Results.Json(new { success = false, message = $"回退失败: {ex.Message}" }, statusCode: 400); }
-        }).RequireHost($"*:{controlPort}");
+        MapUpgradeActivationEndpoints(app, controlPort);
 
         // 重启服务：先从就绪检查摘流，再等待现有 HTTP、下载和 WebSocket 排空。
-        app.MapGet("/api/restart", (HttpContext ctx, IHostApplicationLifetime lifetime, IConfiguration config) =>
+        app.MapPost("/api/restart", (HttpContext ctx, IHostApplicationLifetime lifetime, IConfiguration config) =>
         {
             var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
             audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", "重启服务", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
             SharedData.RestartRequested = true;
             var timeoutSeconds = Math.Clamp(config.GetValue("Lifecycle:DrainTimeoutSeconds", 30), 1, 600);
             ScheduleDrainAndStop(ctx, lifetime, config);
-            return Results.Json(new
+            return TypedResults.Ok(new
             {
                 success = true,
                 message = "实例将先摘流并等待在途请求完成，然后重启",
                 drainTimeoutSeconds = timeoutSeconds,
                 timestamp = DateTime.Now
             });
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }
-

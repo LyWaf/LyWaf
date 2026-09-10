@@ -50,26 +50,9 @@ public static class ManagementApiContract
             if (versioned) context.Request.Path = rewritten;
 
             var settings = context.RequestServices.GetRequiredService<IOptionsMonitor<ManagementApiOptions>>().CurrentValue;
-            var maxBody = Math.Clamp(settings.MaxRequestBodyBytes, 1024, 64L * 1024 * 1024);
-            var sizeFeature = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
-            if (sizeFeature is { IsReadOnly: false }) sizeFeature.MaxRequestBodySize = maxBody;
-            if (context.Request.ContentLength > maxBody)
-            {
-                await WriteErrorAsync(context, StatusCodes.Status413PayloadTooLarge, "request_too_large", "管理 API 请求体超过限制");
-                return;
-            }
-
             var write = HttpMethods.IsPost(context.Request.Method) || HttpMethods.IsPut(context.Request.Method) ||
                         HttpMethods.IsPatch(context.Request.Method) || HttpMethods.IsDelete(context.Request.Method);
             var identity = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-            var guard = context.RequestServices.GetRequiredService<ManagementApiGuard>();
-            if (!guard.TryAcquire(identity, write, DateTimeOffset.UtcNow, out var retryAfter))
-            {
-                context.Response.Headers.RetryAfter = retryAfter.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                await WriteErrorAsync(context, StatusCodes.Status429TooManyRequests, "rate_limited", "管理 API 请求过于频繁");
-                return;
-            }
-
             context.Response.Headers["X-LyWaf-Api-Version"] = CurrentVersion;
             context.Response.Headers["X-Request-Id"] = context.TraceIdentifier;
             if (!versioned)
@@ -81,15 +64,22 @@ public static class ManagementApiContract
 
             try
             {
-                await next();
-                if (write && settings.AuditMutatingRequests &&
-                    !context.Request.Path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase))
+                var maxBody = Math.Clamp(settings.MaxRequestBodyBytes, 1024, 64L * 1024 * 1024);
+                var sizeFeature = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+                if (sizeFeature is { IsReadOnly: false }) sizeFeature.MaxRequestBodySize = maxBody;
+                if (context.Request.ContentLength > maxBody)
                 {
-                    var username = context.Items["Username"]?.ToString() ?? "anonymous";
-                    context.RequestServices.GetRequiredService<IAuditLogService>().Log(username,
-                        $"Admin API {context.Request.Method} {context.Request.Path} => {context.Response.StatusCode} [{context.TraceIdentifier}]",
-                        identity);
+                    await WriteErrorAsync(context, StatusCodes.Status413PayloadTooLarge, "request_too_large", "管理 API 请求体超过限制");
+                    return;
                 }
+                var guard = context.RequestServices.GetRequiredService<ManagementApiGuard>();
+                if (!guard.TryAcquire(identity, write, DateTimeOffset.UtcNow, out var retryAfter))
+                {
+                    context.Response.Headers.RetryAfter = retryAfter.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    await WriteErrorAsync(context, StatusCodes.Status429TooManyRequests, "rate_limited", "管理 API 请求过于频繁");
+                    return;
+                }
+                await next();
                 if (!context.Response.HasStarted && context.Response.StatusCode >= 400 &&
                     context.Response.ContentLength is null && string.IsNullOrEmpty(context.Response.ContentType))
                 {
@@ -100,17 +90,33 @@ public static class ManagementApiContract
             }
             catch (BadHttpRequestException ex)
             {
-                await WriteErrorAsync(context, ex.StatusCode, "invalid_request", ex.Message);
+                await WriteErrorAsync(context, ex.StatusCode, StatusCodeToErrorCode(ex.StatusCode), GetDefaultMessage(ex.StatusCode));
             }
             catch (JsonException ex)
             {
-                await WriteErrorAsync(context, StatusCodes.Status400BadRequest, "invalid_json", "请求 JSON 格式无效", ex.Message);
+                await WriteErrorAsync(context, StatusCodes.Status400BadRequest, "invalid_json", "请求 JSON 格式无效",
+                    new { field = ex.Path, line = ex.LineNumber });
             }
             catch (Exception ex)
             {
                 Logger.Error(ex, "管理 API 未处理异常，请求 ID: {TraceId}", context.TraceIdentifier);
                 if (!context.Response.HasStarted)
                     await WriteErrorAsync(context, StatusCodes.Status500InternalServerError, "internal_error", "管理 API 内部错误");
+            }
+            finally
+            {
+                if (write && settings.AuditMutatingRequests &&
+                    !context.Request.Path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase))
+                {
+                    var username = context.Items["Username"]?.ToString() ?? "anonymous";
+                    try
+                    {
+                        context.RequestServices.GetRequiredService<IAuditLogService>().Log(username,
+                            $"Admin API {context.Request.Method} {context.Request.Path} => {context.Response.StatusCode} [{context.TraceIdentifier}]",
+                            identity);
+                    }
+                    catch (Exception ex) { Logger.Error(ex, "管理审计写入失败，请求 ID: {TraceId}", context.TraceIdentifier); }
+                }
             }
         });
         return app;
@@ -147,23 +153,52 @@ public static class ManagementApiContract
             var methods = endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods;
             if (methods == null || methods.Count == 0) continue;
 
-            var publicPath = VersionPrefix + raw[4..];
-            var operations = new SortedDictionary<string, object>(StringComparer.Ordinal);
+            var publicPath = VersionPrefix + ManagementOpenApiModels.Path(endpoint.RoutePattern)[4..];
+            var operations = paths.TryGetValue(publicPath, out var existing)
+                ? (SortedDictionary<string, object>)existing
+                : new SortedDictionary<string, object>(StringComparer.Ordinal);
             foreach (var method in methods.OrderBy(x => x, StringComparer.Ordinal))
             {
-                operations[method.ToLowerInvariant()] = new
+                var runtimeAgent = raw.StartsWith("/api/runtime-state/agent/", StringComparison.OrdinalIgnoreCase);
+                var nodeAgent = runtimeAgent || raw.StartsWith("/api/distribution/agent/", StringComparison.OrdinalIgnoreCase);
+                var responses = new Dictionary<string, object>
                 {
-                    operationId = CreateOperationId(method, publicPath),
-                    responses = new Dictionary<string, object>
-                    {
-                        ["200"] = new { description = "请求成功" },
+                        ["200"] = new { description = "请求成功（未声明响应模型）" },
                         ["400"] = ErrorResponse("请求无效"),
                         ["401"] = ErrorResponse("未认证"),
+                        ["403"] = ErrorResponse("权限不足"),
+                        ["428"] = ErrorResponse("需要二次身份验证"),
                         ["429"] = ErrorResponse("请求超过限额"),
-                        ["500"] = ErrorResponse("服务器内部错误")
-                    },
-                    security = IsAnonymous(raw) ? Array.Empty<object>() : new object[] { new Dictionary<string, string[]> { ["bearerAuth"] = [] } }
+                        ["500"] = ErrorResponse("服务器内部错误"),
+                        ["503"] = ErrorResponse("服务暂不可用"),
+                        ["404"] = ErrorResponse("资源不存在"),
+                        ["409"] = ErrorResponse("状态或幂等键冲突"),
+                        ["413"] = ErrorResponse("请求体超过限制")
                 };
+                var produced = endpoint.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>();
+                if (produced.Any(p => p.StatusCode is >= 200 and < 300)) responses.Remove("200");
+                foreach (var response in produced.GroupBy(item => item.StatusCode))
+                    responses[response.Key.ToString(System.Globalization.CultureInfo.InvariantCulture)] = ManagementOpenApiModels.Responses(response);
+                var operation = new Dictionary<string, object>
+                {
+                    ["operationId"] = CreateOperationId(method, publicPath),
+                    ["responses"] = responses,
+                    ["parameters"] = ManagementOpenApiModels.Parameters(endpoint.RoutePattern)
+                        .Concat(method.Equals("GET", StringComparison.OrdinalIgnoreCase) ? ManagementOpenApiModels.ListParameters(produced) : [])
+                        .Concat(nodeAgent
+                        ? new object[] {
+                            new { name = "X-LyWaf-Timestamp", @in = "header", required = true, schema = new { type = "string" } },
+                            new { name = "X-LyWaf-Nonce", @in = "header", required = true, schema = new { type = "string" } }
+                        } : []).Concat(runtimeAgent ? new object[] {
+                            new { name = "X-LyWaf-Node", @in = "header", required = true, schema = new { type = "string", maxLength = 128 } }
+                        } : []).ToArray(),
+                    ["x-permissions"] = IsAnonymous(raw) || nodeAgent ? [] : endpoint.Metadata.GetOrderedMetadata<LyWaf.Services.Auth.ManagementPermissionRequirement>()
+                        .Select(p => p.Permission).Distinct().ToArray(),
+                    ["security"] = IsAnonymous(raw) ? Array.Empty<object>() : new object[] { new Dictionary<string, string[]> { [runtimeAgent ? "runtimeStateSignature" : nodeAgent ? "nodeSignature" : "bearerAuth"] = [] } }
+                };
+                if (endpoint.Metadata.GetMetadata<IAcceptsMetadata>() is { } accepts)
+                    operation["requestBody"] = ManagementOpenApiModels.Request(accepts);
+                operations[method.ToLowerInvariant()] = operation;
             }
             paths[publicPath] = operations;
         }
@@ -172,11 +207,16 @@ public static class ManagementApiContract
         {
             openapi = "3.1.0",
             info = new { title = "LyWaf Management API", version = CurrentVersion },
-            servers = new[] { new { url = VersionPrefix } },
+            servers = new[] { new { url = "/" } },
             paths,
             components = new
             {
-                securitySchemes = new { bearerAuth = new { type = "http", scheme = "bearer", bearerFormat = "JWT" } },
+                securitySchemes = new
+                {
+                    bearerAuth = new { type = "http", scheme = "bearer", bearerFormat = "JWT or LyWaf API Token" },
+                    nodeSignature = new { type = "apiKey", @in = "header", name = "X-LyWaf-Signature", description = "HMAC-SHA256 of operation, timestamp, nonce and lowercase body SHA256 separated by newline; requires node shared secret." },
+                    runtimeStateSignature = new { type = "apiKey", @in = "header", name = "X-LyWaf-Signature", description = "HMAC-SHA256 of runtime-state, node ID, timestamp, nonce and lowercase body SHA256 separated by newline; requires runtime-state peer secret." }
+                },
                 schemas = new
                 {
                     ApiError = new
@@ -215,6 +255,7 @@ public static class ManagementApiContract
 
     private static async Task WriteErrorAsync(HttpContext context, int statusCode, string code, string message, object? details = null)
     {
+        if (context.Response.HasStarted) { context.Abort(); return; }
         context.Response.Clear();
         context.Response.StatusCode = statusCode;
         context.Response.Headers["X-LyWaf-Api-Version"] = CurrentVersion;
@@ -222,11 +263,12 @@ public static class ManagementApiContract
         await context.Response.WriteAsJsonAsync(CreateError(context, code, message, details));
     }
 
-    private static string StatusCodeToErrorCode(int statusCode) => statusCode switch
+    internal static string StatusCodeToErrorCode(int statusCode) => statusCode switch
     {
-        400 => "invalid_request", 401 => "unauthorized", 403 => "forbidden", 404 => "not_found",
+        400 => "invalid_request", 401 => "unauthorized", 403 => "permission_denied", 404 => "not_found",
         405 => "method_not_allowed", 409 => "conflict", 413 => "request_too_large", 429 => "rate_limited",
-        503 => "service_unavailable", _ => "request_failed"
+        415 => "unsupported_media_type", 422 => "validation_failed", 428 => "precondition_required",
+        503 => "service_unavailable", _ => statusCode >= 500 ? "internal_error" : "request_failed"
     };
 
     private static string GetDefaultMessage(int statusCode) => statusCode switch

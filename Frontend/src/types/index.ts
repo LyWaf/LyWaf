@@ -346,6 +346,7 @@ export interface DistributionTargetState {
 }
 
 export interface ConfigurationDeployment {
+  taskId?: string | null
   id: string
   versionId: string
   createdAt: string

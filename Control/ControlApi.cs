@@ -1,6 +1,7 @@
 using LyWaf.Control.Endpoints;
 using LyWaf.Services.WafInfo;
 using LyWaf.Services.ManagementApi;
+using LyWaf.Services.Auth;
 
 namespace LyWaf.Control;
 
@@ -20,7 +21,16 @@ public static partial class ControlApi
         
         MapFrontendEndpoints(app, controlPort);
         MapAuthenticationEndpoints(app, controlPort);
+        app.UseManagementStepUp(controlPort);
+        app.UseManagementIdempotency(controlPort);
         MapManagementIdentityEndpoints(app, controlPort);
+        MapManagementRoleEndpoints(app, controlPort);
+        MapManagementMfaEndpoints(app, controlPort);
+        MapManagementTaskEndpoints(app, controlPort);
+        MapBackupEndpoints(app, controlPort);
+        MapSiteEndpoints(app, controlPort);
+        MapSecurityIncidentEndpoints(app, controlPort);
+        MapNotificationEndpoints(app, controlPort);
         // 业务端点必须在认证管线之后注册。
         MapErrorTemplateEndpoints(app, controlPort);
         app.MapWafRuleEndpoints(controlPort);

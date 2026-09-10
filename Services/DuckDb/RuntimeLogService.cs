@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using LyWaf.Services.ManagementApi;
 using LyWaf.Shared;
 using Microsoft.Extensions.Options;
 using NLog;
@@ -11,6 +12,26 @@ namespace LyWaf.Services.DuckDb;
 /// </summary>
 public class RuntimeLogService
 {
+    public static readonly IReadOnlyDictionary<string, string> SortFields = new Dictionary<string, string>
+    { ["startTime"] = "start_time", ["id"] = "id", ["durationSeconds"] = "duration_seconds", ["peakMemoryMb"] = "peak_memory_mb" };
+
+    public ManagementPage<RuntimeLogEntry> Query(ManagementListQuery query)
+    {
+        if (!_db.IsEnabled) return query.Result<RuntimeLogEntry>([], 0);
+        return ManagementSqlList.Read(_db.GetConnection(), query, "runtime_logs",
+            "id, start_time, stop_time, exit_reason, duration_seconds, peak_memory_mb, final_memory_mb, gc_gen0, gc_gen1, gc_gen2, total_requests, total_intercepts, dotnet_version, os_description, process_id",
+            SortFields, "concat_ws(' ', exit_reason, dotnet_version, os_description)", "start_time", reader => new RuntimeLogEntry
+            {
+                Id = reader.GetInt64(0), StartTime = DateTime.SpecifyKind(reader.GetDateTime(1), DateTimeKind.Utc),
+                StopTime = reader.IsDBNull(2) ? null : DateTime.SpecifyKind(reader.GetDateTime(2), DateTimeKind.Utc),
+                ExitReason = reader.IsDBNull(3) ? "" : reader.GetString(3), DurationSeconds = reader.IsDBNull(4) ? 0 : reader.GetInt64(4),
+                PeakMemoryMb = reader.IsDBNull(5) ? 0 : reader.GetDouble(5), FinalMemoryMb = reader.IsDBNull(6) ? 0 : reader.GetDouble(6),
+                GcGen0 = reader.IsDBNull(7) ? 0 : reader.GetInt64(7), GcGen1 = reader.IsDBNull(8) ? 0 : reader.GetInt64(8),
+                GcGen2 = reader.IsDBNull(9) ? 0 : reader.GetInt64(9), TotalRequests = reader.IsDBNull(10) ? 0 : reader.GetInt64(10),
+                TotalIntercepts = reader.IsDBNull(11) ? 0 : reader.GetInt64(11), DotnetVersion = reader.IsDBNull(12) ? "" : reader.GetString(12),
+                OsDescription = reader.IsDBNull(13) ? "" : reader.GetString(13), ProcessId = reader.IsDBNull(14) ? 0 : reader.GetInt32(14)
+            }, "id");
+    }
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly IDuckDbService _db;
     private readonly DuckDbOptions _options;

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LyWaf.Services.ManagementApi;
 using NLog;
 
 namespace LyWaf.Services.AuditLog;
@@ -28,6 +29,7 @@ public interface IAuditLogService
     /// 分页查询审计日志（最新在前）
     /// </summary>
     (List<AuditLogEntry> Items, int Total) GetLogs(int offset = 0, int limit = 50);
+    ManagementPage<AuditLogEntry> Query(ManagementListQuery query) => throw new NotSupportedException("审计服务不支持结构化查询");
 }
 
 /// <summary>
@@ -36,6 +38,23 @@ public interface IAuditLogService
 /// </summary>
 public class AuditLogService : IAuditLogService
 {
+    public static readonly IReadOnlyDictionary<string, string> SortFields = new Dictionary<string, string>
+    { ["timestamp"] = "log_time", ["username"] = "username", ["action"] = "action", ["ip"] = "ip" };
+
+    public ManagementPage<AuditLogEntry> Query(ManagementListQuery query)
+    {
+        if (_duckDb?.IsEnabled == true)
+            return ManagementSqlList.Read(_duckDb.GetConnection(), query, "audit_log", "username, action, ip, log_time",
+                SortFields, "concat_ws(' ', username, action, ip)", "log_time", reader => new AuditLogEntry
+                { Username = reader.GetString(0), Action = reader.GetString(1), Ip = reader.GetString(2), Timestamp = DateTime.SpecifyKind(reader.GetDateTime(3), DateTimeKind.Utc) }, "id");
+        lock (_writeLock)
+        {
+            EnsureCacheLoaded();
+            return ManagementLists.From(_cache).Sort("timestamp", item => item.Timestamp).Sort("username", item => item.Username)
+                .Sort("action", item => item.Action).Sort("ip", item => item.Ip)
+                .Timestamp(item => item.Timestamp).Search(item => $"{item.Username} {item.Action} {item.Ip}").Read(query);
+        }
+    }
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private static readonly string LogFilePath = Path.Combine(Directory.GetCurrentDirectory(), "logs", "audit.jsonl");
     private static readonly JsonSerializerOptions JsonOptions = new()

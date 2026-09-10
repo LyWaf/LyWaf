@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { wafRuleApi } from '@/api'
 import WafRuleEditor from '@/components/waf/WafRuleEditor.vue'
 import { useToast } from '@/composables/useToast'
 import type { WafCustomRule, WafRuleAction } from '@/types'
 
 const { showSuccess, showError } = useToast()
+const route = useRoute()
 
 // 来源标签
 const sourceLabels: Record<string, string> = {
@@ -56,6 +58,10 @@ const actionColors: Record<WafRuleAction, string> = {
 // 数据
 const loading = ref(false)
 const rules = ref<WafCustomRule[]>([])
+const page = ref(1)
+const total = ref(0)
+const search = ref('')
+const source = ref('')
 
 // 编辑器状态
 const showEditor = ref(false)
@@ -67,17 +73,20 @@ const deletingRule = ref<WafCustomRule | null>(null)
 const deleting = ref(false)
 
 // 加载列表
+let listRequest = 0
 const loadRules = async () => {
+  const request = ++listRequest
   loading.value = true
   try {
-    const res = await wafRuleApi.list() as unknown as { success: boolean; rules: WafCustomRule[] }
-    if (res?.success) {
-      rules.value = res.rules
+    const res = await wafRuleApi.list({ page: page.value, pageSize: 20, search: search.value, source: source.value || undefined }) as unknown as { success: boolean; data: WafCustomRule[]; total: number }
+    if (request === listRequest && res?.success) {
+      rules.value = res.data
+      total.value = res.total
     }
   } catch {
-    showError('加载规则列表失败')
+    if (request === listRequest) showError('加载规则列表失败')
   } finally {
-    loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
 
@@ -170,8 +179,14 @@ const formatTime = (iso: string): string => {
   return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
-onMounted(() => {
-  loadRules()
+onMounted(async () => {
+  await loadRules()
+  if (typeof route.query.edit === 'string') {
+    try {
+      const response: any = await wafRuleApi.get(route.query.edit)
+      if (response.success) openEdit(response.rule)
+    } catch { showError('指定规则不存在或无法读取') }
+  }
 })
 </script>
 
@@ -192,6 +207,15 @@ onMounted(() => {
         </button>
       </div>
     </div>
+
+    <form class="flex flex-wrap gap-3 items-center" @submit.prevent="page = 1; loadRules()">
+      <input v-model="search" maxlength="200" aria-label="搜索规则" placeholder="搜索规则名称或说明" class="input min-w-0" />
+      <select v-model="source" aria-label="规则来源" class="input" @change="page = 1; loadRules()"><option value="">全部来源</option><option value="User">用户</option><option value="Config">配置</option><option value="System">系统</option></select>
+      <button class="btn btn-secondary" :disabled="loading">搜索</button>
+      <button type="button" class="btn btn-secondary" :disabled="loading || page <= 1" @click="page--; loadRules()">上一页</button>
+      <span class="text-sm text-gray-400">{{ page }} / {{ Math.max(1, Math.ceil(total / 20)) }} · 共 {{ total }} 条</span>
+      <button type="button" class="btn btn-secondary" :disabled="loading || page * 20 >= total" @click="page++; loadRules()">下一页</button>
+    </form>
 
     <!-- 提示 -->
     <div class="px-4 py-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-sm text-blue-300">

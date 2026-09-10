@@ -1,7 +1,9 @@
+using LyWaf.Services.Auth;
 using LyWaf.Control.Infrastructure;
 using LyWaf.Services.AntiBot;
 using LyWaf.Services.AuditLog;
 using Microsoft.Extensions.Options;
+using System.ComponentModel.DataAnnotations;
 
 namespace LyWaf.Control.Endpoints;
 
@@ -10,11 +12,11 @@ public static class AntiBotEndpoints
 {
     public static IEndpointRouteBuilder MapAntiBotEndpoints(this IEndpointRouteBuilder app, int controlPort)
     {
-        var group = app.MapGroup("/api/anti-bot").RequireHost($"*:{controlPort}");
+        var group = app.MapGroup("/api/anti-bot").RequireHost($"*:{controlPort}").RequireManagementPermission();
         group.MapGet("", (IOptionsMonitor<AntiBotOptions> options) =>
         {
             var x = options.CurrentValue;
-            return Results.Json(new { success = true, config = new
+            return TypedResults.Ok(new { success = true, config = new
             {
                 x.Enabled, x.Mode, x.ChallengeScore, x.BlockScore, x.ChallengePath, x.CookieName,
                 secretConfigured = !string.IsNullOrWhiteSpace(x.Secret), x.ChallengeTokenSeconds,
@@ -58,20 +60,51 @@ public static class AntiBotEndpoints
         .Log(context.Items["Username"]?.ToString() ?? "unknown", action, context.Connection.RemoteIpAddress?.ToString() ?? "");
 }
 
-public sealed class AntiBotUpdateRequest
+public sealed class AntiBotUpdateRequest : IValidatableObject
 {
     public bool Enabled { get; set; }
+    [Required, RegularExpression("^(Observe|Challenge|Block)$")]
     public string Mode { get; set; } = "Observe";
+    [Range(0, 100)]
     public int ChallengeScore { get; set; } = 60;
+    [Range(0, 100)]
     public int BlockScore { get; set; } = 100;
+    [Required, StringLength(8192), RegularExpression(@"^/(?!/)[^\r\n\\]*$")]
     public string ChallengePath { get; set; } = "/__lywaf/antibot/verify";
+    [Required, StringLength(128), RegularExpression("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")]
     public string CookieName { get; set; } = "__lywaf_ab";
+    [StringLength(4096)]
     public string? Secret { get; set; }
+    [Range(1, 3600)]
     public int ChallengeTokenSeconds { get; set; } = 120;
+    [Range(1, 10080)]
     public int SessionMinutes { get; set; } = 30;
+    [Range(1, 6)]
     public int ProofLeadingZeroNibbles { get; set; } = 3;
+    [Required, MaxLength(1000)]
     public List<string> BypassPaths { get; set; } = [];
+    [Required, MaxLength(1000)]
     public List<string> BypassIps { get; set; } = [];
+    [Required, StringLength(128), RegularExpression("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")]
     public string Ja4Header { get; set; } = "X-LyWaf-JA4";
+    [Required, MaxLength(1000)]
     public List<string> TrustedFingerprintProxies { get; set; } = [];
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext context)
+    {
+        if (!string.IsNullOrWhiteSpace(Secret) && Secret.Length < 32)
+            yield return new ValidationResult("Secret must contain at least 32 characters", [nameof(Secret)]);
+        if (BlockScore < ChallengeScore)
+            yield return new ValidationResult("Block threshold must not be below challenge threshold", [nameof(BlockScore)]);
+        foreach (var (name, values) in new[] { (nameof(BypassIps), BypassIps), (nameof(TrustedFingerprintProxies), TrustedFingerprintProxies) })
+            if (values != null)
+                for (var i = 0; i < values.Count; i++)
+                    if (!new IpAddressAttribute().IsValid(values[i]) || string.IsNullOrWhiteSpace(values[i]))
+                        yield return new ValidationResult("Expected an individual IP address", [$"{name}[{i}]"]);
+        if (BypassPaths != null)
+            for (var i = 0; i < BypassPaths.Count; i++)
+                if (string.IsNullOrEmpty(BypassPaths[i]) || BypassPaths[i].Length > 8192 || !BypassPaths[i].StartsWith('/') ||
+                    BypassPaths[i].StartsWith("//") || BypassPaths[i].Any(c => char.IsControl(c) || c == '\\'))
+                    yield return new ValidationResult("Expected a local absolute path prefix", [$"{nameof(BypassPaths)}[{i}]"]);
+    }
 }

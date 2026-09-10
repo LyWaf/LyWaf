@@ -47,9 +47,7 @@ public static partial class ControlApi
             IProtectService protectService,
             IABTestService abTestService) =>
         {
-            try
-            {
-                var process = Process.GetCurrentProcess();
+                using var process = Process.GetCurrentProcess();
                 var uptime = DateTime.Now - process.StartTime;
                 var connectionStats = accessControlService.GetConnectionStats();
                 
@@ -60,6 +58,7 @@ public static partial class ControlApi
                 
                 // 获取流量统计
                 var trafficSnapshot = SharedData.Traffic.GetSnapshot();
+                var geoSnapshot = SharedData.GeoTraffic.GetSnapshot();
                 
                 // 获取被封禁的IP（合并 ClientFb、CaptchaPending、ClientThrottled）
                 var blockedIpList = SharedData.ClientFb.GetValidItemsWithExpiry()
@@ -121,9 +120,16 @@ public static partial class ControlApi
                         ? $"{uptime.Hours}小时 {uptime.Minutes}分钟 {uptime.Seconds}秒"
                         : $"{uptime.Minutes}分钟 {uptime.Seconds}秒";
 
-                return Results.Json(new
+                return TypedResults.Ok(new
                 {
                     success = true,
+                    geoTraffic = new
+                    {
+                        countryVisits = geoSnapshot.CountryVisits.OrderByDescending(x => x.Value).Select(x => new { name = x.Key, value = x.Value }),
+                        countryIntercepts = geoSnapshot.CountryIntercepts.OrderByDescending(x => x.Value).Select(x => new { name = x.Key, value = x.Value }),
+                        regionVisits = geoSnapshot.RegionVisits.OrderByDescending(x => x.Value).Select(x => new { name = x.Key, value = x.Value }),
+                        regionIntercepts = geoSnapshot.RegionIntercepts.OrderByDescending(x => x.Value).Select(x => new { name = x.Key, value = x.Value })
+                    },
                     system = new
                     {
                         uptime = uptimeStr,
@@ -195,20 +201,13 @@ public static partial class ControlApi
                     }),
                     timestamp = DateTime.Now
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 获取流量统计数据
         app.MapGet("/api/traffic/stats", (HttpContext ctx) =>
         {
-            try
-            {
                 var trafficSnapshot = SharedData.Traffic.GetSnapshot();
-                return Results.Json(new
+                return TypedResults.Ok(new
                 {
                     success = true,
                     totalRequests = trafficSnapshot.TotalRequests,
@@ -226,18 +225,11 @@ public static partial class ControlApi
                     startTime = trafficSnapshot.StartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
                     timestamp = DateTime.Now
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 安全态势统计数据
         app.MapGet("/api/security/stats", (HttpContext ctx) =>
         {
-            try
-            {
                 var hoursStr = ctx.Request.Query["hours"].FirstOrDefault();
                 var hours = int.TryParse(hoursStr, out var h) ? h : 24;
                 
@@ -252,7 +244,7 @@ public static partial class ControlApi
                 var topGeoSources = SharedData.Security.GetTopAttackSourcesByType(SecurityEventType.GeoBlock, 5);
                 var topCrawlerSources = SharedData.Security.GetTopAttackSourcesByType(SecurityEventType.CrawlerDetect, 5);
                 
-                return Results.Json(new
+                return TypedResults.Ok(new
                 {
                     snapshot = new
                     {
@@ -284,19 +276,12 @@ public static partial class ControlApi
                     topGeoSources = topGeoSources.Select(s => new { ip = s.Item1, count = s.Item2 }),
                     topCrawlerSources = topCrawlerSources.Select(s => new { ip = s.Item1, count = s.Item2 })
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message });
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // QPS 历史数据（实时用内存，历史用 DuckDB）
         app.MapGet("/api/qps/history", (HttpContext ctx, LyWaf.Services.DuckDb.IDuckDbQueryService queryService) =>
         {
-            try
-            {
-                var granularity = ctx.Request.Query["granularity"].FirstOrDefault() ?? "5s";
+                var granularity = HistoryQuery.Choice(ctx.Request.Query, "granularity", "5s", "5s", "1min", "1hour");
                 var fromStr = ctx.Request.Query["from"].FirstOrDefault();
                 var toStr = ctx.Request.Query["to"].FirstOrDefault();
 
@@ -306,8 +291,7 @@ public static partial class ControlApi
                     if (!queryService.IsEnabled)
                         return Results.Json(new { success = false, message = "DuckDB 未启用" });
 
-                    var from = DateTime.TryParse(fromStr, out var f) ? f.ToUniversalTime() : DateTime.UtcNow.AddHours(-24);
-                    var to = DateTime.TryParse(toStr, out var t) ? t.ToUniversalTime() : DateTime.UtcNow;
+                    var (from, to) = HistoryQuery.Range(ctx.Request.Query, TimeSpan.FromDays(1));
                     var dbGranularity = granularity switch
                     {
                         "5s" => "1min",
@@ -329,19 +313,12 @@ public static partial class ControlApi
                 // 否则从内存取实时数据
                 var memData = SharedData.Qps.GetHistory(granularity);
                 return Results.Json(new { success = true, data = memData, granularity, source = "memory" });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<RealtimeHistoryResponse<QpsDataPoint>>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 带宽历史
         app.MapGet("/api/bandwidth/history", (HttpContext ctx, LyWaf.Services.DuckDb.IDuckDbQueryService queryService) =>
         {
-            try
-            {
-                var granularity = ctx.Request.Query["granularity"].FirstOrDefault() ?? "5s";
+                var granularity = HistoryQuery.Choice(ctx.Request.Query, "granularity", "5s", "5s", "1min", "1hour");
                 var fromStr = ctx.Request.Query["from"].FirstOrDefault();
                 var toStr = ctx.Request.Query["to"].FirstOrDefault();
 
@@ -350,8 +327,7 @@ public static partial class ControlApi
                     if (!queryService.IsEnabled)
                         return Results.Json(new { success = false, message = "DuckDB 未启用" });
 
-                    var from = DateTime.TryParse(fromStr, out var f) ? f.ToUniversalTime() : DateTime.UtcNow.AddHours(-24);
-                    var to = DateTime.TryParse(toStr, out var t) ? t.ToUniversalTime() : DateTime.UtcNow;
+                    var (from, to) = HistoryQuery.Range(ctx.Request.Query, TimeSpan.FromDays(1));
                     var dbGranularity = granularity switch
                     {
                         "5s" => "1min",
@@ -374,42 +350,30 @@ public static partial class ControlApi
 
                 var memData = SharedData.Bandwidth.GetHistory(granularity);
                 return Results.Json(new { success = true, data = memData, granularity, source = "memory" });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<RealtimeHistoryResponse<BandwidthDataPoint>>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 重置安全态势统计数据
         app.MapPost("/api/security/reset", (HttpContext ctx) =>
         {
-            try
-            {
                 SharedData.Security.Reset();
-                return Results.Json(new { success = true, message = "安全态势统计数据已重置" });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message });
-            }
-        }).RequireHost($"*:{controlPort}");
+                return TypedResults.Ok(new { success = true, message = "安全态势统计数据已重置" });
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         app.MapGet("/api/status", (HttpContext ctx) =>
         {
-            return Results.Json(new
+            return TypedResults.Ok(new
             {
                 status = "running",
                 pid = Environment.ProcessId,
                 uptime = DateTime.Now - Process.GetCurrentProcess().StartTime,
                 timestamp = DateTime.Now
             });
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
         
         app.MapGet("/api/info", (HttpContext ctx) =>
         {
             var process = Process.GetCurrentProcess();
-            return Results.Json(new
+            return TypedResults.Ok(new
             {
                 pid = process.Id,
                 name = process.ProcessName,
@@ -417,8 +381,7 @@ public static partial class ControlApi
                 memoryMB = process.WorkingSet64 / (1024 * 1024),
                 threads = process.Threads.Count
             });
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }
-

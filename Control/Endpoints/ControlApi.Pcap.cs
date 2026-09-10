@@ -5,6 +5,7 @@ using LyWaf.Services.Acme;
 using LyWaf.Services.AuditLog;
 using LyWaf.Services.Auth;
 using LyWaf.Services.Configuration;
+using LyWaf.Services.ManagementApi;
 using LyWaf.Services.Param;
 using LyWaf.Services.ProxyServer;
 using LyWaf.Shared;
@@ -36,6 +37,8 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record PcapToggleResponse(bool Success, bool Enabled, string Message);
+    private sealed record PcapDeleteResponse(bool Success, string Message);
     private static void MapPcapEndpoints(WebApplication app, int controlPort)
     {
         // =============== 抓包管理 API ===============
@@ -73,7 +76,7 @@ public static partial class ControlApi
                 return Results.NotFound();
 
             return Results.File(crlPath, "application/pkix-crl", "proxy-ca.crl");
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<byte[]>(200, "application/pkix-crl").RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 获取抓包状态
         app.MapGet("/api/pcap/status", (HttpContext ctx) =>
@@ -108,7 +111,7 @@ public static partial class ControlApi
                 certDownloadUrl = $"http://{localIp}:{pcapPort}{ProxyHandler.CaCertPath}";
             }
 
-            return Results.Json(new
+            return TypedResults.Ok(new
             {
                 success = true,
                 proxyEnabled = proxyOptions.Enabled,
@@ -116,14 +119,12 @@ public static partial class ControlApi
                 certDownloadUrl,
                 ports,
             });
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 切换抓包开关
-        app.MapPost("/api/pcap/toggle", async (HttpContext ctx) =>
+        app.MapPost("/api/pcap/toggle", (HttpContext ctx, PcapToggleRequest body) =>
         {
-            try
-            {
-                var body = await ctx.Request.ReadFromJsonAsync<PcapToggleRequest>();
+
                 if (body == null || string.IsNullOrEmpty(body.PortKey))
                     return Results.Json(new { success = false, message = "无效的请求" }, statusCode: 400);
 
@@ -158,12 +159,7 @@ public static partial class ControlApi
                     ctx.Connection.RemoteIpAddress?.ToString() ?? "");
 
                 return Results.Json(new { success = true, enabled = body.Enabled, message = body.Enabled ? "抓包已启用" : "抓包已禁用" });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"操作失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<PcapToggleResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 下载 CA 证书
         app.MapGet("/api/pcap/ca-cert", (HttpContext ctx) =>
@@ -174,91 +170,54 @@ public static partial class ControlApi
                 return Results.Json(new { success = false, message = "CA 证书不存在，请先启用抓包功能" }, statusCode: 404);
 
             return Results.File(certPath, "application/x-x509-ca-cert", "proxy-ca.crt");
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<byte[]>(200, "application/x-x509-ca-cert").RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 列出抓包日志文件
-        app.MapGet("/api/pcap/logs/files", () =>
+        app.MapGet("/api/pcap/logs/files", (HttpContext ctx) =>
         {
             var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
             var files = LogUtil.ListLogFiles(dir, "pcap_*.log");
-            return Results.Json(new { success = true, files });
-        }).RequireHost($"*:{controlPort}");
+            return TypedResults.Ok(ManagementLists.From(files)
+                .Sort("name", item => item.Name).Sort("size", item => item.Size)
+                .Sort("modifiedAt", item => item.ModifiedAt)
+                .Search(item => item.Name).Timestamp(item => item.ModifiedAt)
+                .Read(ctx.Request.Query, "modifiedAt", descending: true));
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 获取日志文件中所有不重复的 Host
         app.MapGet("/api/pcap/logs/hosts", async (HttpContext ctx) =>
         {
             var fileName = ctx.Request.Query["file"].FirstOrDefault() ?? "";
-            if (string.IsNullOrEmpty(fileName) || fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\'))
-                return Results.Json(new { success = false, hosts = Array.Empty<string>() });
-
-            var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
-            var filePath = Path.Combine(dir, fileName);
+            var filePath = ResolveRequestLogPath(fileName, "pcap_");
             if (!File.Exists(filePath))
                 return Results.Json(new { success = false, hosts = Array.Empty<string>() });
 
             var hosts = await LogUtil.GetUniqueHostsAsync(filePath);
             return Results.Json(new { success = true, hosts });
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 读取抓包日志条目
         app.MapGet("/api/pcap/logs/entries", async (HttpContext ctx) =>
         {
-            var fileName = ctx.Request.Query["file"].FirstOrDefault() ?? "";
-            if (string.IsNullOrEmpty(fileName) || fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\'))
-                return Results.Json(new { success = false, message = "无效的文件名" });
-
-            var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
-            var filePath = Path.Combine(dir, fileName);
-            if (!File.Exists(filePath))
-                return Results.Json(new { success = false, message = $"文件不存在: {fileName}" });
-
-            _ = int.TryParse(ctx.Request.Query["offset"].FirstOrDefault() ?? "0", out var offset);
-            _ = int.TryParse(ctx.Request.Query["limit"].FirstOrDefault() ?? "20", out var limit);
-            var search = ctx.Request.Query["search"].FirstOrDefault();
-            var host = ctx.Request.Query["host"].FirstOrDefault();
-            var clientIp = ctx.Request.Query["clientIp"].FirstOrDefault();
-            DateTime? startTime = DateTime.TryParse(ctx.Request.Query["startTime"].FirstOrDefault(), out var st3) ? st3 : null;
-            DateTime? endTime = DateTime.TryParse(ctx.Request.Query["endTime"].FirstOrDefault(), out var et3) ? et3 : null;
-
-            var (entries, total) = await LogUtil.ParseLogFileAsync(filePath, offset, Math.Clamp(limit, 1, 100), search, startTime, endTime, host, clientIp);
-            return Results.Json(new
-            {
-                success = true,
-                entries,
-                total,
-                offset,
-                limit,
-                fileName,
-            });
-        }).RequireHost($"*:{controlPort}");
+            return await QueryRequestLog(ctx, "pcap_", capture: true);
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 删除抓包日志文件
-        app.MapPost("/api/pcap/logs/delete", async (HttpContext ctx) =>
+        app.MapPost("/api/pcap/logs/delete", (HttpContext ctx, PcapLogDeleteRequest body) =>
         {
-            try
-            {
-                var body = await ctx.Request.ReadFromJsonAsync<PcapLogDeleteRequest>();
+
                 if (body == null || string.IsNullOrEmpty(body.File))
                     return Results.Json(new { success = false, message = "无效的请求" }, statusCode: 400);
 
                 var fileName = body.File;
-                if (fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\'))
-                    return Results.Json(new { success = false, message = "无效的文件名" }, statusCode: 400);
-
-                var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
-                var filePath = Path.Combine(dir, fileName);
+                var filePath = ResolveRequestLogPath(fileName, "pcap_");
                 if (!File.Exists(filePath))
-                    return Results.Json(new { success = false, message = $"文件不存在: {fileName}" });
+                    return Results.Json(new { success = false, message = $"文件不存在: {fileName}" }, statusCode: 404);
 
                 ReverseLogScanner.InvalidateCache(filePath);
                 File.Delete(filePath);
                 return Results.Json(new { success = true, message = $"已删除: {fileName}" });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<PcapDeleteResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }

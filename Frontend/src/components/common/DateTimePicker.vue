@@ -40,14 +40,14 @@ const parseValue = (val: string) => {
     return
   }
   // 支持 "2026-03-03 03:00:00" 格式
-  const m = val.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/)
+  const m = val.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?$/)
   if (m) {
     year.value = parseInt(m[1])
     month.value = parseInt(m[2]) - 1
     day.value = parseInt(m[3])
     hour.value = parseInt(m[4])
     minute.value = parseInt(m[5])
-    second.value = parseInt(m[6])
+    second.value = parseInt(m[6] || '0')
   }
 }
 
@@ -167,9 +167,10 @@ const panelStyle = computed(() => ({
 const updatePosition = () => {
   if (!inputRef.value) return
   const rect = inputRef.value.getBoundingClientRect()
+  const panel = pickerRef.value?.getBoundingClientRect()
   panelPos.value = {
-    top: rect.bottom + 4,
-    left: rect.left,
+    top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - (panel?.height || 360) - 12)),
+    left: Math.max(8, Math.min(rect.left, window.innerWidth - (panel?.width || Math.min(442, window.innerWidth - 16)) - 8)),
   }
 }
 
@@ -179,6 +180,7 @@ const toggle = () => {
     parseValue(props.modelValue)
     updatePosition()
     open.value = true
+    nextTick(updatePosition)
     scrollToTime()
   } else {
     open.value = false
@@ -200,7 +202,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 <template>
   <div class="dtp-wrapper">
     <!-- 输入框 -->
-    <div ref="inputRef" class="dtp-input" @click="toggle">
+    <div ref="inputRef" class="dtp-input" role="button" tabindex="0" :aria-label="placeholder || '选择时间'" :aria-expanded="open" @click="toggle" @keydown.enter.prevent="toggle" @keydown.space.prevent="toggle" @keydown.esc="open = false">
       <span :class="displayValue ? 'text-gray-200' : 'text-gray-500'">
         {{ displayValue || placeholder || '选择时间' }}
       </span>
@@ -216,7 +218,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 
     <!-- 弹出面板 -->
     <Teleport to="body">
-      <div v-if="open" ref="pickerRef" class="dtp-panel" :style="panelStyle">
+      <div v-if="open" ref="pickerRef" class="dtp-panel" role="dialog" :aria-label="placeholder || '选择时间'" :style="panelStyle" @keydown.esc="open = false">
         <div class="dtp-body">
           <!-- 左侧日历 -->
           <div class="dtp-calendar">
@@ -282,8 +284,9 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 
         <!-- 底部操作 -->
         <div class="dtp-footer">
-          <button class="dtp-footer-btn dtp-now" @click="setNow">Now</button>
-          <button class="dtp-footer-btn dtp-ok" @click="confirm">OK</button>
+          <button type="button" class="dtp-footer-btn dtp-now" @click="clear">清除</button>
+          <button type="button" class="dtp-footer-btn dtp-now" @click="setNow">现在</button>
+          <button type="button" class="dtp-footer-btn dtp-ok" @click="confirm">确定</button>
         </div>
       </div>
     </Teleport>
@@ -302,7 +305,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
   justify-content: space-between;
   gap: 8px;
   padding: 6px 12px;
-  min-width: 200px;
+  min-width: 0;
   height: 36px;
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -343,6 +346,9 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 
 /* 弹出面板 */
 .dtp-panel {
+  width: 442px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 24px);
   position: fixed;
   z-index: 9999;
   margin-top: 4px;
@@ -350,7 +356,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-  overflow: hidden;
+  overflow: auto;
   animation: dtp-fade-in 0.15s ease;
 }
 
@@ -365,6 +371,8 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 
 /* 日历 */
 .dtp-calendar {
+  flex: 1;
+  min-width: 0;
   padding: 12px;
   width: 280px;
 }
@@ -403,7 +411,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 
 .dtp-weekdays {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   text-align: center;
   margin-bottom: 4px;
 }
@@ -420,7 +428,8 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 }
 
 .dtp-day {
-  width: 34px;
+  width: 100%;
+  min-width: 0;
   height: 28px;
   display: flex;
   align-items: center;

@@ -58,12 +58,12 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
     /// <summary>
     /// 校验并原子写入主配置草稿，同时创建可回滚版本。
     /// </summary>
-    public Task<ConfigVersionInfo> WriteDraftAsync(string content, string action, CancellationToken cancellationToken = default)
+    public Task<ConfigVersionInfo> WriteDraftAsync(string content, string action, CancellationToken cancellationToken = default, string? actor = null)
     {
         var originalPath = Path.GetFullPath(SharedData.ConfigFilePath);
         var directory = Path.GetDirectoryName(originalPath) ?? Directory.GetCurrentDirectory();
         var draftPath = Path.Combine(directory, $".lywaf.draft{Path.GetExtension(originalPath)}");
-        return WriteAsync(draftPath, content, "main", action, ValidateMainConfig, cancellationToken);
+        return WriteAsync(draftPath, content, "main", action, ValidateMainConfig, cancellationToken, actor);
     }
 
     /// <summary>
@@ -117,7 +117,7 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
     /// <summary>
     /// 将历史内容作为一个新的版本原子写回原目标；历史记录本身保持不可变。
     /// </summary>
-    public async Task<ConfigVersionInfo?> RollbackAsync(string id, CancellationToken cancellationToken = default)
+    public async Task<ConfigVersionInfo?> RollbackAsync(string id, CancellationToken cancellationToken = default, string? actor = null)
     {
         ConfigVersionInfo? source;
         string content;
@@ -130,9 +130,8 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
         }
         finally { _gate.Release(); }
 
-        return source.Kind == "patch"
-            ? await WritePatchAsync(source.TargetPath, content, $"rollback:{source.Id}", cancellationToken)
-            : await WriteAsync(source.TargetPath, content, "main", $"rollback:{source.Id}", ValidateMainConfig, cancellationToken);
+        return await WriteAsync(source.TargetPath, content, source.Kind, $"rollback:{source.Id}",
+            source.Kind == "patch" ? ValidatePatch : ValidateMainConfig, cancellationToken, actor);
     }
 
     private async Task<ConfigVersionInfo> WriteAsync(
@@ -141,7 +140,8 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
         string kind,
         string action,
         Action<string, string> validator,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? actor = null)
     {
         validator(targetPath, content);
         await _gate.WaitAsync(cancellationToken);
@@ -164,7 +164,7 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
                     versions, targetPath, existing, kind, "baseline", null, cancellationToken);
             }
             var id = $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}";
-            var info = new ConfigVersionInfo(id, DateTimeOffset.UtcNow, CurrentOperator(), kind,
+            var info = new ConfigVersionInfo(id, DateTimeOffset.UtcNow, actor ?? CurrentOperator(), kind,
                 Path.GetFullPath(targetPath), id + ".config", Hash(content), previous?.Id, action);
 
             var historyDirectory = HistoryDirectory();

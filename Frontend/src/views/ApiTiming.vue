@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import StatCard from '@/components/common/StatCard.vue'
+import ListToolbar from '@/components/common/ListToolbar.vue'
 import { timingApi, type TimingListResponse } from '@/api'
 import { useToast } from '@/composables/useToast'
 import type { ApiTimingStat, ApiTimingSummary } from '@/types'
@@ -11,7 +12,9 @@ const { showSuccess, showError } = useToast()
 const loading = ref(false)
 const summary = ref<ApiTimingSummary | null>(null)
 const items = ref<ApiTimingStat[]>([])
-const backends = ref<Record<string, ApiTimingStat[]>>({})
+const backends = ref<TimingListResponse['backends']>([])
+const page = ref(1)
+const total = ref(0)
 
 // 筛选和排序
 const searchPath = ref('')
@@ -30,75 +33,51 @@ const toggleAvgTimeOp = () => { filterAvgTimeOp.value = filterAvgTimeOp.value ==
 const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD']
 
 // 后端列表
-const backendList = computed(() => Object.keys(backends.value))
+const backendList = computed(() => backends.value.map(item => item.backend))
 
 // 过滤后的数据
-const filteredItems = computed(() => {
-  let result = [...items.value]
-  
-  if (searchPath.value) {
-    result = result.filter(item => 
-      item.path.toLowerCase().includes(searchPath.value.toLowerCase())
-    )
-  }
-  
-  if (filterMethod.value) {
-    result = result.filter(item => item.method === filterMethod.value)
-  }
-  
-  if (filterBackend.value) {
-    result = result.filter(item => item.backend === filterBackend.value)
-  }
-
-  if (filterRequestVal.value) {
-    const val = parseFloat(filterRequestVal.value)
-    if (!isNaN(val)) {
-      result = result.filter(item =>
-        filterRequestOp.value === '>' ? item.requestCount > val : item.requestCount < val
-      )
-    }
-  }
-
-  if (filterAvgTimeVal.value) {
-    const val = parseFloat(filterAvgTimeVal.value)
-    if (!isNaN(val)) {
-      result = result.filter(item =>
-        filterAvgTimeOp.value === '>' ? item.avgTotalTime > val : item.avgTotalTime < val
-      )
-    }
-  }
-
-  // 排序
-  result.sort((a, b) => {
-    const aVal = a[sortField.value] as number
-    const bVal = b[sortField.value] as number
-    return sortOrder.value === 'desc' ? bVal - aVal : aVal - bVal
-  })
-  
-  return result
-})
+const filteredItems = computed(() => items.value)
 
 // 加载数据
+let listRequest = 0
 const loadData = async () => {
+  const request = ++listRequest
   loading.value = true
   try {
-    const data: TimingListResponse = await timingApi.getList()
+    const data = await timingApi.getList({ page: page.value, search: searchPath.value,
+      method: filterMethod.value || undefined, backend: filterBackend.value || undefined,
+      sortBy: sortField.value, sortDirection: sortOrder.value,
+      requestCount: filterRequestVal.value || undefined, requestOp: filterRequestOp.value,
+      avgTime: filterAvgTimeVal.value || undefined, avgTimeOp: filterAvgTimeOp.value })
+    if (request !== listRequest) return
     summary.value = data.summary
     items.value = data.items || []
-    backends.value = data.backends || {}
-  } catch (error) {
-    console.error('加载 API 耗时统计失败:', error)
+    backends.value = data.backends || []
+    total.value = data.total
+    if (page.value > 1 && !items.value.length) {
+      page.value = Math.max(1, Math.ceil(data.total / 20))
+      return loadData()
+    }
+  } catch {
+    if (request === listRequest) showError('加载 API 耗时统计失败')
   } finally {
-    loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
+
+watch([filterMethod, filterBackend, sortField, sortOrder, filterRequestVal, filterRequestOp, filterAvgTimeVal, filterAvgTimeOp], () => {
+  page.value = 1
+  loadData()
+})
 
 // 清空统计
 const clearData = async () => {
   if (!confirm('确定要清空所有 API 耗时统计吗？')) return
-  
+
   try {
     await timingApi.clear()
+    ++listRequest
+    page.value = 1
     showSuccess('API 耗时统计已清空')
     loadData()
   } catch {
@@ -166,6 +145,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  ++listRequest
   if (refreshTimer) clearInterval(refreshTimer)
 })
 </script>
@@ -174,91 +154,86 @@ onUnmounted(() => {
   <div class="space-y-6">
     <!-- 汇总卡片 -->
     <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-      <StatCard 
-        label="总请求数" 
-        :value="formatNumber(summary?.totalRequests || 0)" 
+      <StatCard
+        label="总请求数"
+        :value="formatNumber(summary?.totalRequests || 0)"
         icon="📊"
         tooltip="统计周期内的 API 总请求数"
       />
-      <StatCard 
-        label="平均总耗时" 
-        :value="formatTime(summary?.avgTotalTime || 0)" 
+      <StatCard
+        label="平均总耗时"
+        :value="formatTime(summary?.avgTotalTime || 0)"
         icon="⏱️"
         color="blue"
         tooltip="从接收请求到响应的平均时间"
       />
-      <StatCard 
-        label="平均后端耗时" 
-        :value="formatTime(summary?.avgBackendTime || 0)" 
+      <StatCard
+        label="平均后端耗时"
+        :value="formatTime(summary?.avgBackendTime || 0)"
         icon="🔄"
         color="green"
         tooltip="后端服务处理的平均时间"
       />
-      <StatCard 
-        label="平均网关耗时" 
-        :value="formatTime(summary?.avgGatewayTime || 0)" 
+      <StatCard
+        label="平均网关耗时"
+        :value="formatTime(summary?.avgGatewayTime || 0)"
         icon="🚀"
         color="yellow"
         tooltip="网关处理的平均时间"
       />
-      <StatCard 
-        label="错误率" 
-        :value="((summary?.errorRate || 0) * 100).toFixed(2) + '%'" 
+      <StatCard
+        label="错误率"
+        :value="((summary?.errorRate || 0) * 100).toFixed(2) + '%'"
         icon="⚠️"
         color="red"
         tooltip="返回错误状态码的请求占比"
       />
-      <StatCard 
-        label="API 数量" 
-        :value="summary?.apiCount || 0" 
+      <StatCard
+        label="API 数量"
+        :value="summary?.apiCount || 0"
         icon="📋"
         tooltip="已统计的不同 API 数量"
       />
     </div>
-    
+
     <!-- 后端稳定性 -->
-    <div class="card" v-if="Object.keys(backends).length > 0">
+    <div class="card" v-if="backends.length > 0">
       <h3 class="font-medium text-gray-200 mb-4">后端稳定性</h3>
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div 
-          v-for="(backendStats, backendName) in backends" 
-          :key="backendName"
+        <div
+          v-for="backendStats in backends"
+          :key="backendStats.backend"
           class="p-4 bg-dark-card-hover rounded-lg cursor-pointer hover:bg-dark-card transition-colors"
-          @click="filterBackend = filterBackend === backendName ? '' : backendName"
-          :class="{ 'ring-2 ring-primary-500': filterBackend === backendName }"
+          @click="filterBackend = filterBackend === backendStats.backend ? '' : backendStats.backend"
+          :class="{ 'ring-2 ring-primary-500': filterBackend === backendStats.backend }"
         >
           <div class="flex items-center justify-between mb-2">
-            <span class="text-sm text-gray-400 truncate" :title="String(backendName)">
-              {{ formatBackend(String(backendName)) }}
+            <span class="text-sm text-gray-400 truncate" :title="backendStats.backend">
+              {{ formatBackend(backendStats.backend) }}
             </span>
-            <span class="badge badge-info">{{ backendStats.length }} APIs</span>
+            <span class="badge badge-info">{{ backendStats.apiCount }} APIs</span>
           </div>
           <div class="grid grid-cols-2 gap-2 text-sm">
             <div>
               <span class="text-gray-500">平均耗时</span>
               <div class="text-blue-400">
-                {{ formatTime(backendStats.reduce((sum, s) => sum + s.avgBackendTime, 0) / backendStats.length) }}
+                {{ formatTime(backendStats.avgBackendTime) }}
               </div>
             </div>
             <div>
               <span class="text-gray-500">请求数</span>
               <div class="text-gray-200">
-                {{ formatNumber(backendStats.reduce((sum, s) => sum + s.requestCount, 0)) }}
+                {{ formatNumber(backendStats.totalRequests) }}
               </div>
             </div>
           </div>
         </div>
       </div>
     </div>
-    
+
     <!-- 筛选和操作 -->
+    <ListToolbar v-model:page="page" v-model:search="searchPath" :total="total" :busy="loading" @refresh="loadData" />
     <div class="flex flex-wrap items-center gap-4">
-      <input
-        v-model="searchPath"
-        type="text"
-        placeholder="搜索路径..."
-        class="input w-[200px]"
-      />
       <select v-model="filterMethod" class="input w-[120px]">
         <option value="">全部方法</option>
         <option v-for="method in methods" :key="method" :value="method">{{ method }}</option>
@@ -287,7 +262,7 @@ onUnmounted(() => {
         清空统计
       </button>
     </div>
-    
+
     <!-- 数据表格 -->
     <div class="card overflow-hidden">
       <div class="overflow-x-auto">
@@ -320,13 +295,13 @@ onUnmounted(() => {
             </tr>
           </thead>
           <tbody>
-            <tr 
-              v-for="item in filteredItems" 
+            <tr
+              v-for="item in filteredItems"
               :key="`${item.method}-${item.path}-${item.backend}`"
               class="border-b border-dark-border/50 hover:bg-dark-card-hover transition-colors"
             >
               <td class="px-4 py-3">
-                <span 
+                <span
                   :class="[
                     'px-2 py-0.5 rounded text-xs font-medium',
                     item.method === 'GET' ? 'bg-green-500/20 text-green-400' :
@@ -370,8 +345,8 @@ onUnmounted(() => {
               </td>
               <td class="px-4 py-3 text-center">
                 <div class="flex justify-center gap-1 flex-wrap">
-                  <span 
-                    v-for="(count, code) in item.statusCodes" 
+                  <span
+                    v-for="(count, code) in item.statusCodes"
                     :key="String(code)"
                     :class="['px-1.5 py-0.5 rounded text-xs', getStatusColor(String(code)), getStatusBgColor(String(code))]"
                   >

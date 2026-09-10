@@ -36,6 +36,18 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record TimingPage<T, TSummary, TBackend> : ManagementPage<T>
+    {
+        public TSummary Summary { get; }
+        public TBackend BackendStats { get; }
+        public TimingPage(ManagementPage<T> page, TSummary summary, TBackend backends)
+            : base(page.Success, page.Data, page.Total, page.Page, page.PageSize, page.SortBy, page.SortDirection)
+            => (Summary, BackendStats) = (summary, backends);
+    }
+
+    private static Microsoft.AspNetCore.Http.HttpResults.Ok<TimingPage<T, TSummary, TBackend>> TimingResult<T, TSummary, TBackend>(ManagementPage<T> page, TSummary summary, TBackend backends)
+        => TypedResults.Ok(new TimingPage<T, TSummary, TBackend>(page, summary, backends));
+
     private static void MapInterceptEndpoints(WebApplication app, int controlPort)
     {
         // =============== 拦截事件 API ===============
@@ -45,15 +57,8 @@ public static partial class ControlApi
         {
             var ip = ctx.Request.Query["ip"].FirstOrDefault();
             var domain = ctx.Request.Query["domain"].FirstOrDefault();
-            DateTime? startTime = DateTime.TryParse(ctx.Request.Query["startTime"].FirstOrDefault(), out var st) ? st : null;
-            DateTime? endTime = DateTime.TryParse(ctx.Request.Query["endTime"].FirstOrDefault(), out var et) ? et : null;
-
-            var events = SharedData.GetInterceptEvents(ip, domain, startTime, endTime);
-            return Results.Json(new
-            {
-                success = true,
-                count = events.Count,
-                events = events.Select(e => new
+            var events = SharedData.GetInterceptEvents(ip, domain);
+            var data = events.Select(e => new
                 {
                     sourceIp = e.SourceIp,
                     region = e.Region,
@@ -65,9 +70,15 @@ public static partial class ControlApi
                     duration = (int)(e.LastHitTime - e.FirstHitTime).TotalMinutes,
                     firstHitTime = e.FirstHitTime,
                     lastHitTime = e.LastHitTime,
-                }),
-            });
-        }).RequireHost($"*:{controlPort}");
+                });
+            return TypedResults.Ok(ManagementLists.From(data)
+                .Sort("lastHitTime", item => item.lastHitTime)
+                .Sort("firstHitTime", item => item.firstHitTime)
+                .Sort("sourceIp", item => item.sourceIp).Sort("hitCount", item => item.hitCount)
+                .Search(item => $"{item.sourceIp} {item.application} {item.ruleName} {item.ruleType} {item.region} {item.city}")
+                .Timestamp(item => new DateTimeOffset(item.lastHitTime))
+                .Read(ctx.Request.Query, "lastHitTime", descending: true));
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 清除拦截事件
         app.MapPost("/api/intercept-events/clear", (HttpContext ctx) =>
@@ -75,54 +86,32 @@ public static partial class ControlApi
             SharedData.ClearInterceptEvents();
             var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
             audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", "清除拦截事件", ctx.Connection.RemoteIpAddress?.ToString() ?? "");
-            return Results.Json(new { success = true, message = "拦截事件已清除" });
-        }).RequireHost($"*:{controlPort}");
+            return TypedResults.Ok(new { success = true, message = "拦截事件已清除" });
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // =============== 拦截明细日志 API ===============
 
         // 列出拦截日志文件
-        app.MapGet("/api/intercept-logs/files", () =>
+        app.MapGet("/api/intercept-logs/files", (HttpContext ctx) =>
         {
             var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
             var files = LogUtil.ListLogFiles(dir, "intercept_*.log");
-            return Results.Json(new { success = true, files });
-        }).RequireHost($"*:{controlPort}");
+            return TypedResults.Ok(ManagementLists.From(files)
+                .Sort("name", item => item.Name).Sort("size", item => item.Size)
+                .Sort("modifiedAt", item => item.ModifiedAt)
+                .Search(item => item.Name).Timestamp(item => item.ModifiedAt)
+                .Read(ctx.Request.Query, "modifiedAt", descending: true));
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 读取拦截日志条目
         app.MapGet("/api/intercept-logs/entries", async (HttpContext ctx) =>
         {
-            var fileName = ctx.Request.Query["file"].FirstOrDefault() ?? "";
-            if (string.IsNullOrEmpty(fileName) || fileName.Contains("..") || fileName.Contains('/') || fileName.Contains('\\'))
-                return Results.Json(new { success = false, message = "无效的文件名" });
-
-            var dir = Path.Combine(AppContext.BaseDirectory, "logs/request_logger");
-            var filePath = Path.Combine(dir, fileName);
-            if (!File.Exists(filePath))
-                return Results.Json(new { success = false, message = $"文件不存在: {fileName}" });
-
-            _ = int.TryParse(ctx.Request.Query["offset"].FirstOrDefault() ?? "0", out var offset);
-            _ = int.TryParse(ctx.Request.Query["limit"].FirstOrDefault() ?? "20", out var limit);
-            var search = ctx.Request.Query["search"].FirstOrDefault();
-            DateTime? startTime = DateTime.TryParse(ctx.Request.Query["startTime"].FirstOrDefault(), out var st2) ? st2 : null;
-            DateTime? endTime = DateTime.TryParse(ctx.Request.Query["endTime"].FirstOrDefault(), out var et2) ? et2 : null;
-
-            var (entries, total) = await LogUtil.ParseLogFileAsync(filePath, offset, Math.Clamp(limit, 1, 100), search, startTime, endTime);
-            return Results.Json(new
-            {
-                success = true,
-                entries,
-                total,
-                offset,
-                limit,
-                fileName,
-            });
-        }).RequireHost($"*:{controlPort}");
+            return await QueryRequestLog(ctx, "intercept_");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // API 耗时统计数据列表
         app.MapGet("/api/timing/list", (HttpContext ctx) =>
         {
-            try
-            {
                 var snapshot = SharedData.ApiTimings.GetSnapshot();
                 
                 var data = snapshot.Values
@@ -188,56 +177,41 @@ public static partial class ControlApi
                     .ThenByDescending(x => x.avgBackendTime)
                     .ToList();
                 
-                return Results.Json(new
-                {
-                    success = true,
-                    data,
-                    backendStats,
-                    summary = new
+                var filter = TimingListFilter.Parse(ctx.Request.Query);
+                var page = ManagementLists.From(data.Where(item => filter.Matches(item.method, item.backend, item.requestCount, item.avgTotalTime)))
+                    .Sort("path", item => item.path).Sort("method", item => item.method)
+                    .Sort("backend", item => item.backend).Sort("requestCount", item => item.requestCount)
+                    .Sort("avgTotalTime", item => item.avgTotalTime).Sort("avgBackendTime", item => item.avgBackendTime)
+                    .Sort("errorRate", item => item.errorRate).Sort("lastRequestTime", item => item.lastRequestTime)
+                    .Search(item => $"{item.path} {item.method} {item.backend} {item.originalHost}")
+                    .Timestamp(item => new DateTimeOffset(item.lastRequestTime))
+                    .Read(ctx.Request.Query, "requestCount", descending: true);
+                return TimingResult(page, new
                     {
                         totalApis,
+                        apiCount = totalApis,
                         totalRequests,
                         avgTotalTime,
                         avgBackendTime,
-                        avgGatewayTime
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message });
-            }
-        }).RequireHost($"*:{controlPort}");
+                        avgGatewayTime,
+                        errorRate = totalRequests == 0 ? 0 : data.Sum(item => item.statusCodeCounts.Where(status => status.Key >= 400).Sum(status => (long)status.Value)) / (double)totalRequests
+                    }, backendStats);
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 清除 API 耗时统计数据
         app.MapPost("/api/timing/clear", (HttpContext ctx) =>
         {
-            try
-            {
                 SharedData.ApiTimings.Clear();
-                return Results.Json(new { success = true, message = "API 耗时统计数据已清除" });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message });
-            }
-        }).RequireHost($"*:{controlPort}");
+                return TypedResults.Ok(new { success = true, message = "API 耗时统计数据已清除" });
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 重置流量统计数据
         app.MapPost("/api/traffic/reset", (HttpContext ctx) =>
         {
-            try
-            {
                 SharedData.Traffic.Reset();
                 SharedData.GeoTraffic.Reset();
-                return Results.Json(new { success = true, message = "流量统计数据已重置" });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message });
-            }
-        }).RequireHost($"*:{controlPort}");
+                return TypedResults.Ok(new { success = true, message = "流量统计数据已重置" });
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }
-

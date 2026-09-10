@@ -32,10 +32,13 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record BlockedIpResponse(bool Success, string Message, string Ip, string Type, string Reason,
+        string Duration, DateTime ExpiresAt, DateTime Timestamp);
+    private sealed record UnblockedIpResponse(bool Success, string Message, string Ip, DateTime Timestamp);
     private static void MapBlockedIpEndpoints(WebApplication app, int controlPort)
     {
         // =============== 被封禁 IP 管理 API ===============
-        
+
         // 获取被封禁的 IP 列表
         app.MapGet("/api/blocked-ips", (HttpContext ctx, IRuntimeStateStore runtimeState) =>
         {
@@ -106,21 +109,16 @@ public static partial class ControlApi
                 .OrderBy(x => x.ip)
                 .ToList();
 
-            return Results.Json(new
-            {
-                success = true,
-                count = blockedIps.Count,
-                blockedIps = blockedIps,
-                timestamp = DateTime.Now
-            });
-        }).RequireHost($"*:{controlPort}");
+            return TypedResults.Ok(ManagementLists.From(blockedIps).Sort("ip", item => item.ip)
+                .Sort("type", item => item.type).Sort("expiresAt", item => item.expiresAt)
+                .Search(item => item.ip + " " + item.type + " " + item.reason)
+                .Timestamp(item => item.expiresAt).Read(ctx.Request.Query, "ip"));
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 手动添加 IP 限制（支持 blocked/captcha/throttled/log 类型）
-        app.MapPost("/api/blocked-ips/add", async (HttpContext ctx, IRuntimeStateStore runtimeState, ICaptchaService captchaService) =>
+        app.MapPost("/api/blocked-ips/add", (HttpContext ctx, IRuntimeStateStore runtimeState, ICaptchaService captchaService, BlockIpRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<BlockIpRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Ip))
                 {
                     return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
@@ -181,19 +179,12 @@ public static partial class ControlApi
                     expiresAt = DateTime.Now.Add(duration),
                     timestamp = DateTime.Now
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"操作失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<BlockedIpResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 解封 IP
-        app.MapPost("/api/blocked-ips/remove", async (HttpContext ctx, IRuntimeStateStore runtimeState) =>
+        app.MapPost("/api/blocked-ips/remove", (HttpContext ctx, IRuntimeStateStore runtimeState, UnblockIpRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<UnblockIpRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Ip))
                 {
                     return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
@@ -223,12 +214,7 @@ public static partial class ControlApi
                 {
                     return Results.Json(new { success = false, message = "IP 不在封禁列表中" }, statusCode: 404);
                 }
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"解封失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<UnblockedIpResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 清空所有封禁的 IP
         app.MapPost("/api/blocked-ips/clear", (HttpContext ctx, IRuntimeStateStore runtimeState) =>
@@ -240,15 +226,14 @@ public static partial class ControlApi
             SharedData.IpLogTargets.Clear();
             foreach (var domain in new[] { "ip.blocked", "captcha.pending", "ip.throttled", "ip.log" })
                 foreach (var state in runtimeState.GetSnapshots(domain)) runtimeState.Remove(domain, state.Key);
-            return Results.Json(new
+            return TypedResults.Ok(new
             {
                 success = true,
                 message = $"已清空 {count} 个被封禁的 IP",
                 clearedCount = count,
                 timestamp = DateTime.Now
             });
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }
-

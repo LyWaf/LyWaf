@@ -7,6 +7,23 @@ namespace LyWaf.Tests;
 
 public class WafRuleConditionGroupTests
 {
+    [Fact]
+    public void MatchLocationIdentifiesSuccessfulConditionAndClearsStaleEvidence()
+    {
+        var context = CreateContext("/admin", "GET");
+        var rule = Rule(WafLogicalOperator.Or,
+            Group(WafLogicalOperator.And, Method("POST")),
+            Group(WafLogicalOperator.Or, Method("POST"), Path("/admin")));
+        Assert.True(WafRuleService.MatchRule(context, rule, "127.0.0.1"));
+        var location = Assert.Single(Assert.IsType<WafMatchLocation[]>(context.Items["LyWaf.MatchLocations"]));
+        Assert.Equal(2, location.Group);
+        Assert.Equal(2, location.Condition);
+        Assert.Equal("UriPath", location.Field);
+        context.Request.Path = "/public";
+        Assert.False(WafRuleService.MatchRule(context, rule, "127.0.0.1"));
+        Assert.False(context.Items.ContainsKey("LyWaf.MatchLocations"));
+    }
+
     [Theory]
     [InlineData(WafLogicalOperator.And, false)]
     [InlineData(WafLogicalOperator.Or, true)]

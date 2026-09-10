@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.AspNetCore.DataProtection;
 using LyWaf.Policy;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Routing.Matching;
@@ -1229,6 +1230,19 @@ public class Program
         // 配置使用环境变量
         builder.Configuration.AddEnvironmentVariables();
 
+        var instanceDirectory = Path.GetDirectoryName(Path.GetFullPath(SharedData.ConfigFilePath))!;
+        using var instanceLease = builder.Configuration.GetValue("Lifecycle:ReadinessProbe", false) ? null :
+            new FileStream(Path.Combine(Directory.GetCurrentDirectory(), ".lywaf.instance-state.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        if (instanceLease != null && LyWaf.Services.Backup.InstanceStateCoordinator.IsPending(instanceDirectory))
+            LyWaf.Services.Backup.InstanceStateCoordinator.ApplyBeforeStartup(instanceDirectory,
+                LyWaf.Services.Backup.InstanceStatePaths.FromConfiguration(builder.Configuration));
+
+        var statisticsPath = Path.GetFullPath(builder.Configuration.GetValue<string>("DuckDb:DatabasePath") ?? "bin/lywaf_stats.duckdb");
+        var restoreDirectory = Path.GetDirectoryName(Path.GetFullPath(SharedData.ConfigFilePath))!;
+        var statisticsEnabled = builder.Configuration.GetValue("DuckDb:Enabled", true);
+        using var statisticsLease = LyWaf.Services.Backup.StatisticsRestoreCoordinator.AcquireLease(statisticsPath, statisticsEnabled);
+        if (statisticsEnabled) LyWaf.Services.Backup.StatisticsRestoreCoordinator.ApplyBeforeStartup(restoreDirectory, statisticsPath);
+
         builder.Services.Configure<WafInfoOptions>(builder.Configuration.GetSection("WafInfos"));
         builder.Services.Configure<ProtectOptions>(builder.Configuration.GetSection("Protect"));
         builder.Services.Configure<LyWaf.Services.ResponseWaf.ResponseWafOptions>(builder.Configuration.GetSection("ResponseWaf"));
@@ -1276,6 +1290,23 @@ public class Program
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton<LyWaf.Services.Configuration.ConfigVersionService>();
         builder.Services.AddSingleton<LyWaf.Services.Configuration.ConfigurationLifecycleService>();
+        builder.Services.AddSingleton<LyWaf.Services.ManagementTasks.ManagementJobService>();
+        builder.Services.AddSingleton<LyWaf.Services.Backup.ConfigurationBackupService>();
+        builder.Services.AddSingleton<LyWaf.Services.Incidents.IncidentRequestStore>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LyWaf.Services.Incidents.IncidentRequestStore>());
+        builder.Services.AddSingleton<LyWaf.Services.ManagementApi.ManagementIdempotency>();
+        builder.Services.AddSingleton<LyWaf.Services.ManagementTasks.ManagementHealthService>();
+        builder.Services.AddSingleton<LyWaf.Services.Sites.SiteStatisticsService>();
+        builder.Services.AddSingleton<LyWaf.Services.Incidents.SecurityIncidentService>();
+        builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(SharedData.ConfigFilePath))!, ".lywaf.keys")));
+        builder.Services.AddHttpClient("management-notifications", client => client.Timeout = TimeSpan.FromSeconds(15))
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        builder.Services.AddSingleton<LyWaf.Services.Notifications.NotificationService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LyWaf.Services.Notifications.NotificationService>());
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LyWaf.Services.Incidents.SecurityIncidentService>());
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LyWaf.Services.Sites.SiteStatisticsService>());
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LyWaf.Services.ManagementTasks.ManagementJobService>());
         builder.Services.AddSingleton<ControlConfigurationPatchService>();
         builder.Services.AddSingleton<LyWaf.Services.Lifecycle.GracefulShutdownCoordinator>();
         builder.Services.Configure<LyWaf.Services.Lifecycle.UpgradeOptions>(builder.Configuration.GetSection("Lifecycle:Upgrade"));
@@ -1478,6 +1509,7 @@ public class Program
             reverse.LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
         }
         builder.Services.Replace(ServiceDescriptor.Singleton<IForwarderHttpClientFactory, RetryForwarderHttpClientFactory>());
+        LyWaf.Services.Sites.ManagedSiteRegistration.AddManagedSites(builder.Services);
         _logger.Info("[启动耗时] YARP 配置: {}ms", startupSw.ElapsedMilliseconds);
         startupSw.Restart();
         var app = builder.Build();
@@ -1549,6 +1581,8 @@ public class Program
         
         app.MapReverseProxy(proxyApp =>
         {
+            proxyApp.UseMiddleware<LyWaf.Services.Sites.SiteStatisticsMiddleware>();
+            proxyApp.UseMiddleware<LyWaf.Services.Incidents.SecurityIncidentMiddleware>();
             proxyApp.UseMiddleware<LyWaf.Services.Lifecycle.RequestDrainMiddleware>();
             proxyApp.UseMiddleware<TelemetryMiddleware>();
             proxyApp.UseMiddleware<MetricsMiddleware>();

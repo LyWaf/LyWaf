@@ -31,6 +31,9 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record GlobalThrottleResponse(bool Success, string Message, int Global);
+    private sealed record IpThrottleResponse(bool Success, string Message, string Ip, DateTime Timestamp, int? LimitKbps = null);
+    private sealed record PathThrottleResponse(bool Success, string Message, string Path, DateTime Timestamp, int? LimitKbps = null);
     private static void MapThrottlingEndpoints(WebApplication app, int controlPort)
     {
         // =============== 带宽限速管理 API ===============
@@ -40,7 +43,7 @@ public static partial class ControlApi
         {
             var config = speedLimitService.GetThrottleConfig();
             var options = speedLimitService.GetOptions();
-            return Results.Json(new
+            return TypedResults.Ok(new
             {
                 success = true,
                 enabled = options.Throttled.Enabled,
@@ -49,27 +52,25 @@ public static partial class ControlApi
                 ipLimits = config.IpLimits,
                 timestamp = DateTime.Now
             });
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 切换带宽限速启用状态
         app.MapPost("/api/throttle/toggle", (HttpContext ctx, ISpeedLimitService speedLimitService) =>
         {
             var options = speedLimitService.GetOptions();
             options.Throttled.Enabled = !options.Throttled.Enabled;
-            return Results.Json(new
+            return TypedResults.Ok(new
             {
                 success = true,
                 enabled = options.Throttled.Enabled,
                 message = options.Throttled.Enabled ? "带宽限速已启用" : "带宽限速已禁用"
             });
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 设置全局带宽限速
-        app.MapPost("/api/throttle/global", async (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        app.MapPost("/api/throttle/global", (HttpContext ctx, ISpeedLimitService speedLimitService, SetGlobalThrottleRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<SetGlobalThrottleRequest>();
+
                 if (request == null)
                     return Results.Json(new { success = false, message = "请求无效" }, statusCode: 400);
 
@@ -82,19 +83,12 @@ public static partial class ControlApi
                         : "已关闭全局带宽限速",
                     global = request.LimitKbps
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"设置失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<GlobalThrottleResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 设置 IP 带宽限速
-        app.MapPost("/api/throttle/ip/add", async (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        app.MapPost("/api/throttle/ip/add", (HttpContext ctx, ISpeedLimitService speedLimitService, AddIpThrottleRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<AddIpThrottleRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Ip))
                 {
                     return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
@@ -114,19 +108,12 @@ public static partial class ControlApi
                     limitKbps = request.LimitKbps,
                     timestamp = DateTime.Now
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"设置失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<IpThrottleResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 移除 IP 带宽限速
-        app.MapPost("/api/throttle/ip/remove", async (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        app.MapPost("/api/throttle/ip/remove", (HttpContext ctx, ISpeedLimitService speedLimitService, RemoveIpThrottleRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<RemoveIpThrottleRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Ip))
                 {
                     return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
@@ -146,19 +133,12 @@ public static partial class ControlApi
                 {
                     return Results.Json(new { success = false, message = "移除失败：IP 不在限速列表中" }, statusCode: 404);
                 }
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<IpThrottleResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 设置路径带宽限速
-        app.MapPost("/api/throttle/path/add", async (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        app.MapPost("/api/throttle/path/add", (HttpContext ctx, ISpeedLimitService speedLimitService, AddPathThrottleRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<AddPathThrottleRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Path))
                 {
                     return Results.Json(new { success = false, message = "路径不能为空" }, statusCode: 400);
@@ -178,19 +158,12 @@ public static partial class ControlApi
                     limitKbps = request.LimitKbps,
                     timestamp = DateTime.Now
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"设置失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<PathThrottleResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 移除路径带宽限速
-        app.MapPost("/api/throttle/path/remove", async (HttpContext ctx, ISpeedLimitService speedLimitService) =>
+        app.MapPost("/api/throttle/path/remove", (HttpContext ctx, ISpeedLimitService speedLimitService, RemovePathThrottleRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<RemovePathThrottleRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Path))
                 {
                     return Results.Json(new { success = false, message = "路径不能为空" }, statusCode: 400);
@@ -210,18 +183,11 @@ public static partial class ControlApi
                 {
                     return Results.Json(new { success = false, message = "移除失败：路径不在限速列表中" }, statusCode: 404);
                 }
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<PathThrottleResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 保存当前限速配置到补丁
         app.MapPost("/api/throttle/patch/save", async (HttpContext ctx, ISpeedLimitService speedLimitService, IConfiguration config) =>
         {
-            try
-            {
                 var throttleConfig = speedLimitService.GetThrottleConfig();
                 var options = speedLimitService.GetOptions();
                 await _lbPatchLock.WaitAsync();
@@ -239,24 +205,17 @@ public static partial class ControlApi
                     speedLimit["Throttled"] = throttled;
                     UpdatePatchSourceTracking(patch);
                     await SavePatchAndReload(patch, config);
-                    return Results.Json(new { success = true, message = "限速配置已保存到补丁" });
+                    return TypedResults.Ok(new { success = true, message = "限速配置已保存到补丁" });
                 }
                 finally
                 {
                     _lbPatchLock.Release();
                 }
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"保存失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 删除补丁中的限速配置（恢复为原始配置）
         app.MapPost("/api/throttle/patch/remove", async (HttpContext ctx, IConfiguration config) =>
         {
-            try
-            {
                 await _lbPatchLock.WaitAsync();
                 try
                 {
@@ -273,13 +232,7 @@ public static partial class ControlApi
                 {
                     _lbPatchLock.Release();
                 }
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"删除失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }
-

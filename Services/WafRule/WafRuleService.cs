@@ -215,7 +215,7 @@ public class WafRuleService : IWafRuleService
         if (_rulePackages != null) rules.AddRange(_rulePackages.GetRules(context));
 
         var enabledRules = rules
-            .Where(r => r.Enabled)
+            .Where(r => r.Enabled && IsRuleBoundToSite(context, r))
             .ToList(); // _mergedRules 已按优先级排好序
         RequestInspectionSnapshot? snapshot = null;
         if (enabledRules.Any(rule => rule.ConditionGroups.Any(group =>
@@ -232,12 +232,22 @@ public class WafRuleService : IWafRuleService
                 result.TriggeredRule = rule;
                 result.Action = rule.Action;
                 result.Message = $"IP {clientIp} 命中WAF规则 [{rule.Name}] (来源: {rule.Source})";
+                context.Items["LyWaf.RuleId"] = rule.Id;
+                context.Items["LyWaf.AttackType"] = "CustomRule";
                 _logger.Info("WAF 规则命中: {Message}", result.Message);
                 return result;
             }
         }
 
         return result;
+    }
+
+    private static bool IsRuleBoundToSite(HttpContext context, WafCustomRule rule)
+    {
+        if (rule.Source != WafRuleSource.User) return true;
+        var metadata = context.GetEndpoint()?.Metadata.GetMetadata<Yarp.ReverseProxy.Model.RouteModel>()?.Config.Metadata;
+        return metadata?.TryGetValue(LyWaf.Services.Sites.ManagedSiteProvider.RuleIdsKey, out var ids) != true ||
+            (ids ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries).Contains(rule.Id, StringComparer.Ordinal);
     }
 
     private static bool HasConditions(WafCustomRule rule) =>
@@ -253,18 +263,47 @@ public class WafRuleService : IWafRuleService
     internal static bool MatchRule(HttpContext context, WafCustomRule rule, string clientIp,
         RequestInspectionSnapshot? snapshot = null)
     {
-        var matches = rule.ConditionGroups.Select(group =>
-            MatchConditions(context, group.Conditions, group.Operator, clientIp, snapshot));
-        return rule.GroupOperator == WafLogicalOperator.And ? matches.All(x => x) : matches.Any(x => x);
+        var fields = new List<string>();
+        var locations = new List<WafMatchLocation>();
+        context.Items.Remove("LyWaf.MatchedFields");
+        context.Items.Remove("LyWaf.MatchLocations");
+        var matches = rule.ConditionGroups.Select((group, index) =>
+        {
+            var groupFields = new List<string>();
+            var groupLocations = new List<WafMatchLocation>();
+            var matched = MatchConditions(context, group.Conditions, group.Operator, clientIp, snapshot, groupFields, groupLocations, index + 1);
+            if (matched) { fields.AddRange(groupFields); locations.AddRange(groupLocations); }
+            return matched;
+        });
+        var triggered = rule.GroupOperator == WafLogicalOperator.And ? matches.All(x => x) : matches.Any(x => x);
+        if (triggered)
+        {
+            context.Items["LyWaf.MatchedFields"] = fields.Distinct().ToArray();
+            context.Items["LyWaf.MatchLocations"] = locations.ToArray();
+        }
+        return triggered;
     }
 
     private static bool MatchConditions(HttpContext context, IReadOnlyList<WafCondition> conditions,
-        WafLogicalOperator logicalOperator, string clientIp, RequestInspectionSnapshot? snapshot)
+        WafLogicalOperator logicalOperator, string clientIp, RequestInspectionSnapshot? snapshot, List<string> fields,
+        List<WafMatchLocation> locations, int group)
     {
         if (conditions.Count == 0) return false;
+        var index = 0;
+        bool Match(WafCondition condition)
+        {
+            index++;
+            var result = MatchCondition(context, condition, clientIp, snapshot);
+            if (result)
+            {
+                fields.Add(condition.Field.ToString());
+                locations.Add(new(group, index, condition.Field.ToString(), condition.FieldName?[..Math.Min(condition.FieldName.Length, 128)], condition.Operator.ToString()));
+            }
+            return result;
+        }
         return logicalOperator == WafLogicalOperator.And
-            ? conditions.All(condition => MatchCondition(context, condition, clientIp, snapshot))
-            : conditions.Any(condition => MatchCondition(context, condition, clientIp, snapshot));
+            ? conditions.All(Match)
+            : conditions.Any(Match);
     }
 
     // ============ 动作执行 ============

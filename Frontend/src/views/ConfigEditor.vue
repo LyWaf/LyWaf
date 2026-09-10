@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { configFileApi, serviceApi, patchApi, upgradeApi, type ConfigVersionInfo, type ConfigVersionDiff, type UpgradeReleaseInfo, type UpgradePointers } from '@/api'
 import { useToast } from '@/composables/useToast'
+import ListToolbar from '@/components/common/ListToolbar.vue'
 
 const { showSuccess, showError } = useToast()
+const router = useRouter()
 
 // 状态
 const loading = ref(false)
@@ -19,6 +22,10 @@ const activeTab = ref<'source' | 'yaml'>('source')
 const hasDraft = ref(false)
 const historyLoading = ref(false)
 const versions = ref<ConfigVersionInfo[]>([])
+const historyPage = ref(1)
+const historySearch = ref('')
+const historyTotal = ref(0)
+let historyGeneration = 0
 const selectedDiff = ref<ConfigVersionDiff | null>(null)
 const diffLoading = ref(false)
 const rollbackTarget = ref<ConfigVersionInfo | null>(null)
@@ -28,6 +35,10 @@ const upgradePackageName = ref('')
 const upgradeVersion = ref('')
 const upgradeSha256 = ref('')
 const upgradeReleases = ref<UpgradeReleaseInfo[]>([])
+const upgradePage = ref(1)
+const upgradeSearch = ref('')
+const upgradeTotal = ref(0)
+let upgradeRequest = 0
 const upgradePointers = ref<UpgradePointers>({ current: null, previous: null, pending: null })
 const activateTarget = ref<UpgradeReleaseInfo | null>(null)
 const activatingUpgrade = ref(false)
@@ -40,13 +51,17 @@ const formatTime = (value: string) => new Date(value).toLocaleString()
 const shortHash = (value: string) => value.slice(0, 12)
 
 const loadHistory = async () => {
+  const generation = ++historyGeneration
   historyLoading.value = true
   try {
-    versions.value = (await configFileApi.getHistory()).versions
+    const result = await configFileApi.getHistory(historyPage.value, historySearch.value)
+    if (generation !== historyGeneration) return
+    versions.value = result.data
+    historyTotal.value = result.total
   } catch (error: any) {
     showError(error?.response?.data?.message || '加载配置历史失败')
   } finally {
-    historyLoading.value = false
+    if (generation === historyGeneration) historyLoading.value = false
   }
 }
 
@@ -65,11 +80,11 @@ const confirmRollback = async () => {
   if (!rollbackTarget.value) return
   rollingBack.value = true
   try {
-    await configFileApi.rollback(rollbackTarget.value.id)
+    const result = await configFileApi.rollback(rollbackTarget.value.id)
     rollbackTarget.value = null
     selectedDiff.value = null
-    await Promise.all([loadFile(), loadHistory()])
-    showSuccess('配置已回滚并重新加载')
+    showSuccess('配置回滚任务已提交')
+    await router.push({ path: '/management-tasks', query: { task: result.data.id } })
   } catch (error: any) {
     showError(error?.response?.data?.message || '配置回滚失败')
   } finally {
@@ -78,14 +93,18 @@ const confirmRollback = async () => {
 }
 
 const loadUpgrades = async () => {
+  const request = ++upgradeRequest
   upgradeLoading.value = true
   try {
-    const response = await upgradeApi.list()
-    upgradeReleases.value = response.releases
-    upgradePointers.value = response.pointers
+    const response = await upgradeApi.list(upgradePage.value, upgradeSearch.value)
+    const pointers = await upgradeApi.pointers()
+    if (request !== upgradeRequest) return
+    upgradeReleases.value = response.data
+    upgradeTotal.value = response.total
+    upgradePointers.value = pointers
   } catch (error: any) {
     showError(error?.response?.data?.message || '加载程序版本失败')
-  } finally { upgradeLoading.value = false }
+  } finally { if (request === upgradeRequest) upgradeLoading.value = false }
 }
 
 const stageUpgrade = async () => {
@@ -96,9 +115,9 @@ const stageUpgrade = async () => {
   upgradeLoading.value = true
   try {
     const response = await upgradeApi.stage(upgradePackageName.value, upgradeVersion.value, upgradeSha256.value)
-    showSuccess(response.message)
+    showSuccess('升级校验任务已提交')
     upgradePackageName.value = ''; upgradeVersion.value = ''; upgradeSha256.value = ''
-    await loadUpgrades()
+    await router.push({ path: '/management-tasks', query: { task: response.data.id } })
   } catch (error: any) {
     showError(error?.response?.data?.message || '候选版本校验失败')
   } finally { upgradeLoading.value = false }
@@ -108,9 +127,10 @@ const confirmActivateUpgrade = async () => {
   if (!activateTarget.value) return
   activatingUpgrade.value = true
   try {
-    await upgradeApi.activate(activateTarget.value.version)
-    showSuccess('实例正在排空，候选版本就绪后将接管服务')
+    const result = await upgradeApi.activate(activateTarget.value.version)
+    showSuccess('程序激活任务已提交')
     activateTarget.value = null
+    await router.push({ path: '/management-tasks', query: { task: result.data.id } })
   } catch (error: any) {
     showError(error?.response?.data?.message || '激活失败')
   } finally { activatingUpgrade.value = false }
@@ -119,8 +139,9 @@ const confirmActivateUpgrade = async () => {
 const rollbackProgram = async () => {
   activatingUpgrade.value = true
   try {
-    await upgradeApi.rollback()
-    showSuccess('实例正在排空，上一程序版本将重新启动')
+    const result = await upgradeApi.rollback()
+    showSuccess('程序回退任务已提交')
+    await router.push({ path: '/management-tasks', query: { task: result.data.id } })
   } catch (error: any) {
     showError(error?.response?.data?.message || '程序版本回退失败')
   } finally { activatingUpgrade.value = false }
@@ -184,6 +205,11 @@ const saveConfig = async (reload: boolean = false) => {
   saving.value = true
   try {
     const response = await configFileApi.saveFile(content.value, reload)
+    if (reload && response.data) {
+      showSuccess('配置发布任务已提交')
+      await router.push({ path: '/management-tasks', query: { task: response.data.id } })
+      return
+    }
     if (response.success) {
       lastSavedContent.value = content.value
       hasDraft.value = true
@@ -411,6 +437,7 @@ onMounted(() => {
           {{ historyLoading ? '加载中...' : '刷新历史' }}
         </button>
       </div>
+      <ListToolbar v-model:page="historyPage" v-model:search="historySearch" :total="historyTotal" :busy="historyLoading" @refresh="loadHistory" />
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
           <thead class="bg-dark-sidebar text-gray-400">
@@ -441,6 +468,9 @@ onMounted(() => {
           <button v-if="upgradePointers.previous" class="btn btn-sm btn-secondary text-amber-400" :disabled="activatingUpgrade" @click="rollbackProgram">回退到 {{ upgradePointers.previous }}</button>
           <button class="btn btn-sm btn-secondary" :disabled="upgradeLoading" @click="loadUpgrades">刷新版本</button>
         </div>
+      </div>
+      <div class="px-4 pt-4">
+        <ListToolbar v-model:page="upgradePage" v-model:search="upgradeSearch" :total="upgradeTotal" :busy="upgradeLoading" @refresh="loadUpgrades" />
       </div>
       <div class="grid gap-3 border-b border-dark-border p-4 md:grid-cols-[1fr_0.7fr_2fr_auto]">
         <input v-model.trim="upgradePackageName" class="input" placeholder="收件箱 ZIP 文件名" />

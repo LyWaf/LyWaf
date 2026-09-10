@@ -4,6 +4,7 @@ import { interceptEventApi, interceptLogApi } from '@/api'
 import type { InterceptEvent, InterceptLogFile, InterceptLogEntry } from '@/api'
 import { useToast } from '@/composables/useToast'
 import DateTimePicker from '@/components/common/DateTimePicker.vue'
+import ListToolbar from '@/components/common/ListToolbar.vue'
 
 const { showSuccess, showError } = useToast()
 
@@ -13,14 +14,20 @@ const activeTab = ref<'events' | 'details'>('events')
 // ==================== 拦截事件（聚合视图） ====================
 const loading = ref(false)
 const events = ref<InterceptEvent[]>([])
+const eventPage = ref(1)
+const eventTotal = ref(0)
+const eventSearch = ref('')
+let eventRequest = 0
 
 // 过滤
 const filterIp = ref('')
 const filterDomain = ref('')
 const filterStartTime = ref('')
 const filterEndTime = ref('')
+watch([filterIp, filterDomain, filterStartTime, filterEndTime], () => { eventPage.value = 1 })
 
 const loadEvents = async () => {
+  const request = ++eventRequest
   loading.value = true
   try {
     const params: Record<string, string> = {}
@@ -29,14 +36,16 @@ const loadEvents = async () => {
     if (filterStartTime.value) params.startTime = filterStartTime.value
     if (filterEndTime.value) params.endTime = filterEndTime.value
 
-    const res = await interceptEventApi.list(params) as any
+    const res = await interceptEventApi.list({ ...params, page: eventPage.value, search: eventSearch.value })
+    if (request !== eventRequest) return
     if (res?.success) {
-      events.value = res.events || []
+      events.value = res.data
+      eventTotal.value = res.total
     }
   } catch {
-    showError('加载检测事件失败')
+    if (request === eventRequest) showError('加载检测事件失败')
   } finally {
-    loading.value = false
+    if (request === eventRequest) loading.value = false
   }
 }
 
@@ -44,7 +53,11 @@ const clearEvents = async () => {
   try {
     const res = await interceptEventApi.clear() as any
     if (res?.success) {
+      ++eventRequest
       events.value = []
+      eventTotal.value = 0
+      eventPage.value = 1
+      loading.value = false
       showSuccess('检测事件已清除')
     }
   } catch {
@@ -358,6 +371,7 @@ const formatNum = (n: number): string => {
 
     <!-- ==================== 拦截事件 Tab ==================== -->
     <template v-if="activeTab === 'events'">
+      <ListToolbar v-model:page="eventPage" v-model:search="eventSearch" :total="eventTotal" :busy="loading" @refresh="loadEvents" />
       <!-- 过滤栏 -->
       <div class="card !py-3">
         <div class="flex items-center gap-3">

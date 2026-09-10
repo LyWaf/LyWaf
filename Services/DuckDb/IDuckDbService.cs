@@ -9,6 +9,8 @@ public interface IDuckDbService : IDisposable
 {
     /// <summary>DuckDB 是否已启用</summary>
     bool IsEnabled { get; set; }
+    /// <summary>只读连接状态，不会为健康检查触发数据库打开或 WAL 恢复。</summary>
+    string HealthStatus => IsEnabled ? "unknown" : "disabled";
 
     /// <summary>获取数据库连接（单例长连接）</summary>
     DuckDBConnection GetConnection();

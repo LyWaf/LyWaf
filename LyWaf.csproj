@@ -59,6 +59,7 @@
   <!-- 排除运行时状态文件、用户配置、构建产物等 -->
   <ItemGroup>
     <Compile Remove="benchmarks\**\*.cs" />
+    <Compile Remove="artifacts\**\*.cs" />
     <Compile Remove="tests\LyWaf.Tests\**\*.cs" />
     <Content Remove=".lywaf.*" />
     <Content Remove="config.ly.*" />

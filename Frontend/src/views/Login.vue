@@ -12,6 +12,7 @@ const { showError } = useToast()
 
 const username = ref('')
 const password = ref('')
+const secondFactor = ref('')
 const loading = ref(false)
 
 // ========== 服务端时间同步 ==========
@@ -80,9 +81,9 @@ const handleLogin = async () => {
     const loginHash = await sha256(pwdHash + timestamp.toString())
 
     // 2. 发送登录请求
-    const res = await authApi.login(username.value, loginHash, timestamp)
+    const res = await authApi.login(username.value, loginHash, timestamp, secondFactor.value.trim() || undefined)
     if (res.success && res.token && res.username) {
-      setAuth(res.token, res.username)
+      setAuth(res.token, res.username, res.role, res.permissions)
       router.push('/')
     } else {
       if (res.retryAfterSeconds && res.retryAfterSeconds > 0) {
@@ -141,6 +142,11 @@ const handleLogin = async () => {
           />
         </div>
 
+        <div>
+          <label class="block text-sm font-medium text-gray-300 mb-1.5">动态码 / 恢复码（已启用双因素认证时填写）</label>
+          <input v-model="secondFactor" autocomplete="one-time-code" maxlength="64"
+            class="w-full bg-dark-sidebar border border-dark-border rounded-lg px-4 py-2.5 text-sm text-gray-200" />
+        </div>
         <!-- 冷却倒计时提示 -->
         <div
           v-if="cooldownSeconds > 0"

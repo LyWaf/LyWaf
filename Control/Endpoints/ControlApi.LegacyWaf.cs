@@ -32,6 +32,7 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record LegacyWafResponse(bool Success, string Message, string Pattern, DateTime Timestamp);
     private static void MapLegacyWafEndpoints(WebApplication app, int controlPort)
     {
         // =============== WAF 规则管理 API ===============
@@ -40,7 +41,7 @@ public static partial class ControlApi
         app.MapGet("/api/waf/rules", (HttpContext ctx, IProtectService protectService) =>
         {
             var options = protectService.GetOptions();
-            return Results.Json(new
+            return TypedResults.Ok(new
             {
                 success = true,
                 openArgsCheck = options.OpenArgsCheck,
@@ -49,14 +50,12 @@ public static partial class ControlApi
                 postRules = protectService.GetPostRegexList(),
                 timestamp = DateTime.Now
             });
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 添加 WAF Args 规则
-        app.MapPost("/api/waf/args/add", async (HttpContext ctx, IProtectService protectService) =>
+        app.MapPost("/api/waf/args/add", (HttpContext ctx, IProtectService protectService, AddWafRuleRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<AddWafRuleRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Pattern))
                 {
                     return Results.Json(new { success = false, message = "正则表达式不能为空" }, statusCode: 400);
@@ -76,19 +75,12 @@ public static partial class ControlApi
                 {
                     return Results.Json(new { success = false, message = "添加失败：正则格式无效或已存在" }, statusCode: 400);
                 }
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<LegacyWafResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 移除 WAF Args 规则
-        app.MapPost("/api/waf/args/remove", async (HttpContext ctx, IProtectService protectService) =>
+        app.MapPost("/api/waf/args/remove", (HttpContext ctx, IProtectService protectService, RemoveWafRuleRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<RemoveWafRuleRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Pattern))
                 {
                     return Results.Json(new { success = false, message = "正则表达式不能为空" }, statusCode: 400);
@@ -108,19 +100,12 @@ public static partial class ControlApi
                 {
                     return Results.Json(new { success = false, message = "移除失败：规则不存在" }, statusCode: 404);
                 }
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<LegacyWafResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 添加 WAF Post 规则
-        app.MapPost("/api/waf/post/add", async (HttpContext ctx, IProtectService protectService) =>
+        app.MapPost("/api/waf/post/add", (HttpContext ctx, IProtectService protectService, AddWafRuleRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<AddWafRuleRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Pattern))
                 {
                     return Results.Json(new { success = false, message = "正则表达式不能为空" }, statusCode: 400);
@@ -140,19 +125,12 @@ public static partial class ControlApi
                 {
                     return Results.Json(new { success = false, message = "添加失败：正则格式无效或已存在" }, statusCode: 400);
                 }
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<LegacyWafResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 移除 WAF Post 规则
-        app.MapPost("/api/waf/post/remove", async (HttpContext ctx, IProtectService protectService) =>
+        app.MapPost("/api/waf/post/remove", (HttpContext ctx, IProtectService protectService, RemoveWafRuleRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<RemoveWafRuleRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Pattern))
                 {
                     return Results.Json(new { success = false, message = "正则表达式不能为空" }, statusCode: 400);
@@ -172,13 +150,7 @@ public static partial class ControlApi
                 {
                     return Results.Json(new { success = false, message = "移除失败：规则不存在" }, statusCode: 404);
                 }
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<LegacyWafResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }
-

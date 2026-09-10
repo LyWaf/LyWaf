@@ -48,6 +48,15 @@ public interface IPluginNetworkClientFactory
     HttpClient CreateClient();
 }
 
+/// <summary>可选通知接收能力，宿主仅调用处于运行状态并已授权网络权限的插件。</summary>
+public interface IPluginNotificationSink
+{
+    Task SendNotificationAsync(PluginNotification notification, CancellationToken cancellationToken);
+}
+
+/// <summary>不包含认证凭据及请求原文的聚合告警。</summary>
+public sealed record PluginNotification(string Id, string Site, string RuleId, string AttackType, string Ip, long Count, DateTimeOffset LastSeen);
+
 /// <summary>Coordinates idempotent background work started by plugins.</summary>
 public interface IPluginTaskCoordinator
 {

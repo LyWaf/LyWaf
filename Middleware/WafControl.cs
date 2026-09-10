@@ -172,6 +172,9 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
                 var finding = _threatDetector.Detect(inspection, context.Request.Path);
                 if (finding is not null)
                 {
+                    context.Items["LyWaf.RuleId"] = finding.RuleId;
+                    context.Items["LyWaf.AttackType"] = finding.Category;
+                    context.Items["LyWaf.MatchedFields"] = new[] { finding.Source };
                     reason = $"{finding.Category}: {finding.RuleId} ({finding.Source})";
                     RecordWafHit(context, clientIp, reason);
                     if (protectService.GetOptions().SemanticDetectionAction.Equals("Reject", StringComparison.OrdinalIgnoreCase))

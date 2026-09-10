@@ -1,11 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
+import ListToolbar from '@/components/common/ListToolbar.vue'
+import { useRouter } from 'vue-router'
 import { settingsApi, authApi } from '@/api'
-import type { RuntimeLogEntry } from '@/api'
+import type { RuntimeLogEntry, ManagementUser, ManagementRole } from '@/api'
 import { useToast } from '@/composables/useToast'
+import { useAuth } from '@/composables/useAuth'
+import ManagementMfa from '@/components/ManagementMfa.vue'
 import type { CertDetail, AuditLogEntry, CertificateRuntimeStatus, AcmeAccountStatus } from '@/types'
 
 const { showSuccess, showError } = useToast()
+const router = useRouter()
+const { can } = useAuth()
 
 // ==================== Tab 切换 ====================
 const activeTab = ref<'certs' | 'console' | 'logs' | 'runtime'>('certs')
@@ -19,6 +25,11 @@ const tabs = [
 // ==================== 证书管理 ====================
 const certsLoading = ref(false)
 const certs = ref<CertDetail[]>([])
+const certPage = ref(1)
+const certSearch = ref('')
+const certTotal = ref(0)
+let certRequest = 0
+onBeforeUnmount(() => { certRequest++ })
 const showUploadDialog = ref(false)
 const uploadForm = ref({ domain: '', pemContent: '', keyContent: '' })
 const uploading = ref(false)
@@ -29,21 +40,28 @@ const runtimeCertificates = ref<CertificateRuntimeStatus[]>([])
 const acmeAccounts = ref<AcmeAccountStatus[]>([])
 
 const loadCerts = async () => {
+  const request = ++certRequest
   certsLoading.value = true
   try {
     const [res, status] = await Promise.all([
-      settingsApi.getCerts(),
+      settingsApi.getCerts(certPage.value, certSearch.value),
       settingsApi.getCertificateStatus(),
-    ]) as unknown as [{ success: boolean; certs: CertDetail[] }, { certificates: CertificateRuntimeStatus[]; accounts: AcmeAccountStatus[] }]
+    ])
+    if (request !== certRequest) return
     if (res?.success) {
-      certs.value = res.certs
+      certs.value = res.data
+      certTotal.value = res.total
     }
     runtimeCertificates.value = status.certificates || []
     acmeAccounts.value = status.accounts || []
+    if (res.success && !res.data.length && certPage.value > 1) {
+      certPage.value = Math.max(1, Math.ceil(res.total / 20))
+      await loadCerts()
+    }
   } catch {
-    showError('加载证书列表失败')
+    if (request === certRequest) showError('加载证书列表失败')
   } finally {
-    certsLoading.value = false
+    if (request === certRequest) certsLoading.value = false
   }
 }
 
@@ -123,13 +141,13 @@ const handleAcmeApply = async () => {
     return
   }
   acmeApplying.value = true
-  acmeStatus.value = '正在申请证书，请耐心等待（约30-60秒）...'
+  acmeStatus.value = '正在提交签发任务...'
   try {
-    const res = await settingsApi.acmeApply(acmeForm.value) as unknown as { success: boolean; expiresAt?: string; errorMessage?: string }
+    const res = await settingsApi.acmeApply(acmeForm.value)
     if (res?.success) {
-      showSuccess(`证书申请成功，到期时间：${res.expiresAt}`)
+      showSuccess('证书签发任务已提交')
       showAcmeDialog.value = false
-      loadCerts()
+      await router.push({ path: '/management-tasks', query: { task: res.data.id } })
     } else {
       showError(res?.errorMessage || '证书申请失败')
     }
@@ -145,10 +163,10 @@ const handleRenewCert = async (cert: CertDetail) => {
   renewingCert.value = cert
   renewing.value = true
   try {
-    const res = await settingsApi.acmeRenew({ domain: cert.domain }) as unknown as { success: boolean; expiresAt?: string; errorMessage?: string }
+    const res = await settingsApi.acmeRenew({ domain: cert.domain })
     if (res?.success) {
-      showSuccess(`证书续期成功，新到期时间：${res.expiresAt}`)
-      loadCerts()
+      showSuccess('证书续期任务已提交')
+      await router.push({ path: '/management-tasks', query: { task: res.data.id } })
     } else {
       showError(res?.errorMessage || '证书续期失败')
     }
@@ -166,6 +184,108 @@ const consoleInfo = ref<{ username: string; lastLoginAt: string | null; controlL
 const showPasswordDialog = ref(false)
 const passwordForm = ref({ currentPassword: '', newPassword: '', confirmPassword: '' })
 const changingPassword = ref(false)
+const managementUsers = ref<ManagementUser[]>([])
+const userPage = ref(1)
+const userTotal = ref(0)
+const userSearch = ref('')
+let userListRequest = 0
+const userForm = ref({ username: '', password: '', role: 'auditor' })
+const generatedPassword = ref('')
+const managementRoles = ref<ManagementRole[]>([])
+const visibleRoles = ref<ManagementRole[]>([])
+const rolePage = ref(1)
+const roleSearch = ref('')
+const roleTotal = ref(0)
+const roleListLoading = ref(false)
+let roleRequest = 0
+onBeforeUnmount(() => { roleRequest++; userListRequest++ })
+const loadRoles = async () => {
+  const current = ++roleRequest
+  roleListLoading.value = true
+  try {
+    const result = await authApi.rolePage(rolePage.value, roleSearch.value)
+    if (current !== roleRequest) return
+    visibleRoles.value = result.data
+    roleTotal.value = result.total
+    if (!result.data.length && rolePage.value > 1) {
+      rolePage.value = Math.max(1, Math.ceil(result.total / 20))
+      await loadRoles()
+    }
+  } catch {
+    if (current === roleRequest) showError('读取角色列表失败')
+  } finally {
+    if (current === roleRequest) roleListLoading.value = false
+  }
+}
+const roleForm = ref({ name: '', permissions: ['read'] })
+const roleBusy = ref(false)
+const permissionLabels: Record<string, string> = { read: '读取', write: '业务写入', 'users.manage': '管理用户', 'system.manage': '管理系统' }
+const saveManagementRole = async () => {
+  roleBusy.value = true
+  try {
+    await authApi.saveRole(roleForm.value)
+    roleForm.value = { name: '', permissions: ['read'] }
+    await loadManagementUsers()
+    showSuccess('角色已保存，关联用户需重新登录')
+  } catch (error: any) { showError(error?.message || '保存角色失败') }
+  finally { roleBusy.value = false }
+}
+const deleteManagementRole = async (name: string) => {
+  try { await authApi.deleteRole(name); await loadManagementUsers() }
+  catch (error: any) { showError(error?.message || '删除角色失败') }
+}
+
+const loadManagementUsers = async () => {
+  if (!can('users.manage')) return
+  const request = ++userListRequest
+  const res = await authApi.users(userPage.value, userSearch.value)
+  const roles = await authApi.roles()
+  if (request !== userListRequest) return
+  managementUsers.value = res.data || []
+  userTotal.value = res.total
+  managementRoles.value = roles.data || []
+  await loadRoles()
+}
+
+const createManagementUser = async () => {
+  try {
+    await authApi.createUser(userForm.value)
+    userForm.value = { username: '', password: '', role: 'auditor' }
+    await loadManagementUsers()
+    showSuccess('管理用户已创建')
+  } catch (error: any) { showError(error?.response?.data?.message || '创建用户失败') }
+}
+
+const toggleManagementUser = async (user: ManagementUser) => {
+  try {
+    await authApi.setUserDisabled(user.id, !user.disabled)
+    await loadManagementUsers()
+  } catch (error: any) { showError(error?.response?.data?.message || '修改用户状态失败') }
+}
+
+const changeManagementUserRole = async (user: ManagementUser) => {
+  try {
+    await authApi.setUserRole(user.id, user.role)
+    await loadManagementUsers()
+  } catch (error: any) {
+    showError(error?.response?.data?.message || '修改角色失败')
+    await loadManagementUsers()
+  }
+}
+
+const resetManagementUserPassword = async (user: ManagementUser) => {
+  try {
+    const res = await authApi.resetUserPassword(user.id)
+    generatedPassword.value = res.password
+  } catch { showError('重置密码失败') }
+}
+
+const revokeManagementUserSessions = async (user: ManagementUser) => {
+  try {
+    await authApi.revokeUserSessions(user.id)
+    showSuccess('该用户的现有会话已撤销')
+  } catch { showError('撤销会话失败') }
+}
 
 const loadConsole = async () => {
   consoleLoading.value = true
@@ -173,6 +293,7 @@ const loadConsole = async () => {
     const res = await settingsApi.getConsole() as unknown as { success: boolean; username: string; lastLoginAt: string | null; controlListen: { host: string; port: number } }
     if (res?.success) {
       consoleInfo.value = { username: res.username, lastLoginAt: res.lastLoginAt, controlListen: res.controlListen }
+      await loadManagementUsers()
     }
   } catch {
     showError('加载控制台信息失败')
@@ -347,7 +468,7 @@ onMounted(() => {
       <div v-if="activeTab === 'certs'" class="p-5">
         <!-- 操作栏 -->
         <div class="flex items-center justify-between mb-4">
-          <span class="text-sm text-gray-400">共 {{ certs.length }} 个证书</span>
+          <span class="text-sm text-gray-400">共 {{ certTotal }} 个证书</span>
           <div class="flex items-center gap-2">
             <button @click="openAcmeDialog" class="btn btn-sm btn-success flex items-center gap-1.5">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -388,6 +509,7 @@ onMounted(() => {
         </div>
 
         <!-- 加载 -->
+        <ListToolbar v-model:page="certPage" v-model:search="certSearch" :total="certTotal" :busy="certsLoading" @refresh="loadCerts" />
         <div v-if="certsLoading" class="flex items-center justify-center py-12">
           <span class="w-6 h-6 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></span>
         </div>
@@ -475,8 +597,67 @@ onMounted(() => {
               </div>
             </div>
           </div>
+
+          <div v-if="can('users.manage')" class="border-t border-dark-border pt-6">
+            <h3 class="mb-3 text-sm font-medium text-gray-300">管理用户</h3>
+            <form class="flex gap-3 mb-3" @submit.prevent="userPage = 1; loadManagementUsers().catch(() => showError('读取用户失败'))">
+              <input v-model="userSearch" class="input" aria-label="搜索管理用户" placeholder="搜索用户名或角色" maxlength="200" />
+              <button class="btn btn-secondary">搜索</button>
+            </form>
+            <div class="mb-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_150px_auto]">
+              <input v-model="userForm.username" class="input" placeholder="用户名" />
+              <input v-model="userForm.password" class="input" type="password" placeholder="初始密码（至少 8 位）" />
+              <select v-model="userForm.role" class="input"><option v-for="role in managementRoles" :key="role.name" :value="role.name">{{ role.name }}</option></select>
+              <button class="btn btn-primary" :disabled="!userForm.username || userForm.password.length < 8" @click="createManagementUser">添加用户</button>
+            </div>
+            <div v-if="generatedPassword" class="mb-4 flex items-center justify-between border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+              <span>临时密码（仅显示一次）：<strong class="font-mono">{{ generatedPassword }}</strong></span>
+              <button class="text-amber-200 hover:text-white" @click="generatedPassword = ''">关闭</button>
+            </div>
+            <div class="overflow-x-auto border border-dark-border">
+              <table class="w-full text-sm">
+                <thead class="bg-dark-card"><tr class="text-left text-gray-400"><th class="p-3">用户</th><th class="p-3">角色</th><th class="p-3">状态</th><th class="p-3">最后登录</th><th class="p-3 text-right">操作</th></tr></thead>
+                <tbody>
+                  <tr v-for="user in managementUsers" :key="user.id" class="border-t border-dark-border">
+                    <td class="p-3 text-gray-200">{{ user.username }}</td>
+                    <td class="p-3"><select v-model="user.role" class="input py-1 text-xs" @change="changeManagementUserRole(user)"><option v-for="role in managementRoles" :key="role.name" :value="role.name">{{ role.name }}</option></select></td>
+                    <td class="p-3" :class="user.disabled ? 'text-red-400' : 'text-green-400'">{{ user.disabled ? '已禁用' : '正常' }}</td>
+                    <td class="p-3 text-xs text-gray-400">{{ user.lastLoginAt || '尚未登录' }}</td>
+                    <td class="p-3 text-right space-x-3"><button class="text-primary-400" @click="revokeManagementUserSessions(user)">撤销会话</button><button class="text-amber-400" @click="resetManagementUserPassword(user)">重置密码</button><button :class="user.disabled ? 'text-green-400' : 'text-red-400'" @click="toggleManagementUser(user)">{{ user.disabled ? '启用' : '禁用' }}</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <nav class="flex justify-end items-center gap-3 mt-3 text-sm" aria-label="管理用户分页">
+              <span class="text-gray-400">共 {{ userTotal }} 人 · 第 {{ userPage }} 页</span>
+              <button class="btn btn-secondary" :disabled="userPage <= 1" @click="userPage--; loadManagementUsers().catch(() => showError('读取用户失败'))">上一页</button>
+              <button class="btn btn-secondary" :disabled="userPage * 20 >= userTotal" @click="userPage++; loadManagementUsers().catch(() => showError('读取用户失败'))">下一页</button>
+            </nav>
+          </div>
         </div>
       </div>
+
+      <ManagementMfa v-if="activeTab === 'console'" />
+      <section v-if="activeTab === 'console' && can('users.manage')" class="border-t border-dark-border p-5">
+        <h3 class="mb-3 text-sm font-medium text-gray-300">业务角色</h3>
+        <form class="flex flex-wrap items-center gap-3 mb-4" @submit.prevent="saveManagementRole">
+          <input v-model="roleForm.name" aria-label="角色名称" class="input" placeholder="角色名称" required minlength="3" maxlength="48" />
+          <label v-for="(label, permission) in permissionLabels" :key="permission" class="flex gap-2 items-center text-sm text-gray-300">
+            <input type="checkbox" v-model="roleForm.permissions" :value="permission" />{{ label }}
+          </label>
+          <button type="submit" class="btn btn-primary" :disabled="roleBusy">保存角色</button>
+        </form>
+        <ListToolbar v-model:page="rolePage" v-model:search="roleSearch" :total="roleTotal" :busy="roleListLoading" @refresh="loadRoles" />
+        <div v-for="role in visibleRoles" :key="role.name" class="flex flex-wrap gap-3 items-center border-t border-dark-border py-3 text-sm">
+          <strong class="text-gray-200">{{ role.name }}</strong>
+          <span class="flex-1 text-gray-400">{{ role.permissions.map(p => permissionLabels[p] || p).join('、') }}</span>
+          <template v-if="!role.builtIn">
+            <button class="text-primary-400" @click="roleForm = { name: role.name, permissions: [...role.permissions] }">编辑</button>
+            <button class="text-red-400" @click="deleteManagementRole(role.name)">删除</button>
+          </template>
+          <span v-else class="text-gray-500">内置</span>
+        </div>
+      </section>
 
       <!-- ==================== Tab 3: 系统日志 ==================== -->
       <div v-if="activeTab === 'logs'" class="p-5">
@@ -508,7 +689,7 @@ onMounted(() => {
                   <td class="py-3 text-gray-200">{{ log.username }}</td>
                   <td class="py-3 text-gray-300">{{ log.action }}</td>
                   <td class="py-3 text-gray-400 font-mono text-xs">{{ log.ip || '-' }}</td>
-                  <td class="py-3 text-gray-400 text-xs">{{ log.timestamp }}</td>
+                  <td class="py-3 text-gray-400 text-xs">{{ new Date(log.timestamp).toLocaleString() }}</td>
                 </tr>
               </tbody>
             </table>
@@ -580,8 +761,8 @@ onMounted(() => {
               </thead>
               <tbody>
                 <tr v-for="entry in runtimeLogs" :key="entry.id" class="border-b border-dark-border/50 hover:bg-white/[0.02]">
-                  <td class="py-3 text-gray-200 font-mono text-xs whitespace-nowrap">{{ entry.startTime }}</td>
-                  <td class="py-3 text-gray-400 font-mono text-xs whitespace-nowrap">{{ entry.stopTime || '-' }}</td>
+                  <td class="py-3 text-gray-200 font-mono text-xs whitespace-nowrap">{{ new Date(entry.startTime).toLocaleString() }}</td>
+                  <td class="py-3 text-gray-400 font-mono text-xs whitespace-nowrap">{{ entry.stopTime ? new Date(entry.stopTime).toLocaleString() : '-' }}</td>
                   <td class="py-3">
                     <span :class="['px-2 py-0.5 rounded text-xs border', exitReasonBg(entry.exitReason)]">
                       {{ entry.exitReason || '运行中' }}

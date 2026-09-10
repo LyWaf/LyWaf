@@ -31,6 +31,15 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record AbConfigView(string Name, bool Enabled, string Mode, string CookieName, int CookieExpireDays,
+        Dictionary<string, int> Variants, Dictionary<string, string> VariantTargets, List<string> MatchPaths, List<string> ExcludePaths);
+    private sealed record AbConfigResponse(bool Success, string TestId, AbConfigView Config, DateTime Timestamp);
+    private sealed record AbSavedConfig(string Name, bool Enabled, string Mode, Dictionary<string, int> Variants, int TotalWeight);
+    private sealed record AbSavedResponse(bool Success, string Message, string TestId, AbSavedConfig Config, DateTime Timestamp);
+    private sealed record AbMutationResponse(bool Success, string Message, string TestId, DateTime Timestamp, bool? Enabled = null);
+    private sealed record AbStatsView(long TotalRequests, Dictionary<string, long> VariantHits, Dictionary<string, double> VariantPercentages,
+        Dictionary<string, int> ConfiguredWeights, DateTime StartTime, DateTime LastRequestTime);
+    private sealed record AbStatsResponse(bool Success, string TestId, AbStatsView Stats, DateTime Timestamp);
     private static void MapAbTestEndpoints(WebApplication app, int controlPort)
     {
         // =============== A/B 测试管理 API ===============
@@ -39,11 +48,7 @@ public static partial class ControlApi
         app.MapGet("/api/abtest/configs", (HttpContext ctx, IABTestService abTestService) =>
         {
             var configs = abTestService.GetAllConfigs();
-            return Results.Json(new
-            {
-                success = true,
-                count = configs.Count,
-                configs = configs.Select(c => new
+            var items = configs.Select(c => new
                 {
                     testId = c.Key,
                     name = c.Value.Name,
@@ -54,10 +59,11 @@ public static partial class ControlApi
                     variantTargets = c.Value.VariantTargets,
                     matchPaths = c.Value.MatchPaths,
                     excludePaths = c.Value.ExcludePaths
-                }),
-                timestamp = DateTime.Now
-            });
-        }).RequireHost($"*:{controlPort}");
+                });
+            return TypedResults.Ok(ManagementLists.From(items).Sort("testId", item => item.testId)
+                .Sort("name", item => item.name).Sort("mode", item => item.mode)
+                .Search(item => $"{item.testId} {item.name} {item.mode}").Read(ctx.Request.Query, "testId"));
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 获取单个 A/B 测试配置
         app.MapGet("/api/abtest/configs/{testId}", (HttpContext ctx, IABTestService abTestService, string testId) =>
@@ -86,14 +92,12 @@ public static partial class ControlApi
                 },
                 timestamp = DateTime.Now
             });
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<AbConfigResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 创建或更新 A/B 测试配置
-        app.MapPost("/api/abtest/configs", async (HttpContext ctx, IABTestService abTestService) =>
+        app.MapPost("/api/abtest/configs", (HttpContext ctx, IABTestService abTestService, CreateABTestRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<CreateABTestRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.TestId))
                 {
                     return Results.Json(new { success = false, message = "测试 ID 不能为空" }, statusCode: 400);
@@ -141,12 +145,7 @@ public static partial class ControlApi
                     },
                     timestamp = DateTime.Now
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"创建失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<AbSavedResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 删除 A/B 测试配置
         app.MapDelete("/api/abtest/configs/{testId}", (HttpContext ctx, IABTestService abTestService, string testId) =>
@@ -165,10 +164,10 @@ public static partial class ControlApi
             {
                 return Results.Json(new { success = false, message = "A/B 测试配置不存在" }, statusCode: 404);
             }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<AbMutationResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 启用/禁用 A/B 测试
-        app.MapPost("/api/abtest/configs/{testId}/toggle", async (HttpContext ctx, IABTestService abTestService, string testId) =>
+        app.MapPost("/api/abtest/configs/{testId}/toggle", (HttpContext ctx, IABTestService abTestService, string testId, ToggleABTestRequest request) =>
         {
             var config = abTestService.GetConfig(testId);
             if (config == null)
@@ -176,7 +175,7 @@ public static partial class ControlApi
                 return Results.Json(new { success = false, message = "A/B 测试配置不存在" }, statusCode: 404);
             }
 
-            var request = await ctx.Request.ReadFromJsonAsync<ToggleABTestRequest>();
+
             config.Enabled = request?.Enabled ?? !config.Enabled;
             abTestService.SetConfig(testId, config);
 
@@ -188,14 +187,14 @@ public static partial class ControlApi
                 enabled = config.Enabled,
                 timestamp = DateTime.Now
             });
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<AbMutationResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 获取 A/B 测试统计
         app.MapGet("/api/abtest/stats/{testId}", (HttpContext ctx, IABTestService abTestService, string testId) =>
         {
             var stats = abTestService.GetStats(testId);
             var config = abTestService.GetConfig(testId);
-            
+
             if (stats == null || config == null)
             {
                 return Results.Json(new { success = false, message = "A/B 测试配置不存在" }, statusCode: 404);
@@ -222,7 +221,7 @@ public static partial class ControlApi
                 },
                 timestamp = DateTime.Now
             });
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<AbStatsResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 重置 A/B 测试统计
         app.MapPost("/api/abtest/stats/{testId}/reset", (HttpContext ctx, IABTestService abTestService, string testId) =>
@@ -242,8 +241,7 @@ public static partial class ControlApi
                 testId = testId,
                 timestamp = DateTime.Now
             });
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<AbMutationResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }
-

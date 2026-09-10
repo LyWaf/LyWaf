@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { advancedCcApi, pluginApi, statisticApi } from '@/api'
+import ListToolbar from '@/components/common/ListToolbar.vue'
 import CcRuleEditor from '@/components/cc/CcRuleEditor.vue'
 import { useToast } from '@/composables/useToast'
 import type { AdvancedCcRule, CcRuleType } from '@/types'
@@ -138,6 +139,10 @@ const ruleTypeLabels: Record<CcRuleType, string> = {
 // 数据
 const loading = ref(false)
 const rules = ref<AdvancedCcRule[]>([])
+const page = ref(1)
+const total = ref(0)
+const search = ref('')
+let listRequest = 0
 
 // 规则类型样式
 const ruleTypeColors: Record<CcRuleType, string> = {
@@ -152,17 +157,18 @@ const editingRule = ref<AdvancedCcRule | null>(null)
 
 // 加载数据
 const loadData = async () => {
+  const request = ++listRequest
   loading.value = true
   try {
-    const response = await advancedCcApi.getRules()
-    if (response.success) {
-      rules.value = response.rules
+    const response = await advancedCcApi.list(page.value, search.value)
+    if (request === listRequest && response.success) {
+      rules.value = response.data
+      total.value = response.total
     }
   } catch (error) {
-    console.error('加载 CC 规则失败:', error)
-    showError('加载数据失败')
+    if (request === listRequest) showError('加载数据失败')
   } finally {
-    loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
 
@@ -320,6 +326,7 @@ onUnmounted(() => {
 
       <div class="space-y-3">
         <!-- 规则列表 -->
+        <ListToolbar v-model:page="page" v-model:search="search" :total="total" :busy="loading" @refresh="loadData" />
         <div
           v-for="rule in rules"
           :key="rule.id"

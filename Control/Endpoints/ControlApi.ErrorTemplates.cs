@@ -36,6 +36,23 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record ErrorTemplateSavedResponse(bool Success, string Message);
+    private sealed record ErrorTemplateRequest([property: System.ComponentModel.DataAnnotations.Required,
+        System.ComponentModel.DataAnnotations.StringLength(1024 * 1024)] string Content);
+
+    private static async Task<string> ReadManagedTemplate(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
+        if (stream.Length > 4 * 1024 * 1024) throw new ArgumentException("模板文件超过 4 MiB", "content");
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        return await reader.ReadToEndAsync(cancellationToken);
+    }
+
+    private static void ValidateTemplateCode(int statusCode)
+    {
+        if (statusCode is < 400 or > 599) throw new ArgumentException("错误状态码必须在 400 到 599 之间", nameof(statusCode));
+    }
+    private sealed record ErrorTemplateListItem(int StatusCode, bool HasOriginal, bool HasEdit);
     private static void MapErrorTemplateEndpoints(WebApplication app, int controlPort)
     {
         // =============== 错误模板管理 ===============
@@ -46,35 +63,24 @@ public static partial class ControlApi
         // 列出所有错误模板
         app.MapGet("/api/error-templates", (HttpContext ctx) =>
         {
-            try
-            {
                 var templateService = ctx.RequestServices.GetRequiredService<LyWaf.Services.ErrorTemplate.IErrorTemplateService>();
                 var service = templateService as LyWaf.Services.ErrorTemplate.ErrorTemplateService;
-                var list = new List<object>();
+                var list = new List<ErrorTemplateListItem>();
 
                 foreach (var code in errorTemplateCodes)
                 {
                     var originalPath = service?.GetOriginalFilePath(code) ?? "";
                     var editPath = service?.GetEditFilePath(code) ?? "";
-                    list.Add(new
-                    {
-                        statusCode = code,
-                        hasOriginal = File.Exists(originalPath),
-                        hasEdit = File.Exists(editPath)
-                    });
+                    list.Add(new(code, File.Exists(originalPath), File.Exists(editPath)));
                 }
-                return Results.Json(new { success = true, templates = list });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"获取模板列表失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+                return Results.Ok(ManagementLists.From(list).Sort("statusCode", item => item.StatusCode)
+                    .Search(item => item.StatusCode.ToString(System.Globalization.CultureInfo.InvariantCulture)).Read(ctx.Request.Query, "statusCode"));
+        }).Produces<ManagementPage<ErrorTemplateListItem>>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 获取指定状态码的模板内容
         app.MapGet("/api/error-templates/{statusCode:int}", async (int statusCode, HttpContext ctx) =>
         {
-            try
+            ValidateTemplateCode(statusCode);
             {
                 var templateService = ctx.RequestServices.GetRequiredService<LyWaf.Services.ErrorTemplate.IErrorTemplateService>();
                 var service = templateService as LyWaf.Services.ErrorTemplate.ErrorTemplateService;
@@ -86,11 +92,11 @@ public static partial class ControlApi
                 string? originalContent = null;
 
                 if (File.Exists(editPath))
-                    editContent = await File.ReadAllTextAsync(editPath, Encoding.UTF8);
+                    editContent = await ReadManagedTemplate(editPath, ctx.RequestAborted);
                 if (File.Exists(originalPath))
-                    originalContent = await File.ReadAllTextAsync(originalPath, Encoding.UTF8);
+                    originalContent = await ReadManagedTemplate(originalPath, ctx.RequestAborted);
 
-                return Results.Json(new
+                return TypedResults.Ok(new
                 {
                     success = true,
                     statusCode,
@@ -102,19 +108,15 @@ public static partial class ControlApi
                     activeContent = editContent ?? originalContent ?? ""
                 });
             }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"获取模板失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 保存编辑版模板
-        app.MapPost("/api/error-templates/{statusCode:int}", async (int statusCode, HttpContext ctx) =>
+        app.MapPost("/api/error-templates/{statusCode:int}", async (int statusCode, HttpContext ctx, ErrorTemplateRequest body) =>
         {
-            try
+            ValidateTemplateCode(statusCode);
             {
-                var body = await ctx.Request.ReadFromJsonAsync<Dictionary<string, string>>();
-                var content = body?.GetValueOrDefault("content");
+
+                var content = body.Content;
                 if (string.IsNullOrEmpty(content))
                     return Results.Json(new { success = false, message = "模板内容不能为空" }, statusCode: 400);
 
@@ -126,23 +128,25 @@ public static partial class ControlApi
 
                 // 确保 templates 目录存在
                 Directory.CreateDirectory(Path.GetDirectoryName(editPath)!);
-                await File.WriteAllTextAsync(editPath, content, Encoding.UTF8);
+                var tempPath = editPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    await File.WriteAllTextAsync(tempPath, content, Encoding.UTF8, ctx.RequestAborted);
+                    File.Move(tempPath, editPath, true);
+                }
+                finally { if (File.Exists(tempPath)) File.Delete(tempPath); }
 
                 // 清除缓存，下次请求使用新内容
                 service?.ClearCache();
 
                 return Results.Json(new { success = true, message = "模板已保存" });
             }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"保存模板失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<ErrorTemplateSavedResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 删除编辑版模板（恢复为原始版本）
         app.MapPost("/api/error-templates/{statusCode:int}/revert", (int statusCode, HttpContext ctx) =>
         {
-            try
+            ValidateTemplateCode(statusCode);
             {
                 var templateService = ctx.RequestServices.GetRequiredService<LyWaf.Services.ErrorTemplate.IErrorTemplateService>();
                 var service = templateService as LyWaf.Services.ErrorTemplate.ErrorTemplateService;
@@ -158,13 +162,8 @@ public static partial class ControlApi
                 }
                 return Results.Json(new { success = true, message = "没有编辑版本需要恢复" });
             }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"恢复模板失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<ErrorTemplateSavedResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // WAF 自定义规则管理
     }
 }
-

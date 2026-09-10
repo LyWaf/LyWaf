@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import ListToolbar from '@/components/common/ListToolbar.vue'
 import { lbApi } from '@/api'
 import { useToast } from '@/composables/useToast'
 import type { LbCluster, LbDestination, LbPolicy, OutlierDestination } from '@/types'
@@ -17,11 +18,18 @@ const getErrorMessage = (error: unknown, fallback: string): string => {
 
 // 数据状态
 const loading = ref(false)
-const clusters = ref<LbCluster[]>([])
+const clusters = ref<Array<Omit<LbCluster, 'destinations'> & { hasPatch: boolean }>>([])
 const policies = ref<LbPolicy[]>([])
 const outliers = ref<OutlierDestination[]>([])
 const selectedClusterId = ref('')
 const selectedDestIds = ref<Set<string>>(new Set())
+const page = ref(1)
+const search = ref('')
+const total = ref(0)
+const destinations = ref<Array<LbDestination & { outlier?: OutlierDestination }>>([])
+let destinationRequest = 0
+let configRequest = 0
+onBeforeUnmount(() => { destinationRequest++; configRequest++ })
 
 // 对话框状态
 const showDialog = ref(false)
@@ -48,11 +56,6 @@ const currentCluster = computed(() =>
   clusters.value.find(c => c.id === selectedClusterId.value)
 )
 
-// 计算当前集群的目标列表
-const destinations = computed(() =>
-  currentCluster.value?.destinations ?? []
-)
-
 const getOutlier = (destinationId: string) => outliers.value.find(
   item => item.clusterId === selectedClusterId.value && item.destinationId === destinationId
 )
@@ -65,7 +68,7 @@ const outlierReason = (reason?: string) => ({
 
 // 当前集群是否存在补丁数据
 const hasPatch = computed(() =>
-  destinations.value.some(d => d.source === 'patch')
+  currentCluster.value?.hasPatch ?? false
 )
 
 // 是否全选
@@ -73,33 +76,59 @@ const allSelected = computed(() =>
   destinations.value.length > 0 && selectedDestIds.value.size === destinations.value.length
 )
 
-// 加载数据
-const loadData = async () => {
+const loadDestinations = async () => {
+  const request = ++destinationRequest
+  selectedDestIds.value.clear()
+  if (!selectedClusterId.value) { destinations.value = []; total.value = 0; return }
   loading.value = true
   try {
-    const [clustersRes, policiesRes, outliersRes] = await Promise.all([
-      lbApi.getClusters(),
-      lbApi.getPolicies(),
-      lbApi.getOutliers(),
-    ])
-    clusters.value = clustersRes.clusters
-    policies.value = policiesRes.policies
-    outliers.value = outliersRes.destinations
-    if (!selectedClusterId.value && clusters.value.length > 0) {
-      selectedClusterId.value = clusters.value[0].id
+    const res = await lbApi.destinations(selectedClusterId.value, page.value, search.value)
+    if (request !== destinationRequest) return
+    destinations.value = res.data
+    total.value = res.total
+    outliers.value = res.data.flatMap(item => item.outlier ? [item.outlier] : [])
+    if (!res.data.length && page.value > 1) {
+      page.value = Math.max(1, Math.ceil(res.total / 20))
+      await loadDestinations()
     }
-    selectedDestIds.value.clear()
-  } catch (error) {
-    showError('加载集群配置失败')
+  } catch {
+    if (request === destinationRequest) showError('加载目标服务器失败')
   } finally {
-    loading.value = false
+    if (request === destinationRequest) loading.value = false
+  }
+}
+
+// 加载数据
+const loadData = async () => {
+  const request = ++configRequest
+  loading.value = true
+  try {
+    const [clustersRes, policiesRes] = await Promise.all([
+      lbApi.getClusterOptions(),
+      lbApi.getPolicies(),
+    ])
+    if (request !== configRequest) return
+    clusters.value = clustersRes
+    policies.value = policiesRes.policies
+    if (!clusters.value.some(item => item.id === selectedClusterId.value)) {
+      selectedClusterId.value = clusters.value[0]?.id || ''
+      page.value = 1
+    }
+    await loadDestinations()
+  } catch (error) {
+    if (request === configRequest) showError('加载集群配置失败')
+  } finally {
+    if (request === configRequest) loading.value = false
   }
 }
 
 // 切换集群
 const switchCluster = (clusterId: string) => {
   selectedClusterId.value = clusterId
-  selectedDestIds.value.clear()
+  page.value = 1
+  search.value = ''
+  destinations.value = []
+  loadDestinations()
 }
 
 // 更新策略
@@ -227,7 +256,8 @@ const batchRemove = async () => {
       Array.from(selectedDestIds.value)
     )
     if (res.success) {
-      showSuccess('批量删除成功')
+      if (res.allSucceeded) showSuccess(`已删除 ${res.succeeded} 个目标`)
+      else showError(`已删除 ${res.succeeded} 个，失败 ${res.failed} 个：${res.results.filter(item => !item.success).map(item => `${item.id}: ${item.message}`).join('；')}`)
       await loadData()
     } else {
       showError(res.message || '批量删除失败')
@@ -299,12 +329,12 @@ onMounted(loadData)
         </div>
 
         <!-- 策略选择 -->
-        <div class="flex items-center gap-2" v-if="currentCluster">
-          <span class="text-sm text-gray-400">负载均衡策略:</span>
+        <div class="flex flex-wrap sm:flex-nowrap items-center gap-2 min-w-0 max-w-full" v-if="currentCluster">
+          <span class="text-sm text-gray-400 shrink-0">负载均衡策略:</span>
           <select
             :value="currentCluster.loadBalancingPolicy"
             @change="updatePolicy(($event.target as HTMLSelectElement).value)"
-            class="bg-dark-card border border-dark-border rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-primary-500"
+            class="bg-dark-card border border-dark-border rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-primary-500 min-w-0 max-w-full"
           >
             <option v-for="p in policies" :key="p.name" :value="p.name">
               {{ p.label }} ({{ p.name }})
@@ -316,12 +346,12 @@ onMounted(loadData)
 
     <!-- 目标服务器列表 -->
     <div class="card" v-if="currentCluster">
-      <div class="flex items-center justify-between mb-4">
+      <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
         <h2 class="text-lg font-medium text-gray-100">
           目标服务器
-          <span class="text-sm text-gray-500 ml-2">({{ destinations.length }})</span>
+          <span class="text-sm text-gray-500 ml-2">({{ total }})</span>
         </h2>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           <button
             @click="removeClusterPatch"
             :disabled="!hasPatch"
@@ -351,8 +381,9 @@ onMounted(loadData)
       </div>
 
       <!-- 表格 -->
+      <ListToolbar v-model:page="page" v-model:search="search" :total="total" :busy="loading" @refresh="loadDestinations" />
       <div class="overflow-x-auto">
-        <table class="w-full text-sm">
+        <table class="w-full min-w-[640px] text-sm">
           <thead>
             <tr class="border-b border-dark-border text-gray-400">
               <th class="py-3 px-3 text-left w-10">

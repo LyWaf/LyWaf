@@ -42,8 +42,6 @@ public static partial class ControlApi
 
         app.MapPost("/api/patch/clear", async (HttpContext ctx, IConfiguration config) =>
         {
-            try
-            {
                 var patchPath = LbPatchConfig.GetPatchFilePath();
                 var versionService = ctx.RequestServices.GetRequiredService<ConfigVersionService>();
                 var version = await versionService.WritePatchAsync(patchPath, "{}", "clear-all-patches", ctx.RequestAborted);
@@ -54,13 +52,8 @@ public static partial class ControlApi
                     await ApplyVersionReloadOrRollback(version, configRoot, lifecycle.Capture(configRoot));
                 }
 
-                return Results.Json(new { success = true, message = "所有补丁已清除" });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"清除补丁失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+                return TypedResults.Ok(new { success = true, message = "所有补丁已清除" });
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }

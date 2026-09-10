@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { requestStepUp } from '@/composables/useStepUp'
 import type {
   ApiResponse,
   TrafficStats,
@@ -19,6 +20,9 @@ const http = axios.create({
 
 // 请求拦截器 - 注入 JWT Token
 http.interceptors.request.use((config) => {
+  if (config.method && ['post', 'put', 'patch', 'delete'].includes(config.method.toLowerCase()) && !config.headers['Idempotency-Key']) {
+    config.headers['Idempotency-Key'] = Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, '0')).join('')
+  }
   const token = localStorage.getItem('lywaf_token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
@@ -29,7 +33,13 @@ http.interceptors.request.use((config) => {
 // 响应拦截器 - 直接返回 data，401 自动跳转登录
 http.interceptors.response.use(
   (response) => response.data,
-  (error) => {
+  async (error) => {
+    if (error.response?.status === 428 && error.response?.data?.code === 'step_up_required' && !error.config?._stepUpRetried) {
+      const token = localStorage.getItem('lywaf_token')
+      const proof = await requestStepUp()
+      if (token !== localStorage.getItem('lywaf_token')) return Promise.reject(new Error('登录状态已变化，请重新操作'))
+      return http.request({ ...error.config, _stepUpRetried: true, headers: { ...error.config.headers, 'X-LyWaf-Step-Up': proof } } as any)
+    }
     if (error.response?.status === 401) {
       localStorage.removeItem('lywaf_token')
       localStorage.removeItem('lywaf_username')
@@ -38,11 +48,9 @@ http.interceptors.response.use(
       }
       return Promise.reject(error)
     }
-    // 如果服务端返回了 JSON body（如 400），直接返回 data 让业务层处理
-    if (error.response?.data) {
-      return error.response.data
-    }
-    console.error('API Error:', error)
+    // Preserve the rejected HTTP status; resolving an error body can report failed writes as successful.
+    const message = error.response?.data?.error?.message || error.response?.data?.message || error.response?.data?.errorMessage
+    if (typeof message === 'string') error.message = message
     return Promise.reject(error)
   }
 )
@@ -56,6 +64,71 @@ type UnwrappedAxios = {
 }
 
 const api = http as unknown as UnwrappedAxios
+
+interface ManagementPage<T> { success: boolean; data: T[]; total: number; page: number; pageSize: number }
+
+// Configuration selectors require the complete set; normal tables should request one page.
+async function getAllManagementPages<T>(url: string): Promise<T[]> {
+  const items: T[] = []
+  for (let page = 1; page <= 100; page++) {
+    const result = await api.get<ManagementPage<T>>(url, { params: { page, pageSize: 100 } })
+    if (!result.success) throw new Error('读取列表失败')
+    items.push(...result.data)
+    if (items.length >= result.total) return items
+    if (!result.data.length) throw new Error('列表发生变化，请刷新')
+  }
+  throw new Error('列表超过加载上限')
+}
+
+export interface ManagementJob {
+  id: string; kind: string; operator: string; state: number; createdAt: string;
+  startedAt?: string; finishedAt?: string; logs: string[]; error?: string;
+  cancellationRequested: boolean; canRetry: boolean; retryOf?: string;
+}
+export const managementTaskApi = {
+  detail: (id: string) => api.get<{ success: boolean; data: ManagementJob }>(`/tasks/${encodeURIComponent(id)}`),
+  health: () => api.get<{ success: boolean; data: any }>('/system/health'),
+  list: (page = 1, state = '') => api.get<{ success: boolean; data: ManagementJob[]; total: number }>('/tasks', { params: { page, pageSize: 20, state: state || undefined } }),
+  action: (id: string, action: 'cancel' | 'retry') => api.post<{ success: boolean; message?: string }>(`/tasks/${id}/${action}`),
+  downloadRules: (url: string) => api.post<{ success: boolean; message?: string }>('/rule-packages/download-task', { url }),
+  certificate: (domain: string, email: string) => api.post<{ success: boolean; message?: string }>('/tasks/certificate', { domain, email }),
+  stageUpgrade: (packageName: string, version: string, sha256: string) => api.post<{ success: boolean; message?: string }>('/tasks/upgrade-stage', { packageName, version, sha256 }),
+}
+
+export const siteApi = {
+  list: (page = 1, search = '') => api.get<any>('/sites', { params: { page, pageSize: 20, search } }),
+  save: (site: any, version: string) => api.post<any>('/sites', site, { headers: { 'If-Match': version } }),
+  batch: (ids: string[], action: string, ruleIds?: string[] | null) => api.post<any>('/sites/batch', { ids, action, ruleIds }),
+  export: () => api.get<any>('/sites/export'),
+  import: (document: object) => api.post<any>('/sites/import', document),
+}
+
+export const backupApi = {
+  list: (page = 1, search = '') => api.get<any>('/backups', { params: { page, pageSize: 20, search } }),
+  create: (scope = 'configuration') => api.post<any>('/backups', { scope }),
+  cancelPending: () => api.delete<any>('/backups/statistics-pending'),
+  cancelInstancePending: () => api.delete<any>('/backups/instance-pending'),
+  restore: (id: string, action: 'preflight' | 'restore') => api.post<any>(`/backups/${id}/${action}`, {}),
+  remove: (id: string) => api.delete<any>(`/backups/${id}`),
+  download: (id: string) => api.get<Blob>(`/backups/${id}/download`, { responseType: 'blob' }),
+  upload: (file: File, scope = 'configuration') => api.post<any>('/backups/upload', file, { params: { scope }, headers: { 'Content-Type': 'application/octet-stream' } }),
+}
+
+export const securityIncidentApi = {
+  list: (params: object) => api.get<any>('/security-incidents', { params }),
+  detail: (id: string) => api.get<any>(`/security-incidents/${id}`),
+  requests: (id: string, cursor?: string | null) => api.get<any>(`/security-incidents/${id}/requests`, { params: { cursor: cursor || undefined, pageSize: 20 } }),
+  disposition: (id: string, state: number, note: string, expectedVersion: number) => api.put<any>(`/security-incidents/${id}/disposition`, { state, note, expectedVersion }),
+  action: (id: string, action: string) => api.post<any>(`/security-incidents/${id}/${action}`),
+}
+
+export const notificationApi = {
+  channels: (page = 1, search = '') => api.get<ManagementPage<any>>('/notifications/channels', { params: { page, pageSize: 20, search } }),
+  deliveries: (page = 1, search = '') => api.get<ManagementPage<any>>('/notifications/deliveries', { params: { page, pageSize: 20, search } }),
+  save: (channel: any) => api.post<any>('/notifications/channels', channel),
+  remove: (id: string) => api.delete<any>(`/notifications/channels/${encodeURIComponent(id)}`),
+  retry: (id: string) => api.post<any>(`/notifications/deliveries/${encodeURIComponent(id)}/retry`),
+}
 
 // 插件前端只能通过统一代理访问自身后端，不在核心 API 中声明业务路由。
 export const pluginProxyApi = (pluginId: string) => {
@@ -114,22 +187,15 @@ export interface IpGroup {
   updatedAt: string
 }
 
-interface IpLogReadResponse {
-  success: boolean
-  ip: string
-  entries: IpLogEntry[]
-  total: number
-  offset: number
-  limit: number
-  fileSize: number
-  timestamp: string
-}
-
 // ==================== IP 管理 API ====================
 
 export const ipApi = {
-  getGroups: () =>
-    api.get<{ success: boolean; groups: IpGroup[] }>('/ip-groups'),
+  listAccess: (list: 'whitelist' | 'blacklist', page = 1, search = '') =>
+    api.get<ManagementPage<{ id: string; name: string; ip: string | null; group: IpGroup | null }>>(`/ac/${list}/entries`, { params: { page, pageSize: 20, search } }),
+  listGroups: (page = 1, pageSize = 20, search = '') =>
+    api.get<{ success: boolean; data: IpGroup[]; total: number; page: number; pageSize: number }>('/ip-groups', { params: { page, pageSize, search } }),
+
+  getGroups: async () => ({ success: true, groups: await getAllManagementPages<IpGroup>('/ip-groups') }),
 
   createGroup: (data: { name: string; description: string; entries: string[] }) =>
     api.post<{ success: boolean; group?: IpGroup; message?: string }>('/ip-groups', data),
@@ -148,7 +214,7 @@ export const ipApi = {
 
   // 白名单
   getWhitelist: () =>
-    api.get<{ success: boolean; whitelist: string[] }>('/ac/whitelist'),
+    getAllManagementPages<string>('/ac/whitelist').then(whitelist => ({ success: true, whitelist })),
 
   addWhitelist: (ipOrCidr: string) =>
     api.post<ApiResponse>('/ac/whitelist/add', { ipOrCidr }),
@@ -158,7 +224,7 @@ export const ipApi = {
 
   // 黑名单
   getBlacklist: () =>
-    api.get<{ success: boolean; blacklist: string[] }>('/ac/blacklist'),
+    getAllManagementPages<string>('/ac/blacklist').then(blacklist => ({ success: true, blacklist })),
 
   addBlacklist: (ipOrCidr: string) =>
     api.post<ApiResponse>('/ac/blacklist/add', { ipOrCidr }),
@@ -199,8 +265,12 @@ export const ipApi = {
   removeIpLog: (ip: string) =>
     api.post<ApiResponse>('/ip-log/remove', { ip }),
 
-  readIpLog: (ip: string, offset = 0, limit = 50) =>
-    api.get<IpLogReadResponse>(`/ip-log/read/${encodeURIComponent(ip)}`, { params: { offset, limit } }),
+  readIpLog: async (ip: string, offset = 0, limit = 50) => {
+    const response = await api.get<ManagementPage<IpLogEntry> & { fileSize: number }>(`/ip-log/read/${encodeURIComponent(ip)}`, {
+      params: { page: Math.floor(offset / limit) + 1, pageSize: limit }
+    })
+    return { ...response, entries: response.data, ip, offset, limit }
+  },
 
   deleteIpLogFile: (ip: string) =>
     api.post<ApiResponse>('/ip-log/delete-file', { ip }),
@@ -301,12 +371,17 @@ export interface CreateAdvancedCcRuleRequest {
 
 export const advancedCcApi = {
   // 获取所有高级 CC 规则
-  getRules: () =>
-    api.get<AdvancedCcRulesResponse>('/cc/advanced'),
+  getRules: async (): Promise<AdvancedCcRulesResponse> => {
+    const rules = await getAllManagementPages<AdvancedCcRule>('/cc/advanced')
+    return { success: true, count: rules.length, rules }
+  },
+  list: (page = 1, search = '') => api.get<ManagementPage<AdvancedCcRule>>('/cc/advanced', { params: { page, pageSize: 20, search } }),
     
   // 按类型获取规则
-  getRulesByType: (type: string) =>
-    api.get<AdvancedCcRulesResponse>(`/cc/advanced/type/${type}`),
+  getRulesByType: async (type: string): Promise<AdvancedCcRulesResponse> => {
+    const rules = await getAllManagementPages<AdvancedCcRule>(`/cc/advanced/type/${encodeURIComponent(type)}`)
+    return { success: true, count: rules.length, rules }
+  },
     
   // 获取单个规则
   getRule: (ruleId: string) =>
@@ -462,6 +537,7 @@ export const geoTrafficApi = {
 // 后端返回的原始格式
 interface TimingRawResponse {
   success: boolean
+  total: number
   data: Array<{
     path: string
     method: string
@@ -496,12 +572,13 @@ interface TimingRawResponse {
 export interface TimingListResponse {
   summary: ApiTimingSummary
   items: ApiTimingStat[]
-  backends: Record<string, ApiTimingStat[]>
+  total: number
+  backends: TimingRawResponse['backendStats']
 }
 
 export const timingApi = {
-  getList: async (): Promise<TimingListResponse> => {
-    const raw = await api.get<TimingRawResponse>('/timing/list')
+  getList: async (params: Record<string, unknown> = {}): Promise<TimingListResponse> => {
+    const raw = await api.get<TimingRawResponse>('/timing/list', { params: { page: 1, pageSize: 20, ...params } })
     
     // 转换数据格式
     const items: ApiTimingStat[] = (raw.data || []).map(item => ({
@@ -522,21 +599,11 @@ export const timingApi = {
       errorRate: item.errorRate,
     }))
     
-    // 按后端分组
-    const backends: Record<string, ApiTimingStat[]> = {}
-    for (const item of items) {
-      if (item.backend) {
-        if (!backends[item.backend]) {
-          backends[item.backend] = []
-        }
-        backends[item.backend].push(item)
-      }
-    }
-    
     return {
       summary: raw.summary,
       items,
-      backends,
+      total: raw.total,
+      backends: raw.backendStats,
     }
   },
     
@@ -652,19 +719,20 @@ export const configFileApi = {
     api.get<ConfigFileResponse>('/config/file'),
 
   saveFile: (content: string, reload: boolean = false) =>
-    api.post<ApiResponse & { portsChanged?: boolean; restartRequired?: boolean }>('/config/file', { content, reload }),
+    api.post<ApiResponse & { data?: { id: string }; portsChanged?: boolean; restartRequired?: boolean }>('/config/file', { content, reload }),
 
   convert: (content: string) =>
     api.post<ConvertResponse>('/config/convert', { content }),
 
-  getHistory: () =>
-    api.get<{ success: boolean; versions: ConfigVersionInfo[] }>('/config/history'),
+  getHistory: (page = 1, search = '') =>
+    api.get<ManagementPage<ConfigVersionInfo>>('/config/history', { params: { page, pageSize: 20, search } }),
+  getAllHistory: () => getAllManagementPages<ConfigVersionInfo>('/config/history'),
 
   getVersionDiff: (id: string) =>
     api.get<{ success: boolean; diff: ConfigVersionDiff }>(`/config/history/${encodeURIComponent(id)}/diff`),
 
   rollback: (id: string) =>
-    api.post<ApiResponse & { versionId: string }>(`/config/history/${encodeURIComponent(id)}/rollback`),
+    api.post<ApiResponse & { data: { id: string } }>(`/config/history/${encodeURIComponent(id)}/rollback`),
 }
 
 export interface UpgradeReleaseInfo {
@@ -684,11 +752,12 @@ export interface UpgradePointers {
 }
 
 export const upgradeApi = {
-  list: () => api.get<{ success: boolean; releases: UpgradeReleaseInfo[]; pointers: UpgradePointers }>('/upgrade/releases'),
+  list: (page = 1, search = '') => api.get<ManagementPage<UpgradeReleaseInfo>>('/upgrade/releases', { params: { page, pageSize: 20, search } }),
+  pointers: () => api.get<UpgradePointers>('/upgrade/pointers'),
   stage: (packageName: string, version: string, sha256: string) =>
-    api.post<{ success: boolean; message: string; release: UpgradeReleaseInfo }>('/upgrade/stage', { packageName, version, sha256 }),
-  activate: (version: string) => api.post<ApiResponse>('/upgrade/activate', { version }),
-  rollback: () => api.post<ApiResponse>('/upgrade/rollback'),
+    api.post<{ success: boolean; data: { id: string } }>('/upgrade/stage', { packageName, version, sha256 }),
+  activate: (version: string) => api.post<{ success: boolean; data: { id: string } }>('/upgrade/activate', { version }),
+  rollback: () => api.post<{ success: boolean; data: { id: string } }>('/upgrade/rollback'),
 }
 
 // ==================== 参数配置 API ====================
@@ -700,8 +769,8 @@ export const paramApi = {
   update: (data: { isFirstServer?: boolean }) =>
     api.post<{ success: boolean; isFirstServer: boolean; message: string }>('/param', data),
 
-  getEnv: () =>
-    api.get<{ success: boolean; items: Array<{ key: string; value: string }>; total: number }>('/param/env'),
+  getEnv: (page = 1, search = '') =>
+    api.get<ManagementPage<{ key: string; value: string }>>('/param/env', { params: { page, pageSize: 20, search } }),
 }
 
 // ==================== 补丁 API ====================
@@ -732,7 +801,7 @@ export interface ErrorTemplateDetail {
 
 export const errorTemplateApi = {
   list: () =>
-    api.get<{ success: boolean; templates: ErrorTemplateItem[] }>('/error-templates'),
+    getAllManagementPages<ErrorTemplateItem>('/error-templates').then(templates => ({ success: true, templates })),
 
   get: (statusCode: number) =>
     api.get<ErrorTemplateDetail>(`/error-templates/${statusCode}`),
@@ -747,7 +816,7 @@ export const errorTemplateApi = {
 // ==================== WAF 自定义规则 API ====================
 
 export const wafRuleApi = {
-  list: () => api.get('/waf-rules'),
+  list: (params: Record<string, unknown> = {}) => api.get('/waf-rules', { params }),
   get: (id: string) => api.get(`/waf-rules/${id}`),
   create: (rule: Record<string, unknown>) => api.post('/waf-rules', rule),
   update: (id: string, rule: Record<string, unknown>) => api.put(`/waf-rules/${id}`, rule),
@@ -774,46 +843,35 @@ export const listenApi = {
 
 export const serviceApi = {
   reload: () =>
-    api.get<ApiResponse & { portsChanged?: boolean }>('/reload'),
+    api.post<ApiResponse & { portsChanged?: boolean }>('/reload'),
 
   restart: () =>
-    api.get<ApiResponse>('/restart'),
+    api.post<ApiResponse>('/restart'),
 
   stop: () =>
-    api.get<ApiResponse>('/stop'),
+    api.post<ApiResponse>('/stop'),
 }
 
 // ==================== 集群配置 API ====================
 
-import type { LbCluster, LbPolicy, OutlierDestination } from '@/types'
+import type { LbCluster, LbDestination, LbPolicy, OutlierDestination } from '@/types'
 import type { MultiNodeDashboard, ConfigurationDeployment } from '@/types'
-
-interface LbClustersResponse {
-  success: boolean
-  clusters: LbCluster[]
-  timestamp: string
-}
 
 interface LbPoliciesResponse {
   success: boolean
   policies: LbPolicy[]
 }
 
-interface OutlierResponse {
-  success: boolean
-  destinations: OutlierDestination[]
-  timestamp: string
-}
-
 export const lbApi = {
-  getClusters: () =>
-    api.get<LbClustersResponse>('/lb/clusters'),
+  getClusterOptions: () => getAllManagementPages<Omit<LbCluster, 'destinations'> & { hasPatch: boolean }>('/lb/cluster-options'),
+  destinations: (clusterId: string, page = 1, search = '') => api.get<ManagementPage<LbDestination & { outlier?: OutlierDestination }>>(
+    `/lb/clusters/${encodeURIComponent(clusterId)}/destinations`, { params: { page, pageSize: 20, search } }),
+  getClusters: async () => ({ success: true, clusters: await getAllManagementPages<LbCluster>('/lb/clusters') }),
 
   getPolicies: () =>
     api.get<LbPoliciesResponse>('/lb/policies'),
 
-  getOutliers: () =>
-    api.get<OutlierResponse>('/lb/outliers'),
+  getOutliers: async () => ({ success: true, destinations: await getAllManagementPages<OutlierDestination>('/lb/outliers') }),
 
   updatePolicy: (clusterId: string, policy: string) =>
     api.post<ApiResponse>('/lb/policy/update', { clusterId, policy }),
@@ -836,7 +894,7 @@ export const lbApi = {
     api.post<ApiResponse>('/lb/destinations/remove', { clusterId, destinationId }),
 
   batchRemoveDestinations: (clusterId: string, destinationIds: string[]) =>
-    api.post<ApiResponse>('/lb/destinations/batch-remove', { clusterId, destinationIds }),
+    api.post<ApiResponse & { allSucceeded: boolean; succeeded: number; failed: number; results: Array<{ id: string; success: boolean; message?: string }> }>('/lb/destinations/batch-remove', { clusterId, destinationIds }),
 
   removeClusterPatch: (clusterId: string) =>
     api.post<ApiResponse>('/lb/patch/remove', { clusterId }),
@@ -849,12 +907,11 @@ import type { RouteConfig } from '@/types'
 interface RoutesResponse {
   success: boolean
   routes: RouteConfig[]
-  timestamp: string
 }
 
 export const routeApi = {
-  getRoutes: () =>
-    api.get<RoutesResponse>('/routes'),
+  getRoutes: async (): Promise<RoutesResponse> => ({ success: true, routes: await getAllManagementPages<RouteConfig>('/routes') }),
+  list: (page = 1, search = '') => api.get<ManagementPage<RouteConfig>>('/routes', { params: { page, pageSize: 20, search } }),
 
   addRoute: (data: {
     routeId: string
@@ -892,12 +949,11 @@ import type { FileServerItem } from '@/types'
 interface FileServerResponse {
   success: boolean
   items: FileServerItem[]
-  timestamp: string
 }
 
 export const fileServerApi = {
-  getItems: () =>
-    api.get<FileServerResponse>('/fileserver'),
+  getItems: async (): Promise<FileServerResponse> => ({ success: true, items: await getAllManagementPages<FileServerItem>('/fileserver') }),
+  list: (page = 1, search = '') => api.get<ManagementPage<FileServerItem>>('/fileserver', { params: { page, pageSize: 20, search } }),
 
   addItem: (data: {
     itemId: string
@@ -935,12 +991,11 @@ import type { SimpleResItem } from '@/types'
 interface SimpleResResponse {
   success: boolean
   items: SimpleResItem[]
-  timestamp: string
 }
 
 export const simpleResApi = {
-  getItems: () =>
-    api.get<SimpleResResponse>('/simpleres'),
+  getItems: async (): Promise<SimpleResResponse> => ({ success: true, items: await getAllManagementPages<SimpleResItem>('/simpleres') }),
+  list: (page = 1, search = '') => api.get<ManagementPage<SimpleResItem>>('/simpleres', { params: { page, pageSize: 20, search } }),
 
   addItem: (data: {
     itemId: string
@@ -973,6 +1028,7 @@ export const simpleResApi = {
 
 export interface DashboardResponse {
   success: boolean
+  geoTraffic: GeoTrafficStats
   system: {
     uptime: string
     memory: number
@@ -1083,8 +1139,8 @@ export interface PluginConfigResponse {
 }
 
 export const pluginApi = {
-  getPlugins: () =>
-    api.get<PluginsResponse>('/plugins'),
+  list: (page = 1, search = '') => api.get<ManagementPage<PluginItem>>('/plugins', { params: { page, pageSize: 20, search } }),
+  getPlugins: async (): Promise<PluginsResponse> => ({ success: true, plugins: await getAllManagementPages<PluginItem>('/plugins') }),
 
   togglePlugin: (pluginId: string) =>
     api.post<ApiResponse & { state: string; isEnabled: boolean }>('/plugins/toggle', { pluginId }),
@@ -1137,11 +1193,6 @@ export const statisticApi = {
 
 import type { CertDetail, AuditLogEntry, ConsoleInfo } from '@/types'
 
-interface CertsResponse {
-  success: boolean
-  certs: CertDetail[]
-}
-
 interface AuditLogsResponse {
   success: boolean
   items: AuditLogEntry[]
@@ -1149,8 +1200,7 @@ interface AuditLogsResponse {
 }
 
 export const settingsApi = {
-  getCerts: () =>
-    api.get<CertsResponse>('/settings/certs'),
+  getCerts: (page = 1, search = '') => api.get<ManagementPage<CertDetail>>('/settings/certs', { params: { page, pageSize: 20, search } }),
 
   uploadCert: (data: { domain: string; pemContent: string; keyContent: string }) =>
     api.post<ApiResponse>('/settings/certs/upload', data),
@@ -1159,10 +1209,10 @@ export const settingsApi = {
     api.post<ApiResponse>('/settings/certs/delete', { pemFile }),
 
   acmeApply: (data: { domain: string; email: string }) =>
-    api.post<{ success: boolean; domain?: string; expiresAt?: string; errorMessage?: string }>('/settings/certs/acme-apply', data, { timeout: 120000 }),
+    api.post<{ success: boolean; data: { id: string }; errorMessage?: string }>('/settings/certs/acme-apply', data),
 
   acmeRenew: (data: { domain: string; email?: string }) =>
-    api.post<{ success: boolean; domain?: string; expiresAt?: string; errorMessage?: string }>('/settings/certs/acme-renew', data, { timeout: 120000 }),
+    api.post<{ success: boolean; data: { id: string }; errorMessage?: string }>('/settings/certs/acme-renew', data),
 
   getAcmeEmail: () =>
     api.get<{ success: boolean; email: string }>('/settings/acme-email'),
@@ -1173,11 +1223,15 @@ export const settingsApi = {
   getConsole: () =>
     api.get<ConsoleInfo & { success: boolean }>('/settings/console'),
 
-  getAuditLogs: (offset = 0, limit = 50) =>
-    api.get<AuditLogsResponse>('/settings/audit-logs', { params: { offset, limit } }),
+  getAuditLogs: async (offset = 0, limit = 50): Promise<AuditLogsResponse> => {
+    const result = await api.get<ManagementPage<AuditLogEntry>>('/settings/audit-logs', { params: { page: Math.floor(offset / limit) + 1, pageSize: limit } })
+    return { success: result.success, items: result.data, total: result.total }
+  },
 
-  getRuntimeLogs: (offset = 0, limit = 20) =>
-    api.get<{ success: boolean; items: RuntimeLogEntry[]; total: number }>('/settings/runtime-logs', { params: { offset, limit } }),
+  getRuntimeLogs: async (offset = 0, limit = 20) => {
+    const result = await api.get<ManagementPage<RuntimeLogEntry>>('/settings/runtime-logs', { params: { page: Math.floor(offset / limit) + 1, pageSize: limit } })
+    return { success: result.success, items: result.data, total: result.total }
+  },
 }
 
 export interface RuntimeLogEntry {
@@ -1201,10 +1255,13 @@ export interface RuntimeLogEntry {
 // ==================== 认证 API ====================
 
 export const authApi = {
+  mfaStatus: () => api.get<{ success: boolean; enabled: boolean }>('/auth/mfa'),
+  mfaAction: (action: 'setup' | 'confirm' | 'disable', password: string, code?: string) =>
+    api.post<{ success: boolean; message?: string; enrollment?: { secret: string; uri: string }; recoveryCodes?: string[] }>(`/auth/mfa/${action}`, { password, code }),
   /** 登录：发送 SHA256(SHA256(password) + timestamp) + timestamp */
-  login: (username: string, passwordHash: string, timestamp: number) =>
-    axios.post('/api/auth/login', { username, passwordHash, timestamp }).then(r => r.data) as Promise<{
-      success: boolean; token?: string; username?: string; expiresAt?: string; message?: string; retryAfterSeconds?: number
+  login: (username: string, passwordHash: string, timestamp: number, secondFactor?: string) =>
+    axios.post('/api/auth/login', { username, passwordHash, timestamp, secondFactor }).then(r => r.data) as Promise<{
+      success: boolean; token?: string; username?: string; role?: string; permissions?: string[]; expiresAt?: string; message?: string; retryAfterSeconds?: number
     }>,
 
   /** 获取服务器 Unix 时间戳（秒），用于校准客户端时间 */
@@ -1222,6 +1279,43 @@ export const authApi = {
 
   changePassword: (currentPassword: string, newPassword: string) =>
     api.post<ApiResponse>('/auth/change-password', { currentPassword, newPassword }),
+
+  users: (page = 1, search = '') => api.get<{ success: boolean; data: ManagementUser[]; total: number }>('/auth/users', { params: { page, pageSize: 20, search } }),
+  roles: async () => ({ success: true, data: await getAllManagementPages<ManagementRole>('/auth/roles') }),
+  rolePage: (page = 1, search = '') => api.get<ManagementPage<ManagementRole>>('/auth/roles', { params: { page, pageSize: 20, search } }),
+  saveRole: (role: { name: string; permissions: string[] }) => api.post<ApiResponse>('/auth/roles', role),
+  deleteRole: (name: string) => api.delete<ApiResponse>(`/auth/roles/${encodeURIComponent(name)}`),
+  createUser: (request: { username: string; password: string; role: string }) =>
+    api.post<{ success: boolean; data: ManagementUser }>('/auth/users', request),
+  setUserDisabled: (id: string, disabled: boolean) =>
+    api.put<ApiResponse>(`/auth/users/${encodeURIComponent(id)}/disabled`, { disabled }),
+  setUserRole: (id: string, role: string) =>
+    api.put<ApiResponse>(`/auth/users/${encodeURIComponent(id)}/role`, { role }),
+  resetUserPassword: (id: string) =>
+    api.post<{ success: boolean; password: string }>(`/auth/users/${encodeURIComponent(id)}/reset-password`),
+  revokeUserSessions: (id: string) =>
+    api.post<ApiResponse>(`/auth/users/${encodeURIComponent(id)}/revoke-sessions`),
+  loginHistory: (limit = 100) =>
+    api.get<ManagementPage<ManagementLoginRecord>>('/auth/login-history', { params: { page: 1, pageSize: limit } }),
+}
+
+export interface ManagementUser {
+  id: string
+  username: string
+  role: string
+  disabled: boolean
+  createdAt: string
+  lastLoginAt?: string
+  permissions: string[]
+}
+
+export interface ManagementRole { name: string; permissions: string[]; builtIn: boolean }
+
+export interface ManagementLoginRecord {
+  username: string
+  occurredAt: string
+  success: boolean
+  clientIp: string
 }
 
 // ==================== 拦截事件 API ====================
@@ -1240,14 +1334,17 @@ export interface InterceptEvent {
 }
 
 export const interceptEventApi = {
-  list: (params?: { ip?: string; domain?: string; startTime?: string; endTime?: string }) => {
+  list: (params?: { ip?: string; domain?: string; startTime?: string; endTime?: string; page?: number; search?: string }) => {
     const query = new URLSearchParams()
     if (params?.ip) query.set('ip', params.ip)
     if (params?.domain) query.set('domain', params.domain)
-    if (params?.startTime) query.set('startTime', params.startTime)
-    if (params?.endTime) query.set('endTime', params.endTime)
+    if (params?.startTime) query.set('from', new Date(params.startTime).toISOString())
+    if (params?.endTime) query.set('to', new Date(params.endTime).toISOString())
+    query.set('page', (params?.page ?? 1).toString())
+    query.set('pageSize', '20')
+    if (params?.search) query.set('search', params.search)
     const qs = query.toString()
-    return api.get<{ success: boolean; count: number; events: InterceptEvent[] }>(`/intercept-events${qs ? '?' + qs : ''}`)
+    return api.get<ManagementPage<InterceptEvent>>(`/intercept-events${qs ? '?' + qs : ''}`)
   },
   clear: () => api.post<{ success: boolean; message: string }>('/intercept-events/clear'),
 }
@@ -1279,16 +1376,17 @@ export interface InterceptLogEntry {
 }
 
 export const interceptLogApi = {
-  listFiles: () => api.get<{ success: boolean; files: InterceptLogFile[] }>('/intercept-logs/files'),
-  getEntries: (params: { file: string; offset?: number; limit?: number; search?: string; startTime?: string; endTime?: string }) => {
+  listFiles: async () => ({ success: true, files: await getAllManagementPages<InterceptLogFile>('/intercept-logs/files') }),
+  getEntries: async (params: { file: string; offset?: number; limit?: number; search?: string; startTime?: string; endTime?: string }) => {
     const query = new URLSearchParams()
     query.set('file', params.file)
-    if (params.offset !== undefined) query.set('offset', params.offset.toString())
-    if (params.limit !== undefined) query.set('limit', params.limit.toString())
+    query.set('page', (Math.floor((params.offset ?? 0) / (params.limit ?? 20)) + 1).toString())
+    query.set('pageSize', (params.limit ?? 20).toString())
     if (params.search) query.set('search', params.search)
-    if (params.startTime) query.set('startTime', params.startTime)
-    if (params.endTime) query.set('endTime', params.endTime)
-    return api.get<{ success: boolean; entries: InterceptLogEntry[]; total: number; offset: number; limit: number; fileName: string }>(`/intercept-logs/entries?${query.toString()}`)
+    if (params.startTime) query.set('from', new Date(params.startTime).toISOString())
+    if (params.endTime) query.set('to', new Date(params.endTime).toISOString())
+    const response = await api.get<ManagementPage<InterceptLogEntry>>(`/intercept-logs/entries?${query.toString()}`)
+    return { ...response, entries: response.data, fileName: params.file }
   },
 }
 
@@ -1332,20 +1430,20 @@ export const pcapApi = {
     URL.revokeObjectURL(url)
   },
 
-  listLogFiles: () =>
-    api.get<{ success: boolean; files: InterceptLogFile[] }>('/pcap/logs/files'),
+  listLogFiles: async () => ({ success: true, files: await getAllManagementPages<InterceptLogFile>('/pcap/logs/files') }),
 
-  getLogEntries: (params: { file: string; offset?: number; limit?: number; search?: string; host?: string; clientIp?: string; startTime?: string; endTime?: string }) => {
+  getLogEntries: async (params: { file: string; offset?: number; limit?: number; search?: string; host?: string; clientIp?: string; startTime?: string; endTime?: string }) => {
     const query = new URLSearchParams()
     query.set('file', params.file)
-    if (params.offset !== undefined) query.set('offset', params.offset.toString())
-    if (params.limit !== undefined) query.set('limit', params.limit.toString())
+    query.set('page', (Math.floor((params.offset ?? 0) / (params.limit ?? 20)) + 1).toString())
+    query.set('pageSize', (params.limit ?? 20).toString())
     if (params.search) query.set('search', params.search)
     if (params.host) query.set('host', params.host)
     if (params.clientIp) query.set('clientIp', params.clientIp)
-    if (params.startTime) query.set('startTime', params.startTime)
-    if (params.endTime) query.set('endTime', params.endTime)
-    return api.get<{ success: boolean; entries: InterceptLogEntry[]; total: number; offset: number; limit: number; fileName: string }>(`/pcap/logs/entries?${query.toString()}`)
+    if (params.startTime) query.set('from', new Date(params.startTime).toISOString())
+    if (params.endTime) query.set('to', new Date(params.endTime).toISOString())
+    const response = await api.get<ManagementPage<InterceptLogEntry>>(`/pcap/logs/entries?${query.toString()}`)
+    return { ...response, entries: response.data, fileName: params.file }
   },
 
   deleteLogFile: (file: string) =>

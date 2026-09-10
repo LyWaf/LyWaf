@@ -4,9 +4,10 @@ import * as echarts from 'echarts/core'
 import { MapChart } from 'echarts/charts'
 import { GeoComponent, TooltipComponent, VisualMapComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { geoTrafficApi } from '@/api'
 import { countryNameMap, provinceNameMap, cityToProvinceMap } from '@/utils/geoNameMap'
-import type { GeoTrafficItem } from '@/types'
+import type { GeoTrafficItem, GeoTrafficStats } from '@/types'
+
+const props = defineProps<{ stats: GeoTrafficStats | null }>()
 
 echarts.use([MapChart, GeoComponent, TooltipComponent, VisualMapComponent, CanvasRenderer])
 
@@ -73,11 +74,8 @@ async function ensureCurrentMap() {
   return await registerMapData(name, file)
 }
 
-async function loadData() {
-  loading.value = true
-  try {
-    const data = await geoTrafficApi.getStats()
-    if (data.success !== false) {
+watch(() => props.stats, (data) => {
+    if (data) {
       countryVisits.value = data.countryVisits || []
       countryIntercepts.value = data.countryIntercepts || []
       regionVisits.value = data.regionVisits || []
@@ -86,12 +84,8 @@ async function loadData() {
         updateChart()
       }
     }
-  } catch (e) {
-    console.error('加载地理流量数据失败:', e)
-  } finally {
-    loading.value = false
-  }
-}
+    loading.value = data === null
+}, { immediate: true })
 
 function buildOption(): echarts.EChartsCoreOption {
   const isChina = mapMode.value === 'china'
@@ -195,8 +189,6 @@ function handleResize() {
   chart.value?.resize()
 }
 
-let refreshTimer: number | null = null
-
 onMounted(async () => {
   // 先注册默认地图（中国）
   const ok = await ensureCurrentMap()
@@ -211,13 +203,11 @@ onMounted(async () => {
     mapReady.value = true
   }
 
-  await loadData()
-  refreshTimer = window.setInterval(loadData, 60000)
+  if (mapReady.value) updateChart()
   window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
-  if (refreshTimer) clearInterval(refreshTimer)
   chart.value?.dispose()
   window.removeEventListener('resize', handleResize)
 })

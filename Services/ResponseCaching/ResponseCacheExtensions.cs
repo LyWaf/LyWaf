@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using LyWaf.Services.ManagementApi;
+using LyWaf.Services.Auth;
 
 namespace LyWaf.Services.ResponseCaching;
 
@@ -19,17 +20,16 @@ public static class ResponseCacheExtensions
     public static WebApplication MapLyWafResponseCacheApi(this WebApplication app, int controlPort)
     {
         app.MapGet("/api/response-cache", (HttpContext context, ResponseCacheStore store) =>
-            Results.Ok(new { success = true, entries = store.GetSnapshots() })).RequireHost($"*:{controlPort}");
+            TypedResults.Ok(ManagementLists.From(store.GetSnapshots()).Sort("key", item => item.Key)
+                .Sort("host", item => item.Host).Sort("path", item => item.Path).Sort("length", item => item.Length)
+                .Sort("storedAt", item => item.StoredAt).Sort("lastAccessedAt", item => item.LastAccessedAt)
+                .Search(item => $"{item.Host} {item.Path} {item.Key}").Timestamp(item => item.StoredAt)
+                .Read(context.Request.Query, "storedAt", true))).RequireHost($"*:{controlPort}").RequireManagementPermission();
         app.MapPost("/api/response-cache/purge", ([FromBody] PurgeResponseCacheRequest request,
             HttpContext context, ResponseCacheStore store) =>
         {
-            try { return Results.Ok(new { success = true, removed = store.Purge(request) }); }
-            catch (ArgumentException ex)
-            {
-                return ManagementApiContract.Error(context, StatusCodes.Status400BadRequest,
-                    "invalid_purge_filter", ex.Message);
-            }
-        }).RequireHost($"*:{controlPort}");
+            return TypedResults.Ok(new { success = true, removed = store.Purge(request) });
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
         return app;
     }
 }

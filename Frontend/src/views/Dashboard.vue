@@ -7,13 +7,14 @@ import BlockedIps from '@/components/dashboard/BlockedIps.vue'
 import RecentClients from '@/components/dashboard/RecentClients.vue'
 import { trafficApi, dashboardApi } from '@/api'
 import { useToast } from '@/composables/useToast'
-import type { TrafficStats, SystemStatus } from '@/types'
+import type { TrafficStats, SystemStatus, GeoTrafficStats } from '@/types'
 
 const { showSuccess, showError } = useToast()
 
 // 数据
 const loading = ref(false)
 const traffic = ref<TrafficStats | null>(null)
+const geoTraffic = ref<GeoTrafficStats | null>(null)
 const system = ref<SystemStatus>({
   uptime: '-',
   memory: 0,
@@ -45,6 +46,7 @@ onUnmounted(() => {
 })
 
 const loadData = async () => {
+  if (loading.value) return
   loading.value = true
   try {
     const data = await dashboardApi.getData()
@@ -62,6 +64,7 @@ const loadData = async () => {
 
       // 更新流量统计
       traffic.value = data.traffic
+      geoTraffic.value = data.geoTraffic
 
       // 更新最近访问的客户端
       recentClients.value = data.recentClients || []
@@ -141,7 +144,7 @@ const resetTraffic = async () => {
     <RecentClients :clients="recentClients" />
 
     <!-- 地理流量分布 -->
-    <GeoTrafficMap />
+    <GeoTrafficMap :stats="geoTraffic" />
 
     <!-- 封禁列表 -->
     <BlockedIps :initial-data="blockedIps" @refresh="loadData" />

@@ -1,10 +1,12 @@
 using LyWaf.Services.ManagementApi;
+using LyWaf.Services.Auth;
 
 namespace LyWaf.Services.RuntimeState;
 
 /// <summary>注册运行状态核心、后台持久化、节点复制及管理 API。</summary>
 public static class RuntimeStateExtensions
 {
+    private sealed record RuntimeStateMergedResponse(bool Success);
     public static IServiceCollection AddLyWafRuntimeState(this IServiceCollection services, IConfiguration configuration)
     {
         services.AddOptions<RuntimeStateOptions>()
@@ -42,12 +44,15 @@ public static class RuntimeStateExtensions
             {
                 return ManagementApiContract.Error(context, 400, "runtime_state_invalid", ex.Message);
             }
-        }).RequireHost($"*:{controlPort}");
+        }).Accepts<RuntimeStateMutation>("application/json").Produces<RuntimeStateMergedResponse>().RequireHost($"*:{controlPort}");
 
         app.MapGet("/api/runtime-state/status", (IRuntimeStateStore store) =>
-            Results.Json(new { success = true, status = store.GetStatus() })).RequireHost($"*:{controlPort}");
-        app.MapGet("/api/runtime-state/snapshots", (string? domain, IRuntimeStateStore store) =>
-            Results.Json(new { success = true, states = store.GetSnapshots(domain) })).RequireHost($"*:{controlPort}");
+            TypedResults.Ok(new { success = true, status = store.GetStatus() })).RequireHost($"*:{controlPort}").RequireManagementPermission();
+        app.MapGet("/api/runtime-state/snapshots", (HttpContext context, string? domain, IRuntimeStateStore store) =>
+            TypedResults.Ok(ManagementLists.From(store.GetSnapshots(domain)).Sort("domain", item => item.Domain)
+                .Sort("key", item => item.Key).Sort("changedAt", item => item.ChangedAt).Sort("sequence", item => item.Sequence)
+                .Search(item => $"{item.Domain} {item.Key} {item.NodeId}").Timestamp(item => item.ChangedAt)
+                .Read(context.Request.Query, "changedAt", true))).RequireHost($"*:{controlPort}").RequireManagementPermission();
         return app;
     }
 }

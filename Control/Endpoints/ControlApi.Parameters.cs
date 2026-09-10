@@ -4,6 +4,7 @@ using LyWaf.Plugins.Packaging;
 using LyWaf.Services.Acme;
 using LyWaf.Services.AuditLog;
 using LyWaf.Services.Auth;
+using LyWaf.Services.ManagementApi;
 using LyWaf.Services.Configuration;
 using LyWaf.Services.Param;
 using LyWaf.Services.ProxyServer;
@@ -36,6 +37,7 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record ParameterUpdateResponse(bool Success, bool IsFirstServer, string LocalAddress, string Message);
     private static void MapParameterEndpoints(WebApplication app, int controlPort)
     {
         // =============== 参数配置 API ===============
@@ -43,60 +45,52 @@ public static partial class ControlApi
         app.MapGet("/api/param", (HttpContext ctx) =>
         {
             var opts = ctx.RequestServices.GetRequiredService<IOptionsMonitor<GlobalOptions>>().CurrentValue;
-            return Results.Json(new
+            return TypedResults.Ok(new
             {
                 success = true,
                 isFirstServer = SharedData.IsFirstServer,
                 localAddress = opts.LocalAddress ?? "",
             });
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
-        app.MapPost("/api/param", async (HttpContext ctx) =>
+        app.MapPost("/api/param", (HttpContext ctx, ParamUpdateRequest body) =>
         {
-            try
+
+            if (body == null)
+                return Results.Json(new { success = false, message = "无效的请求体" }, statusCode: 400);
+
+            var opts = ctx.RequestServices.GetRequiredService<IOptionsMonitor<GlobalOptions>>().CurrentValue;
+
+            if (body.IsFirstServer.HasValue)
             {
-                var body = await ctx.Request.ReadFromJsonAsync<ParamUpdateRequest>();
-                if (body == null)
-                    return Results.Json(new { success = false, message = "无效的请求体" }, statusCode: 400);
-
-                var opts = ctx.RequestServices.GetRequiredService<IOptionsMonitor<GlobalOptions>>().CurrentValue;
-
-                if (body.IsFirstServer.HasValue)
-                {
-                    SharedData.IsFirstServer = body.IsFirstServer.Value;
-                }
-
-                if (body.LocalAddress != null)
-                {
-                    opts.LocalAddress = string.IsNullOrWhiteSpace(body.LocalAddress) ? null : body.LocalAddress.Trim();
-                }
-
-                return Results.Json(new
-                {
-                    success = true,
-                    isFirstServer = SharedData.IsFirstServer,
-                    localAddress = opts.LocalAddress ?? "",
-                    message = "参数配置已更新"
-                });
+                SharedData.IsFirstServer = body.IsFirstServer.Value;
             }
-            catch (Exception ex)
+
+            if (body.LocalAddress != null)
             {
-                return Results.Json(new { success = false, message = $"更新失败: {ex.Message}" }, statusCode: 500);
+                opts.LocalAddress = string.IsNullOrWhiteSpace(body.LocalAddress) ? null : body.LocalAddress.Trim();
             }
-        }).RequireHost($"*:{controlPort}");
+
+            return Results.Json(new
+            {
+                success = true,
+                isFirstServer = SharedData.IsFirstServer,
+                localAddress = opts.LocalAddress ?? "",
+                message = "参数配置已更新"
+            });
+        }).Produces<ParameterUpdateResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         app.MapGet("/api/param/env", (HttpContext ctx) =>
         {
             var envVars = Environment.GetEnvironmentVariables();
-            var list = new List<object>();
+            var list = new List<KeyValuePair<string, string>>();
             foreach (System.Collections.DictionaryEntry entry in envVars)
             {
-                list.Add(new { key = entry.Key?.ToString(), value = entry.Value?.ToString() });
+                list.Add(new(entry.Key.ToString() ?? "", entry.Value?.ToString() ?? ""));
             }
-            list.Sort((a, b) => string.Compare(
-                ((dynamic)a).key, ((dynamic)b).key, StringComparison.OrdinalIgnoreCase));
-            return Results.Json(new { success = true, items = list, total = list.Count });
-        }).RequireHost($"*:{controlPort}");
+            return TypedResults.Ok(ManagementLists.From(list).Sort("key", item => item.Key)
+                .Search(item => item.Key).Read(ctx.Request.Query, "key"));
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission(ManagementPermissions.ManageSystem);
 
     }
 }

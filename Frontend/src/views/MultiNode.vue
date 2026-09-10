@@ -50,7 +50,7 @@ const load = async (silent = false) => {
 
 const openCreate = async () => {
   try {
-    versions.value = (await configFileApi.getHistory()).versions.filter(item => item.kind === 'main')
+    versions.value = (await configFileApi.getAllHistory()).filter(item => item.kind === 'main')
     versionId.value ||= versions.value[0]?.id ?? ''
     selectedNodes.value = operableNodes.value.map(node => node.nodeId)
     showCreate.value = true
@@ -167,6 +167,13 @@ onBeforeUnmount(() => timer && window.clearInterval(timer))
     </div>
 
     <div v-if="dashboard && view === 'deployments'" class="border border-dark-border rounded overflow-x-auto">
+      <div v-if="deployments.some(task => task.taskId)" class="flex flex-wrap gap-3 border-b border-dark-border px-4 py-3">
+        <RouterLink v-for="task in deployments.filter(item => item.taskId)" :key="task.id"
+          :to="{ path: '/management-tasks', query: { task: task.taskId } }"
+          class="text-sm text-primary-400 hover:underline" :title="task.id">
+          任务日志 {{ task.id.slice(0, 8) }}
+        </RouterLink>
+      </div>
       <table class="w-full text-sm"><thead class="bg-dark-card text-gray-500"><tr><th class="px-4 py-3 text-left">任务</th><th class="px-4 py-3 text-left">配置版本</th><th class="px-4 py-3 text-left">节点进度</th><th class="px-4 py-3 text-left">状态</th><th class="px-4 py-3 text-right">操作</th></tr></thead>
         <tbody class="divide-y divide-dark-border"><tr v-for="task in deployments" :key="task.id" class="bg-dark-bg-secondary"><td class="px-4 py-3"><div class="font-mono text-xs text-gray-300">{{ task.id }}</div><div class="text-xs text-gray-600 mt-1">{{ formatTime(task.createdAt) }}</div></td><td class="px-4 py-3 font-mono text-xs text-gray-400">{{ task.versionId }}</td><td class="px-4 py-3"><div class="flex flex-wrap gap-1"><span v-for="target in Object.values(task.targets)" :key="target.nodeId" class="px-1.5 py-0.5 rounded text-xs bg-gray-800 text-gray-400" :title="target.error || ''">{{ target.nodeId }}: {{ target.state }}</span></div></td><td class="px-4 py-3 text-gray-300">{{ task.state }}</td><td class="px-4 py-3"><div class="flex justify-end gap-3"><button v-if="task.state === 'Running' || task.state === 'Pausing'" class="text-amber-400 disabled:text-gray-700" :disabled="!nodeCanOperateTask(task) || !!actionId" @click="runCommand(task, 'pause')">暂停</button><button v-if="task.state === 'Paused' || task.state === 'Pausing'" class="text-primary-400 disabled:text-gray-700" :disabled="!nodeCanOperateTask(task) || !!actionId" @click="runCommand(task, 'resume')">继续</button><button class="text-red-400 disabled:text-gray-700" :disabled="!nodeCanOperateTask(task) || !!actionId" @click="runCommand(task, 'rollback')">回滚</button></div></td></tr><tr v-if="!deployments.length"><td colspan="5" class="px-4 py-10 text-center text-gray-600">暂无分发任务</td></tr></tbody>
       </table>

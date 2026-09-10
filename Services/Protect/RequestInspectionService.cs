@@ -21,11 +21,14 @@ public sealed record RequestInspectionSnapshot(
     IReadOnlyList<string> HeaderValues,
     IReadOnlyList<string> BodyValues,
     bool BodyTruncated,
-    IReadOnlyList<string> ProtocolAnomalies);
+    IReadOnlyList<string> ProtocolAnomalies,
+    IReadOnlyList<string>? NormalizationSteps = null);
 
 public sealed class RequestInspectionService(IOptionsMonitor<ProtectOptions> options) : IRequestInspectionService
 {
     private static readonly object SnapshotKey = new();
+    public static RequestInspectionSnapshot? GetCompletedSnapshot(HttpContext context) =>
+        context.Items.TryGetValue(SnapshotKey, out var cached) && cached is Task<RequestInspectionSnapshot> { IsCompletedSuccessfully: true } task ? task.Result : null;
 
     public Task<RequestInspectionSnapshot> InspectAsync(HttpContext context, CancellationToken cancellationToken = default)
     {
@@ -59,7 +62,7 @@ public sealed class RequestInspectionService(IOptionsMonitor<ProtectOptions> opt
         var anomalies = FindProtocolAnomalies(context.Request);
 
         if (!MayHaveBody(context.Request))
-            return new(query.Values, headers.Values, [], false, anomalies);
+            return new(query.Values, headers.Values, [], false, anomalies, query.Steps.Concat(headers.Steps).Distinct().ToArray());
 
         var (bodyBytes, truncated) = await ReadBodyAsync(
             context.Request,
@@ -74,7 +77,7 @@ public sealed class RequestInspectionService(IOptionsMonitor<ProtectOptions> opt
             if (decoded.Error is not null) anomalies.Add(decoded.Error);
             await ExtractBodyValuesAsync(context.Request.ContentType, decoded.Bytes, body, cancellationToken);
         }
-        return new(query.Values, headers.Values, body.Values, truncated, anomalies);
+        return new(query.Values, headers.Values, body.Values, truncated, anomalies, query.Steps.Concat(headers.Steps).Concat(body.Steps).Distinct().ToArray());
     }
 
     private static bool MayHaveBody(HttpRequest request) =>
@@ -322,6 +325,7 @@ public sealed class RequestInspectionService(IOptionsMonitor<ProtectOptions> opt
 
     private sealed class CandidateCollector(ProtectOptions options)
     {
+        public HashSet<string> Steps { get; } = new(StringComparer.Ordinal);
         private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
         private readonly int _maxCandidates = Math.Clamp(options.InspectionMaxCandidates, 8, 512);
         private readonly int _maxLength = Math.Clamp(options.InspectionMaxValueLength, 256, 1024 * 1024);
@@ -339,11 +343,11 @@ public sealed class RequestInspectionService(IOptionsMonitor<ProtectOptions> opt
         {
             if (!_seen.Add(value) || _seen.Count >= _maxCandidates || depth >= _maxDepth) return;
             var unicode = value.Normalize(NormalizationForm.FormKC);
-            if (!string.Equals(unicode, value, StringComparison.Ordinal)) AddRecursive(unicode, depth + 1);
+            if (!string.Equals(unicode, value, StringComparison.Ordinal)) { Steps.Add("Unicode NFKC"); AddRecursive(unicode, depth + 1); }
             TryAdd(Uri.UnescapeDataString, value, depth);
             TryAdd(WebUtility.HtmlDecode, value, depth);
-            if (TryDecodeBase64(value, out var base64)) AddRecursive(base64, depth + 1);
-            if (TryDecodeHex(value, out var hex)) AddRecursive(hex, depth + 1);
+            if (TryDecodeBase64(value, out var base64)) { Steps.Add("Base64"); AddRecursive(base64, depth + 1); }
+            if (TryDecodeHex(value, out var hex)) { Steps.Add("Hex"); AddRecursive(hex, depth + 1); }
         }
 
         private void TryAdd(Func<string, string> decoder, string value, int depth)
@@ -352,7 +356,10 @@ public sealed class RequestInspectionService(IOptionsMonitor<ProtectOptions> opt
             {
                 var decoded = decoder(value);
                 if (!string.Equals(decoded, value, StringComparison.Ordinal) && decoded.Length <= _maxLength)
+                {
+                    Steps.Add(decoder == Uri.UnescapeDataString ? "URL decode" : "HTML entity decode");
                     AddRecursive(decoded, depth + 1);
+                }
             }
             catch (Exception) when (decoder == Uri.UnescapeDataString)
             {

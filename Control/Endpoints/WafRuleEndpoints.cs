@@ -1,5 +1,7 @@
+using LyWaf.Services.Auth;
 using LyWaf.Services.AuditLog;
 using LyWaf.Services.WafRule;
+using LyWaf.Services.ManagementApi;
 
 namespace LyWaf.Control.Endpoints;
 
@@ -8,66 +10,60 @@ public static class WafRuleEndpoints
 {
     public static IEndpointRouteBuilder MapWafRuleEndpoints(this IEndpointRouteBuilder app, int controlPort)
     {
-        var group = app.MapGroup("/api/waf-rules").RequireHost($"*:{controlPort}");
-        group.MapGet("/enums", GetEnums);
-        group.MapGet("", GetRules);
-        group.MapGet("/{id}", GetRule);
-        group.MapPost("", CreateAsync);
-        group.MapPut("/{id}", UpdateAsync);
-        group.MapDelete("/{id}", Delete);
-        group.MapPost("/{id}/toggle", Toggle);
+        var group = app.MapGroup("/api/waf-rules").RequireHost($"*:{controlPort}").RequireManagementPermission();
+        group.MapGet("/enums", GetEnums).Produces<WafRuleEnumsResponse>();
+        group.MapGet("", GetRules).Produces<ManagementPage<WafRuleView>>();
+        group.MapGet("/{id}", GetRule).Produces<WafRuleDetailResponse>();
+        group.MapPost("", CreateAsync).Produces<WafRuleSavedResponse>();
+        group.MapPut("/{id}", UpdateAsync).Produces<WafRuleSavedResponse>();
+        group.MapDelete("/{id}", Delete).Produces<WafRuleSavedResponse>();
+        group.MapPost("/{id}/toggle", Toggle).Produces<WafRuleToggleResponse>();
         return app;
     }
 
-    private static IResult GetEnums() => Results.Json(new
-    {
-        success = true,
-        fields = Enum.GetValues<WafMatchField>().Select(x => new { name = x.ToString(), label = FieldLabel(x) }),
-        operators = Enum.GetValues<WafMatchOperator>().Select(x => new { name = x.ToString(), label = OperatorLabel(x) }),
-        actions = Enum.GetValues<WafRuleAction>().Select(x => new { name = x.ToString(), label = ActionLabel(x) }),
-        sources = Enum.GetValues<WafRuleSource>().Select(x => new { name = x.ToString(), label = SourceLabel(x) }),
-    });
+    private static IResult GetEnums() => TypedResults.Ok(new WafRuleEnumsResponse(true,
+        Enum.GetValues<WafMatchField>().Select(x => new WafEnumOption(x.ToString(), FieldLabel(x))).ToArray(),
+        Enum.GetValues<WafMatchOperator>().Select(x => new WafEnumOption(x.ToString(), OperatorLabel(x))).ToArray(),
+        Enum.GetValues<WafRuleAction>().Select(x => new WafEnumOption(x.ToString(), ActionLabel(x))).ToArray(),
+        Enum.GetValues<WafRuleSource>().Select(x => new WafEnumOption(x.ToString(), SourceLabel(x))).ToArray()));
 
-    private static IResult GetRules(IWafRuleService service)
+    private static IResult GetRules(HttpContext context, IWafRuleService service, WafRuleSource? source, bool? enabled)
     {
-        var rules = service.GetRules();
-        return Results.Json(new { success = true, count = rules.Count, rules = rules.Select(ToResponse) });
+        var rules = service.GetRules().Select((rule, index) => (rule, index))
+            .Where(item => (source == null || item.rule.Source == source) && (enabled == null || item.rule.Enabled == enabled));
+        var result = ManagementLists.From(rules).Sort("execution", item => item.index).Sort("name", item => item.rule.Name)
+            .Sort("priority", item => item.rule.Priority).Sort("createdAt", item => item.rule.CreatedAt)
+            .Search(item => item.rule.Name + " " + item.rule.Description + " " + item.rule.Id)
+            .Timestamp(item => item.rule.UpdatedAt ?? item.rule.CreatedAt).Read(context.Request.Query, "execution");
+        return TypedResults.Ok(new ManagementPage<WafRuleView>(result.Success,
+            result.Data.Select(item => WafRuleView.From(item.rule)).ToArray(), result.Total,
+            result.Page, result.PageSize, result.SortBy, result.SortDirection));
     }
 
     private static IResult GetRule(string id, IWafRuleService service) => service.GetRule(id) is { } rule
-        ? Results.Json(new { success = true, rule = ToResponse(rule) })
+        ? TypedResults.Ok(new WafRuleDetailResponse(true, WafRuleView.From(rule)))
         : Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
 
-    private static async Task<IResult> CreateAsync(HttpContext context, IWafRuleService service)
+    private static IResult CreateAsync(HttpContext context, IWafRuleService service, WafCustomRule rule)
     {
-        try
-        {
-            var rule = await context.Request.ReadFromJsonAsync<WafCustomRule>(context.RequestAborted);
-            if (rule == null || string.IsNullOrWhiteSpace(rule.Name)) return Bad("规则名称不能为空");
-            if (!HasValidConditionGroups(rule)) return Bad("条件组无效：最多 5 组、总计 20 个条件，且每组至少包含一个条件");
-            if (!service.AddRule(rule)) return Bad("创建失败");
-            Audit(context, $"创建WAF规则: {rule.Name}");
-            return Results.Json(new { success = true, message = "规则已创建", id = rule.Id });
-        }
-        catch (Exception ex) { return Results.Json(new { success = false, message = $"创建失败: {ex.Message}" }, statusCode: 500); }
+        if (rule == null || string.IsNullOrWhiteSpace(rule.Name)) return Bad("规则名称不能为空");
+        if (!HasValidConditionGroups(rule)) return Bad("条件组无效：最多 5 组、总计 20 个条件，且每组至少包含一个条件");
+        if (!service.AddRule(rule)) return Bad("创建失败");
+        Audit(context, $"创建WAF规则: {rule.Name}");
+        return TypedResults.Ok(new WafRuleSavedResponse(true, "规则已创建", rule.Id));
     }
 
-    private static async Task<IResult> UpdateAsync(string id, HttpContext context, IWafRuleService service)
+    private static IResult UpdateAsync(string id, HttpContext context, IWafRuleService service, WafCustomRule rule)
     {
-        try
-        {
-            var existing = service.GetRule(id);
-            if (existing != null && existing.Source != WafRuleSource.User)
-                return Results.Json(new { success = false, message = "非用户规则不可编辑" }, statusCode: 403);
-            var rule = await context.Request.ReadFromJsonAsync<WafCustomRule>(context.RequestAborted);
-            if (rule == null) return Bad("无效的规则数据");
-            if (!HasValidConditionGroups(rule)) return Bad("条件组无效：最多 5 组、总计 20 个条件，且每组至少包含一个条件");
-            rule.Id = id;
-            if (!service.UpdateRule(rule)) return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
-            Audit(context, $"更新WAF规则: {rule.Name} ({id})");
-            return Results.Json(new { success = true, message = "规则已更新" });
-        }
-        catch (Exception ex) { return Results.Json(new { success = false, message = $"更新失败: {ex.Message}" }, statusCode: 500); }
+        var existing = service.GetRule(id);
+        if (existing != null && existing.Source != WafRuleSource.User)
+            return Results.Json(new { success = false, message = "非用户规则不可编辑" }, statusCode: 403);
+        if (rule == null) return Bad("无效的规则数据");
+        if (!HasValidConditionGroups(rule)) return Bad("条件组无效：最多 5 组、总计 20 个条件，且每组至少包含一个条件");
+        rule.Id = id;
+        if (!service.UpdateRule(rule)) return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
+        Audit(context, $"更新WAF规则: {rule.Name} ({id})");
+        return TypedResults.Ok(new WafRuleSavedResponse(true, "规则已更新"));
     }
 
     private static IResult Delete(string id, HttpContext context, IWafRuleService service)
@@ -77,7 +73,7 @@ public static class WafRuleEndpoints
             return Results.Json(new { success = false, message = "非用户规则不可删除" }, statusCode: 403);
         if (!service.DeleteRule(id)) return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
         Audit(context, $"删除WAF规则: {existing?.Name ?? id} ({id})");
-        return Results.Json(new { success = true, message = "规则已删除" });
+        return TypedResults.Ok(new WafRuleSavedResponse(true, "规则已删除"));
     }
 
     private static IResult Toggle(string id, HttpContext context, IWafRuleService service)
@@ -85,22 +81,8 @@ public static class WafRuleEndpoints
         if (!service.ToggleRule(id)) return Results.Json(new { success = false, message = "规则不存在" }, statusCode: 404);
         var rule = service.GetRule(id);
         Audit(context, $"切换WAF规则: {rule?.Name ?? id} -> {(rule?.Enabled == true ? "启用" : "禁用")}");
-        return Results.Json(new { success = true, enabled = rule?.Enabled, message = rule?.Enabled == true ? "规则已启用" : "规则已禁用" });
+        return TypedResults.Ok(new WafRuleToggleResponse(true, rule?.Enabled, rule?.Enabled == true ? "规则已启用" : "规则已禁用"));
     }
-
-    private static object ToResponse(WafCustomRule rule) => new
-    {
-        id = rule.Id, name = rule.Name, description = rule.Description, enabled = rule.Enabled,
-        priority = rule.Priority, source = rule.Source.ToString(),
-        groupOperator = rule.GroupOperator.ToString(),
-        conditionGroups = (rule.ConditionGroups ?? []).Select(group => new
-        {
-            @operator = group.Operator.ToString(),
-            conditions = (group.Conditions ?? []).Select(x => new { field = x.Field.ToString(), x.FieldName,
-                @operator = x.Operator.ToString(), x.Value, x.IgnoreCase })
-        }),
-        action = rule.Action.ToString(), rule.ActionSeconds, rule.ResponseCode, rule.CreatedAt, rule.UpdatedAt,
-    };
 
     private static IResult Bad(string message) => Results.Json(new { success = false, message }, statusCode: 400);
     private static bool HasValidConditionGroups(WafCustomRule rule) =>

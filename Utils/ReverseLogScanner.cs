@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
+using System.Globalization;
+using LyWaf.Services.ManagementApi;
 
 namespace LyWaf.Utils;
 
@@ -72,6 +74,49 @@ public sealed class ReverseLogScanner : IDisposable
         return await SearchAndPageAsync(index, rangeStart, rangeEnd, offset, limit, search, host, clientIp);
     }
 
+    /// <summary>管理端分页只保留当前页正文；时间排序使用索引，兼容日志乱序写入。</summary>
+    public async Task<ManagementPage<LogEntry>> QueryAsync(ManagementListQuery query, CancellationToken cancellationToken = default,
+        string? host = null, string? clientIp = null)
+    {
+        var index = await BuildIndexAsync(cancellationToken);
+        var ordered = index.Select((item, position) => new
+        {
+            Position = position,
+            Time = DateTimeOffset.TryParse(item.Timestamp, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeLocal, out var time) ? (DateTimeOffset?)time : null
+        }).Where(item => (query.From == null || item.Time >= query.From) &&
+            (query.To == null || item.Time <= query.To));
+        var sorted = query.SortDirection == "desc"
+            ? ordered.OrderByDescending(item => item.Time).ThenByDescending(item => item.Position)
+            : ordered.OrderBy(item => item.Time).ThenBy(item => item.Position);
+        var entries = new List<LogEntry>();
+        long pageBytes = 0;
+        var total = 0;
+        foreach (var item in sorted)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string? block = null;
+            if (query.Search.Length > 0 || !string.IsNullOrEmpty(host) || !string.IsNullOrEmpty(clientIp))
+            {
+                block = await ReadEntryBlockAsync(index, item.Position, cancellationToken);
+                if (!block.Contains(query.Search, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.IsNullOrEmpty(host) && !MatchHost(block, host)) continue;
+                if (!string.IsNullOrEmpty(clientIp) && !MatchClientIp(block, clientIp)) continue;
+            }
+            if (total >= query.Offset && entries.Count < query.PageSize)
+            {
+                var end = item.Position + 1 < index.Count ? index[item.Position + 1].ByteOffset : _fileLength;
+                pageBytes += end - index[item.Position].ByteOffset;
+                if (pageBytes > 16 * 1024 * 1024)
+                    throw new ArgumentException("当前页日志正文超过 16 MiB，请减小 pageSize", "pageSize");
+                block ??= await ReadEntryBlockAsync(index, item.Position, cancellationToken);
+                entries.Add(LogUtil.ParseLogEntry(block, item.Position, index[item.Position].Timestamp));
+            }
+            total++;
+        }
+        return query.Result(entries.ToArray(), total);
+    }
+
     /// <summary>
     /// 快速统计日志条目总数
     /// </summary>
@@ -127,8 +172,9 @@ public sealed class ReverseLogScanner : IDisposable
     /// <summary>
     /// 建立分隔符索引：扫描文件中所有 ========== [timestamp] ========== 的位置
     /// </summary>
-    private async Task<List<(long ByteOffset, string Timestamp)>> BuildIndexAsync()
+    private async Task<List<(long ByteOffset, string Timestamp)>> BuildIndexAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (_index != null) return _index;
 
         var index = new List<(long ByteOffset, string Timestamp)>();
@@ -143,7 +189,7 @@ public sealed class ReverseLogScanner : IDisposable
         if (_fileLength >= 3)
         {
             var bom = new byte[3];
-            await _stream.ReadExactlyAsync(bom);
+            await _stream.ReadExactlyAsync(bom, cancellationToken);
             if (bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF)
             {
                 fileOffset = 3;
@@ -155,9 +201,10 @@ public sealed class ReverseLogScanner : IDisposable
             }
         }
 
-        while (true)
+        while (fileOffset < _fileLength)
         {
-            var bytesRead = await _stream.ReadAsync(buffer);
+            cancellationToken.ThrowIfCancellationRequested();
+            var bytesRead = await _stream.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, _fileLength - fileOffset)), cancellationToken);
             if (bytesRead == 0) break;
 
             // 合并跨块数据
@@ -200,6 +247,8 @@ public sealed class ReverseLogScanner : IDisposable
                     // absolutePos 与上一个相同，跳过可避免产生 endByte==startByte 的零长度空条目。
                     if (timestamp != null && (index.Count == 0 || absolutePos > index[^1].ByteOffset))
                     {
+                        if (index.Count >= 100000)
+                            throw new ArgumentException("日志文件超过 100000 条索引上限，请先轮转或拆分日志文件", "file");
                         index.Add((absolutePos, timestamp));
                     }
                 }
@@ -348,17 +397,20 @@ public sealed class ReverseLogScanner : IDisposable
     /// 读取单个条目的文本块（从当前分隔符到下一个分隔符之间的内容）
     /// </summary>
     private async Task<string> ReadEntryBlockAsync(
-        List<(long ByteOffset, string Timestamp)> index, int entryIdx)
+        List<(long ByteOffset, string Timestamp)> index, int entryIdx, CancellationToken cancellationToken = default)
     {
         var startByte = index[entryIdx].ByteOffset;
         var endByte = (entryIdx + 1 < index.Count) ? index[entryIdx + 1].ByteOffset : _fileLength;
-        var length = (int)(endByte - startByte);
+        var byteLength = endByte - startByte;
+        if (byteLength < 0 || byteLength > 8 * 1024 * 1024)
+            throw new InvalidDataException("Log entry exceeds the 8 MiB read limit.");
+        var length = (int)byteLength;
 
         var buffer = new byte[length];
         _stream.Seek(startByte, SeekOrigin.Begin);
-        var read = await _stream.ReadAsync(buffer.AsMemory(0, length));
+        await _stream.ReadExactlyAsync(buffer.AsMemory(0, length), cancellationToken);
 
-        return Encoding.UTF8.GetString(buffer, 0, read).TrimEnd();
+        return Encoding.UTF8.GetString(buffer).TrimEnd();
     }
 
     /// <summary>

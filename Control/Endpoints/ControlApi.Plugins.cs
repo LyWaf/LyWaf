@@ -4,6 +4,7 @@ using LyWaf.Plugins.Packaging;
 using LyWaf.Services.Acme;
 using LyWaf.Services.AuditLog;
 using LyWaf.Services.Auth;
+using LyWaf.Services.ManagementApi;
 using LyWaf.Services.Configuration;
 using LyWaf.Services.Param;
 using LyWaf.Services.ProxyServer;
@@ -36,6 +37,13 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record PluginPackageResponse(bool Success, string Id, string Version, bool RequiresRestart, string Message);
+    private sealed record PluginConfigResponse(bool Success, string PluginId, Dictionary<string, string> Config,
+        Dictionary<string, string> Defaults, Dictionary<string, string> Labels, Dictionary<string, string> FieldDefaults);
+    private sealed record PluginActionView(string Id, string Name, string Type, string? Description);
+    private sealed record PluginActionsResponse(bool Success, string PluginId, PluginActionView[] Actions);
+    private sealed record PluginListItem(string Id, string Name, string Version, string? Description, string? Author,
+        string Priority, string State, bool IsEnabled, bool IsSystem, bool EnabledByDefault, bool HasOptions, List<PluginAction> Actions);
     private static void MapPluginEndpoints(WebApplication app, int controlPort)
     {
         // =============== 插件管理 API ===============
@@ -51,7 +59,7 @@ public static partial class ControlApi
             {
                 return Results.Json(new { success = false, message = ex.Message }, statusCode: 400);
             }
-        }).RequireHost($"*:{controlPort}");
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         app.MapPost("/api/plugins/{pluginId}/rollback", (string pluginId, PluginPackageManager packages) =>
         {
@@ -64,242 +72,174 @@ public static partial class ControlApi
             {
                 return Results.Json(new { success = false, message = ex.Message }, statusCode: 400);
             }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<PluginPackageResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
-        app.MapGet("/api/plugins", (IPluginManager pluginManager) =>
+        app.MapGet("/api/plugins", (HttpContext context, IPluginManager pluginManager) =>
         {
-            try
+            var plugins = pluginManager.GetAllPlugins().Select(p =>
             {
-                var plugins = pluginManager.GetAllPlugins().Select(p =>
-                {
-                    var meta = p.Metadata;
-                    var pluginId = meta.Id;
-                    var actions = p.GetActions().Select(a => new
-                    {
-                        id = a.Id,
-                        name = a.Name,
-                        type = a.Type,
-                        description = a.Description,
-                        path = a.Path,
-                    }).ToList();
+                var meta = p.Metadata;
+                var pluginId = meta.Id;
+                var state = pluginManager.GetPluginState(pluginId);
+                return new PluginListItem(pluginId, meta.Name, meta.Version, meta.Description, meta.Author,
+                    meta.Priority.ToString(), state.ToString(), state is PluginState.Running or PluginState.Initialized,
+                    pluginManager.IsSystemPlugin(pluginId), meta.EnabledByDefault, meta.DefaultOptions != null, p.GetActions().ToList());
+            }).OrderBy(p => p.IsSystem ? 0 : 1).ThenBy(p => p.Name).ToList();
 
-                    return new
-                    {
-                        id = pluginId,
-                        name = meta.Name,
-                        version = meta.Version,
-                        description = meta.Description,
-                        author = meta.Author,
-                        priority = meta.Priority.ToString(),
-                        state = pluginManager.GetPluginState(pluginId).ToString(),
-                        isEnabled = pluginManager.GetPluginState(pluginId) == PluginState.Running
-                                 || pluginManager.GetPluginState(pluginId) == PluginState.Initialized,
-                        isSystem = pluginManager.IsSystemPlugin(pluginId),
-                        enabledByDefault = meta.EnabledByDefault,
-                        hasOptions = meta.DefaultOptions != null,
-                        actions,
-                    };
-                }).OrderBy(p => p.isSystem ? 0 : 1).ThenBy(p => p.name).ToList();
+            return Results.Ok(ManagementLists.From(plugins).Sort("name", item => item.Name).Sort("id", item => item.Id)
+                .Sort("state", item => item.State).Sort("isSystem", item => item.IsSystem)
+                .Search(item => $"{item.Id} {item.Name} {item.Description} {item.Author} {item.State}").Read(context.Request.Query, "name"));
+        }).Produces<ManagementPage<PluginListItem>>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
-                return Results.Json(new { success = true, plugins });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"获取插件列表失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
-
-        app.MapPost("/api/plugins/toggle", async (HttpContext ctx, IPluginManager pluginManager) =>
+        app.MapPost("/api/plugins/toggle", async (HttpContext ctx, IPluginManager pluginManager, PluginToggleRequest request) =>
         {
-            try
+
+            if (request == null || string.IsNullOrEmpty(request.PluginId))
             {
-                var request = await ctx.Request.ReadFromJsonAsync<PluginToggleRequest>();
-                if (request == null || string.IsNullOrEmpty(request.PluginId))
-                {
-                    return Results.Json(new { success = false, message = "PluginId 不能为空" }, statusCode: 400);
-                }
-
-                var plugin = pluginManager.GetPlugin(request.PluginId);
-                if (plugin == null)
-                {
-                    return Results.Json(new { success = false, message = $"插件 {request.PluginId} 不存在" }, statusCode: 404);
-                }
-
-                var currentState = pluginManager.GetPluginState(request.PluginId);
-                var isRunning = currentState == PluginState.Running || currentState == PluginState.Initialized;
-
-                if (isRunning)
-                {
-                    await pluginManager.DisablePluginAsync(request.PluginId);
-                }
-                else
-                {
-                    await pluginManager.EnablePluginAsync(request.PluginId);
-                }
-
-                var newState = pluginManager.GetPluginState(request.PluginId);
-                return Results.Json(new
-                {
-                    success = true,
-                    message = isRunning ? "插件已禁用" : "插件已启用",
-                    state = newState.ToString(),
-                    isEnabled = newState == PluginState.Running || newState == PluginState.Initialized,
-                });
+                return Results.Json(new { success = false, message = "PluginId 不能为空" }, statusCode: 400);
             }
-            catch (Exception ex)
+
+            var plugin = pluginManager.GetPlugin(request.PluginId);
+            if (plugin == null)
             {
-                return Results.Json(new { success = false, message = $"切换插件状态失败: {ex.Message}" }, statusCode: 500);
+                return Results.Json(new { success = false, message = $"插件 {request.PluginId} 不存在" }, statusCode: 404);
             }
-        }).RequireHost($"*:{controlPort}");
+
+            var currentState = pluginManager.GetPluginState(request.PluginId);
+            var isRunning = currentState == PluginState.Running || currentState == PluginState.Initialized;
+
+            if (isRunning)
+            {
+                await pluginManager.DisablePluginAsync(request.PluginId);
+            }
+            else
+            {
+                await pluginManager.EnablePluginAsync(request.PluginId);
+            }
+
+            var newState = pluginManager.GetPluginState(request.PluginId);
+            return Results.Json(new
+            {
+                success = true,
+                message = isRunning ? "插件已禁用" : "插件已启用",
+                state = newState.ToString(),
+                isEnabled = newState == PluginState.Running || newState == PluginState.Initialized,
+            });
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // =============== 插件配置读取 ===============
 
         app.MapGet("/api/plugins/{pluginId}/config", (string pluginId, IConfiguration config, IPluginManager pluginManager) =>
         {
-            try
+            var plugin = pluginManager.GetPlugin(pluginId);
+            if (plugin == null)
             {
-                var plugin = pluginManager.GetPlugin(pluginId);
-                if (plugin == null)
-                {
-                    return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
-                }
-
-                // 1. 创建一个新的 Options 实例来获取原始默认值
-                //    （因为 Metadata.DefaultOptions 是运行时实例，已被 BindOptionsFromConfig 覆盖）
-                var defaults = new Dictionary<string, string>();
-                var defaultOptions = plugin.Metadata.DefaultOptions;
-                if (defaultOptions != null)
-                {
-                    var freshDefaults = Activator.CreateInstance(defaultOptions.GetType());
-                    if (freshDefaults != null)
-                    {
-                        SerializeOptionsToFlat(freshDefaults, "", defaults);
-                    }
-                }
-
-                // 2. 从运行时 DefaultOptions 实例序列化当前配置
-                //    （它就是运行时 Options，已被 BindOptionsFromConfig 绑定过）
-                var current = new Dictionary<string, string>();
-                if (defaultOptions != null)
-                {
-                    SerializeOptionsToFlat(defaultOptions, "", current);
-                }
-
-                // 3. 提取属性的中文标签
-                var labels = defaultOptions != null
-                    ? ExtractPropertyLabels(defaultOptions.GetType())
-                    : new Dictionary<string, string>();
-
-                // 4. 提取 List<T> 元素类型的字段默认值（用于前端推断字段类型和初始值）
-                var fieldDefaults = defaultOptions != null
-                    ? ExtractListElementDefaults(defaultOptions.GetType())
-                    : new Dictionary<string, string>();
-
-                return Results.Json(new { success = true, pluginId, config = current, defaults, labels, fieldDefaults });
+                return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
             }
-            catch (Exception ex)
+
+            // 1. 创建一个新的 Options 实例来获取原始默认值
+            //    （因为 Metadata.DefaultOptions 是运行时实例，已被 BindOptionsFromConfig 覆盖）
+            var defaults = new Dictionary<string, string>();
+            var defaultOptions = plugin.Metadata.DefaultOptions;
+            if (defaultOptions != null)
             {
-                return Results.Json(new { success = false, message = $"获取插件配置失败: {ex.Message}" }, statusCode: 500);
+                var freshDefaults = Activator.CreateInstance(defaultOptions.GetType());
+                if (freshDefaults != null)
+                {
+                    SerializeOptionsToFlat(freshDefaults, "", defaults);
+                }
             }
-        }).RequireHost($"*:{controlPort}");
+
+            // 2. 从运行时 DefaultOptions 实例序列化当前配置
+            //    （它就是运行时 Options，已被 BindOptionsFromConfig 绑定过）
+            var current = new Dictionary<string, string>();
+            if (defaultOptions != null)
+            {
+                SerializeOptionsToFlat(defaultOptions, "", current);
+            }
+
+            // 3. 提取属性的中文标签
+            var labels = defaultOptions != null
+                ? ExtractPropertyLabels(defaultOptions.GetType())
+                : new Dictionary<string, string>();
+
+            // 4. 提取 List<T> 元素类型的字段默认值（用于前端推断字段类型和初始值）
+            var fieldDefaults = defaultOptions != null
+                ? ExtractListElementDefaults(defaultOptions.GetType())
+                : new Dictionary<string, string>();
+
+            return Results.Json(new { success = true, pluginId, config = current, defaults, labels, fieldDefaults });
+        }).Produces<PluginConfigResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // =============== 插件配置更新 ===============
 
-        app.MapPost("/api/plugins/{pluginId}/config", async (string pluginId, HttpContext ctx, IConfiguration config, IPluginManager pluginManager) =>
+        app.MapPost("/api/plugins/{pluginId}/config", async (string pluginId, HttpContext ctx, IConfiguration config, IPluginManager pluginManager, Dictionary<string, string> body) =>
         {
-            try
+            var plugin = pluginManager.GetPlugin(pluginId);
+            if (plugin == null)
             {
-                var plugin = pluginManager.GetPlugin(pluginId);
-                if (plugin == null)
-                {
-                    return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
-                }
-
-                var body = await ctx.Request.ReadFromJsonAsync<Dictionary<string, string>>();
-                if (body == null)
-                {
-                    return Results.Json(new { success = false, message = "请求体不能为空" }, statusCode: 400);
-                }
-
-                var result = await ModifyPluginConfigPatch(config, pluginId, pluginConfigs =>
-                {
-                    // 将 flat key-value 转为嵌套结构后写入
-                    var nested = FlatKeysToNestedDict(body);
-                    pluginConfigs[pluginId] = nested;
-                    return null;
-                });
-
-                // 配置已重载，同步绑定到 Metadata.DefaultOptions 实例上
-                // 注意：Bind() 对 List/Dictionary 是追加而非替换，必须先清空
-                if (plugin.Metadata.DefaultOptions != null)
-                {
-                    ClearCollectionProperties(plugin.Metadata.DefaultOptions);
-                    config.GetSection($"Plugins:{pluginId}").Bind(plugin.Metadata.DefaultOptions);
-                }
-
-                return result;
+                return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
             }
-            catch (Exception ex)
+
+
+            if (body == null)
             {
-                return Results.Json(new { success = false, message = $"保存插件配置失败: {ex.Message}" }, statusCode: 500);
+                return Results.Json(new { success = false, message = "请求体不能为空" }, statusCode: 400);
             }
-        }).RequireHost($"*:{controlPort}");
+
+            var result = await ModifyPluginConfigPatch(config, pluginId, pluginConfigs =>
+            {
+                // 将 flat key-value 转为嵌套结构后写入
+                var nested = FlatKeysToNestedDict(body);
+                pluginConfigs[pluginId] = nested;
+                return null;
+            });
+
+            // 配置已重载，同步绑定到 Metadata.DefaultOptions 实例上
+            // 注意：Bind() 对 List/Dictionary 是追加而非替换，必须先清空
+            if (plugin.Metadata.DefaultOptions != null)
+            {
+                ClearCollectionProperties(plugin.Metadata.DefaultOptions);
+                config.GetSection($"Plugins:{pluginId}").Bind(plugin.Metadata.DefaultOptions);
+            }
+
+            return result;
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // =============== 插件操作（统一框架） ===============
 
         // 获取插件支持的操作列表
         app.MapGet("/api/plugins/{pluginId}/actions", (string pluginId, IPluginManager pluginManager) =>
         {
-            try
-            {
-                var plugin = pluginManager.GetPlugin(pluginId);
-                if (plugin == null)
-                    return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
+            var plugin = pluginManager.GetPlugin(pluginId);
+            if (plugin == null)
+                return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
 
-                var actions = plugin.GetActions().Select(a => new
-                {
-                    id = a.Id,
-                    name = a.Name,
-                    type = a.Type,
-                    description = a.Description,
-                }).ToList();
-
-                return Results.Json(new { success = true, pluginId, actions });
-            }
-            catch (Exception ex)
+            var actions = plugin.GetActions().Select(a => new
             {
-                return Results.Json(new { success = false, message = $"获取插件操作失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+                id = a.Id,
+                name = a.Name,
+                type = a.Type,
+                description = a.Description,
+            }).ToList();
+
+            return Results.Json(new { success = true, pluginId, actions });
+        }).Produces<PluginActionsResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 执行插件操作
-        app.MapPost("/api/plugins/{pluginId}/actions/{actionId}", async (string pluginId, string actionId, HttpContext ctx, IPluginManager pluginManager) =>
+        app.MapPost("/api/plugins/{pluginId}/actions/{actionId}", async (string pluginId, string actionId, HttpContext ctx, IPluginManager pluginManager, Dictionary<string, string>? parameters) =>
         {
-            try
-            {
-                var plugin = pluginManager.GetPlugin(pluginId);
-                if (plugin == null)
-                    return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
+            var plugin = pluginManager.GetPlugin(pluginId);
+            if (plugin == null)
+                return Results.Json(new { success = false, message = $"插件 {pluginId} 不存在" }, statusCode: 404);
 
-                var actions = plugin.GetActions();
-                if (!actions.Any(a => a.Id == actionId))
-                    return Results.Json(new { success = false, message = $"插件 {pluginId} 不支持操作: {actionId}" }, statusCode: 404);
+            var actions = plugin.GetActions();
+            if (!actions.Any(a => a.Id == actionId))
+                return Results.Json(new { success = false, message = $"插件 {pluginId} 不支持操作: {actionId}" }, statusCode: 404);
 
-                // 读取参数
-                Dictionary<string, string>? parameters = null;
-                if (ctx.Request.ContentLength > 0)
-                {
-                    parameters = await ctx.Request.ReadFromJsonAsync<Dictionary<string, string>>();
-                }
-
-                var result = await plugin.ExecuteActionAsync(actionId, parameters);
-                return Results.Json(new { success = result.Success, message = result.Message, data = result.Data });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"执行插件操作失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+            var result = await plugin.ExecuteActionAsync(actionId, parameters);
+            return Results.Json(new { success = result.Success, message = result.Message, data = result.Data });
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }

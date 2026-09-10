@@ -42,38 +42,22 @@ public static partial class ControlApi
 
         app.MapGet("/api/traffic/history", (HttpContext ctx, LyWaf.Services.DuckDb.IDuckDbQueryService queryService) =>
         {
-            try
-            {
                 if (!queryService.IsEnabled)
                     return Results.Json(new { success = false, message = "DuckDB 未启用" });
 
-                var fromStr = ctx.Request.Query["from"].FirstOrDefault();
-                var toStr = ctx.Request.Query["to"].FirstOrDefault();
-                var granularity = ctx.Request.Query["granularity"].FirstOrDefault() ?? "hour";
-
-                var from = DateTime.TryParse(fromStr, out var f) ? f.ToUniversalTime() : DateTime.UtcNow.AddDays(-1);
-                var to = DateTime.TryParse(toStr, out var t) ? t.ToUniversalTime() : DateTime.UtcNow;
+                var granularity = HistoryQuery.Choice(ctx.Request.Query, "granularity", "hour", "hour", "day");
+                var (from, to) = HistoryQuery.Range(ctx.Request.Query, TimeSpan.FromDays(1));
 
                 var data = queryService.GetTrafficHistory(from, to, granularity);
                 return Results.Json(new { success = true, data, from, to, granularity });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<TrafficHistoryResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         app.MapGet("/api/security/history", (HttpContext ctx, LyWaf.Services.DuckDb.IDuckDbQueryService queryService) =>
         {
-            try
-            {
                 if (!queryService.IsEnabled)
                     return Results.Json(new { success = false, message = "DuckDB 未启用" });
 
-                var fromStr = ctx.Request.Query["from"].FirstOrDefault();
-                var toStr = ctx.Request.Query["to"].FirstOrDefault();
-                var from = DateTime.TryParse(fromStr, out var f) ? f.ToUniversalTime() : DateTime.UtcNow.AddDays(-7);
-                var to = DateTime.TryParse(toStr, out var t) ? t.ToUniversalTime() : DateTime.UtcNow;
+                var (from, to) = HistoryQuery.Range(ctx.Request.Query, TimeSpan.FromDays(7));
 
                 var data = queryService.GetSecurityTimeSlots(from, to);
                 return Results.Json(new
@@ -92,25 +76,16 @@ public static partial class ControlApi
                     }),
                     from, to,
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<SecurityHistoryResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         app.MapGet("/api/timing/history", (HttpContext ctx, LyWaf.Services.DuckDb.IDuckDbQueryService queryService) =>
         {
-            try
-            {
                 if (!queryService.IsEnabled)
                     return Results.Json(new { success = false, message = "DuckDB 未启用" });
 
-                var fromStr = ctx.Request.Query["from"].FirstOrDefault();
-                var toStr = ctx.Request.Query["to"].FirstOrDefault();
                 var pathFilter = ctx.Request.Query["path"].FirstOrDefault();
-                var from = DateTime.TryParse(fromStr, out var f) ? f.ToUniversalTime() : DateTime.UtcNow.AddDays(-1);
-                var to = DateTime.TryParse(toStr, out var t) ? t.ToUniversalTime() : DateTime.UtcNow;
+                var (from, to) = HistoryQuery.Range(ctx.Request.Query, TimeSpan.FromDays(1));
+                if (pathFilter?.Length > 8192) throw new ArgumentException("路径过长", "path");
 
                 var data = queryService.GetApiTimingHistory(from, to, pathFilter);
                 return Results.Json(new
@@ -132,35 +107,23 @@ public static partial class ControlApi
                     }),
                     from, to,
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<TimingHistoryResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         app.MapGet("/api/stats/endpoint-history", (HttpContext ctx, LyWaf.Services.DuckDb.IDuckDbQueryService queryService) =>
         {
-            try
-            {
                 if (!queryService.IsEnabled)
                     return Results.Json(new { success = false, message = "DuckDB 未启用" });
 
-                var statType = ctx.Request.Query["type"].FirstOrDefault() ?? "dest";
-                var fromStr = ctx.Request.Query["from"].FirstOrDefault();
-                var toStr = ctx.Request.Query["to"].FirstOrDefault();
-                var topN = int.TryParse(ctx.Request.Query["topN"].FirstOrDefault(), out var n) ? n : 50;
-                var from = DateTime.TryParse(fromStr, out var f) ? f.ToUniversalTime() : DateTime.UtcNow.AddDays(-1);
-                var to = DateTime.TryParse(toStr, out var t) ? t.ToUniversalTime() : DateTime.UtcNow;
+                var statType = HistoryQuery.Choice(ctx.Request.Query, "type", "dest", "dest", "req", "client");
+                var topN = 50;
+                if (ctx.Request.Query.TryGetValue("topN", out var count) &&
+                    (count.Count != 1 || !int.TryParse(count[0], out topN) || topN is < 1 or > 100))
+                    throw new ArgumentException("topN 必须在 1 到 100 之间", "topN");
+                var (from, to) = HistoryQuery.Range(ctx.Request.Query, TimeSpan.FromDays(1));
 
                 var data = queryService.GetEndpointStatsHistory(statType, from, to, topN);
                 return Results.Json(new { success = true, data, from, to, statType });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = ex.Message }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<EndpointHistoryResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }

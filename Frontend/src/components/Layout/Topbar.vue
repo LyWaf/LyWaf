@@ -6,6 +6,8 @@ import { useAuth } from '@/composables/useAuth'
 const route = useRoute()
 const router = useRouter()
 const { username, logout } = useAuth()
+defineProps<{ navigationOpen?: boolean }>()
+defineEmits<{ toggleNavigation: [] }>()
 
 const breadcrumbs = computed(() => {
   const items = [{ name: 'LyWaf', path: '/' }]
@@ -29,9 +31,10 @@ const handleLogout = () => {
 </script>
 
 <template>
-  <header class="h-14 bg-dark-bg-secondary border-b border-dark-border px-6 flex items-center justify-between sticky top-0 z-40">
+  <header class="h-14 shrink-0 bg-dark-bg-secondary border-b border-dark-border px-3 md:px-6 flex items-center justify-between gap-2 sticky top-0 z-40 min-w-0">
+    <button class="md:hidden shrink-0 w-9 h-9 bg-dark-card border border-dark-border rounded" title="导航菜单" aria-label="导航菜单" :aria-expanded="navigationOpen" @click="$emit('toggleNavigation')">&#9776;</button>
     <!-- 面包屑 -->
-    <nav class="flex items-center gap-2 text-sm">
+    <nav class="flex items-center gap-2 text-sm min-w-0">
       <template v-for="(item, index) in breadcrumbs" :key="item.path">
         <span v-if="index > 0" class="text-gray-600">›</span>
         <span
@@ -51,15 +54,15 @@ const handleLogout = () => {
     </nav>
 
     <!-- 右侧状态 -->
-    <div class="flex items-center gap-4">
-      <span v-if="username" class="text-sm text-gray-400">{{ username }}</span>
+    <div class="flex items-center gap-2 md:gap-4 shrink-0">
+      <span v-if="username" class="hidden md:inline text-sm text-gray-400">{{ username }}</span>
       <button
         @click="handleLogout"
         class="text-xs text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded hover:bg-white/5"
       >
         退出登录
       </button>
-      <div class="flex items-center gap-2 text-sm border-l border-dark-border pl-4">
+      <div class="hidden md:flex items-center gap-2 text-sm border-l border-dark-border pl-4">
         <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse-dot"></span>
         <span class="text-gray-300">运行中</span>
       </div>

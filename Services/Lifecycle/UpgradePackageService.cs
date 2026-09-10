@@ -77,6 +77,7 @@ public sealed class UpgradePackageService(IOptions<UpgradeOptions> options)
         start.Environment["WafInfos__ControlListen__IsHttps"] = "false";
         start.Environment["Plugins__Enabled"] = "false";
         start.Environment["DuckDb__Enabled"] = "false";
+        start.Environment["Lifecycle__ReadinessProbe"] = "true";
         start.Environment["Acme__Enabled"] = "false";
         start.Environment["ProxyServer__Enabled"] = "false";
         start.Environment["StreamServer__Enabled"] = "false";

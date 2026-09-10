@@ -1,3 +1,4 @@
+using LyWaf.Services.Auth;
 using LyWaf.Control.Infrastructure;
 using LyWaf.Services.AuditLog;
 using LyWaf.Services.ResponseWaf;
@@ -11,8 +12,8 @@ public static class ResponseWafEndpoints
 {
     public static IEndpointRouteBuilder MapResponseWafEndpoints(this IEndpointRouteBuilder app, int controlPort)
     {
-        var group = app.MapGroup("/api/response-waf").RequireHost($"*:{controlPort}");
-        group.MapGet("", (IOptionsMonitor<ResponseWafOptions> options) => Results.Json(new
+        var group = app.MapGroup("/api/response-waf").RequireHost($"*:{controlPort}").RequireManagementPermission();
+        group.MapGet("", (IOptionsMonitor<ResponseWafOptions> options) => TypedResults.Ok(new
             { success = true, config = options.CurrentValue }));
         group.MapPut("", UpdateAsync);
         return app;

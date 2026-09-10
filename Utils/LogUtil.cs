@@ -266,6 +266,7 @@ public static partial class LogUtil
                 Name = f.Name,
                 Size = f.Length,
                 LastModified = f.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                ModifiedAt = f.LastWriteTimeUtc,
             })
             .ToList();
     }
@@ -327,4 +328,5 @@ public class LogFile
     public string Name { get; set; } = "";
     public long Size { get; set; }
     public string LastModified { get; set; } = "";
+    public DateTimeOffset ModifiedAt { get; set; }
 }

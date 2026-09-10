@@ -528,7 +528,7 @@ public static partial class ControlApi
 
     // =============== 补丁文件辅助方法 ===============
 
-    private static readonly SemaphoreSlim _lbPatchLock = new(1, 1);
+    private static readonly SemaphoreSlim _lbPatchLock = ConfigurationMutationGate.Patch;
 
     /// <summary>
     /// 读取补丁文件并反序列化为可操作的字典
@@ -649,8 +649,12 @@ public static partial class ControlApi
                 var versions = ServiceLocator.GetRequiredService<ConfigVersionService>()
                     ?? throw new InvalidOperationException("配置版本服务尚未初始化");
                 await versions.RollbackAsync(version.PreviousVersionId);
-                root.Reload();
             }
+            else
+            {
+                File.Delete(version.TargetPath);
+            }
+            root.Reload();
             throw;
         }
     }

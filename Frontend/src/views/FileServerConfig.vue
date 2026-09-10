@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { fileServerApi } from '@/api'
+import ListToolbar from '@/components/common/ListToolbar.vue'
 import { useToast } from '@/composables/useToast'
 import type { FileServerItem } from '@/types'
 
@@ -9,6 +10,10 @@ const { showSuccess, showError } = useToast()
 // 数据状态
 const loading = ref(false)
 const items = ref<FileServerItem[]>([])
+const page = ref(1)
+const total = ref(0)
+const search = ref('')
+let listRequest = 0
 
 // 对话框状态
 const showDialog = ref(false)
@@ -27,16 +32,18 @@ const form = ref({
 
 // 加载数据
 const loadData = async () => {
+  const request = ++listRequest
   loading.value = true
   try {
-    const res = await fileServerApi.getItems()
-    if (res.success) {
-      items.value = res.items
+    const res = await fileServerApi.list(page.value, search.value)
+    if (request === listRequest && res.success) {
+      items.value = res.data
+      total.value = res.total
     }
   } catch (error) {
-    showError('加载文件服务配置失败')
+    if (request === listRequest) showError('加载文件服务配置失败')
   } finally {
-    loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
 
@@ -185,6 +192,7 @@ onMounted(loadData)
       </div>
 
       <!-- 表格 -->
+      <ListToolbar v-model:page="page" v-model:search="search" :total="total" :busy="loading" @refresh="loadData" />
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
           <thead>

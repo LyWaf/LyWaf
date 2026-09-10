@@ -87,6 +87,7 @@ public class WafUtil
         // 记录拦截统计
         if (isIntercept)
         {
+            context.Items["LyWaf.InterceptReason"] = extraValues?.GetValueOrDefault("reason") ?? eventType?.ToString() ?? "access-control";
             StatisticUtil.RecordIntercept(context, statusCode, isAttack);
             
             // 记录安全事件

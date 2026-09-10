@@ -5,6 +5,7 @@ using LyWaf.Services.Configuration;
 using Microsoft.Extensions.Options;
 using NLog;
 using System.Collections.Concurrent;
+using LyWaf.Services.ManagementTasks;
 
 namespace LyWaf.Services.Distribution;
 
@@ -12,12 +13,15 @@ namespace LyWaf.Services.Distribution;
 public sealed class DistributionControllerService(
     IOptionsMonitor<DistributionOptions> options,
     ConfigVersionService versions,
-    IDistributionNodeClient nodeClient)
+    IDistributionNodeClient nodeClient,
+    ManagementJobService? jobs = null,
+    IHttpContextAccessor? contextAccessor = null)
 {
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly Dictionary<string, ConfigurationDeployment> _deployments = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, ConfigurationDeployment> _deployments = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _scheduleGate = new();
     private readonly ConcurrentDictionary<string, byte> _running = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _pauseRequested = new(StringComparer.OrdinalIgnoreCase);
     private bool _loaded;
@@ -25,11 +29,30 @@ public sealed class DistributionControllerService(
     public async Task<IReadOnlyList<ConfigurationDeployment>> ListAsync(CancellationToken cancellationToken)
     {
         await EnsureLoadedAsync(cancellationToken);
-        return _deployments.Values.OrderByDescending(x => x.CreatedAt).ToArray();
+        var tasks = jobs?.List() ?? [];
+        return _deployments.Values.OrderByDescending(x => x.CreatedAt).Select(deployment =>
+        {
+            var task = tasks.FirstOrDefault(t => t.Kind == "node-synchronization" && t.ResourceIds.Contains(deployment.Id));
+            if (task == null) return deployment;
+            return deployment with
+            {
+                TaskId = task.Id,
+                State = deployment.State is "Paused" or "RolledBack" ? deployment.State : task.State switch
+                {
+                    ManagementJobState.Queued => "Queued",
+                    ManagementJobState.Cancelled => "Paused",
+                    ManagementJobState.Failed or ManagementJobState.TimedOut => "Failed",
+                    _ => deployment.State
+                }
+            };
+        }).ToArray();
     }
 
     public async Task<ConfigurationDeployment> CreateAsync(CreateDistributionRequest request, CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(request.VersionId) || request.VersionId.Length > 200 ||
+            request.NodeIds?.Count > 100 || request.NodeIds?.Any(n => string.IsNullOrWhiteSpace(n) || n.Length > 200) == true)
+            throw new ArgumentException("版本或节点列表无效，最多选择 100 个节点");
         EnsureController();
         await EnsureLoadedAsync(cancellationToken);
         var content = await versions.GetVersionContentAsync(request.VersionId, cancellationToken)
@@ -47,19 +70,22 @@ public sealed class DistributionControllerService(
             "Running", Math.Clamp(request.CanaryCount, 1, order.Length), Math.Max(1, request.BatchSize),
             request.PauseAfterEachBatch, 0, order, targets);
         await StoreAsync(deployment, cancellationToken);
-        Schedule(id);
+        await ScheduleAsync(id);
         return deployment;
     }
 
     public async Task<ConfigurationDeployment> ResumeAsync(string id, CancellationToken cancellationToken)
     {
         await EnsureLoadedAsync(cancellationToken);
+        if (_running.ContainsKey(id) || jobs?.List().Any(t => t.Kind == "node-synchronization" && t.ResourceIds.Contains(id) &&
+            t.State is ManagementJobState.Queued or ManagementJobState.Running) == true)
+            throw new InvalidOperationException("同步任务仍在运行或排队，请等待结束后再继续");
         var deployment = Get(id);
         if (deployment.State is "Completed" or "RolledBack") throw new InvalidOperationException($"任务状态 {deployment.State} 不能继续");
         _pauseRequested.TryRemove(id, out _);
         deployment = deployment with { State = "Running" };
         await StoreAsync(deployment, cancellationToken);
-        Schedule(id);
+        await ScheduleAsync(id);
         return deployment;
     }
 
@@ -82,7 +108,10 @@ public sealed class DistributionControllerService(
         await StoreAsync(deployment, cancellationToken);
         foreach (var nodeId in deployment.NodeOrder.Where(x => deployment.Targets[x].State == "Ack"))
         {
-            var ack = await nodeClient.CommandAsync(nodeId, "rollback", new DistributionCommandRequest(id), cancellationToken);
+            NodeAcknowledgement ack;
+            try { ack = await nodeClient.CommandAsync(nodeId, "rollback", new DistributionCommandRequest(id), cancellationToken); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception ex) { ack = new(false, nodeId, id, "rollback", Error: ex.Message); }
             deployment = UpdateTarget(deployment, nodeId, ack.Ack ? "RolledBack" : "RollbackNack", ack.ConfigVersionId, ack.Error);
             await StoreAsync(deployment, cancellationToken);
         }
@@ -162,14 +191,17 @@ public sealed class DistributionControllerService(
                     if (ack.Ack) committed.Add(nodeId);
                     else
                     {
+                        using var rollbackTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                         foreach (var applied in committed)
                         {
-                            var rollback = await nodeClient.CommandAsync(applied, "rollback", new(deployment.Id), cancellationToken);
+                            NodeAcknowledgement rollback;
+                            try { rollback = await nodeClient.CommandAsync(applied, "rollback", new(deployment.Id), rollbackTimeout.Token); }
+                            catch (Exception ex) { rollback = new(false, applied, deployment.Id, "rollback", Error: ex.Message); }
                             deployment = UpdateTarget(deployment, applied, rollback.Ack ? "RolledBack" : "RollbackNack",
                                 rollback.ConfigVersionId, rollback.Error);
                         }
                         deployment = deployment with { State = "Failed" };
-                        await StoreAsync(deployment, cancellationToken);
+                        await StoreAsync(deployment, CancellationToken.None);
                         return;
                     }
                 }
@@ -191,9 +223,45 @@ public sealed class DistributionControllerService(
         finally { _running.TryRemove(id, out _); }
     }
 
-    private void Schedule(string id)
+    private async Task ScheduleAsync(string id)
     {
-        if (_running.TryAdd(id, 0)) _ = Task.Run(() => ProcessAsync(id, CancellationToken.None));
+        if (jobs == null)
+        {
+            if (_running.TryAdd(id, 0)) _ = Task.Run(() => ProcessAsync(id, CancellationToken.None));
+            return;
+        }
+        try
+        {
+            lock (_scheduleGate)
+            {
+                if (jobs.List().Any(t => t.Kind == "node-synchronization" && t.ResourceIds.Contains(id) &&
+                    t.State is ManagementJobState.Queued or ManagementJobState.Running)) return;
+                var actor = contextAccessor?.HttpContext?.Items["Username"]?.ToString() ?? "system";
+                jobs.Enqueue("node-synchronization", actor, async (log, token) =>
+                {
+                    if (!_running.TryAdd(id, 0)) throw new InvalidDataException("节点同步仍在运行");
+                    try
+                    {
+                        var deployment = Get(id);
+                        if (deployment.State == "Failed") await StoreAsync(deployment with { State = "Running" }, token);
+                        log($"开始节点同步: {id}");
+                        await ProcessAsync(id, token);
+                        token.ThrowIfCancellationRequested();
+                        deployment = Get(id);
+                        foreach (var target in deployment.Targets.Values)
+                            log($"{target.NodeId}: {target.State}{(target.Error == null ? "" : " - " + target.Error)}");
+                        if (deployment.State == "Failed") throw new InvalidDataException("节点同步失败，请查看逐节点结果");
+                        log($"本次批次完成，分发状态: {deployment.State}");
+                    }
+                    finally { _running.TryRemove(id, out _); }
+                }, TimeSpan.FromMinutes(30), [id]);
+            }
+        }
+        catch
+        {
+            await StoreAsync(Get(id) with { State = "Failed" }, CancellationToken.None);
+            throw;
+        }
     }
 
     private async Task EnsureLoadedAsync(CancellationToken cancellationToken)

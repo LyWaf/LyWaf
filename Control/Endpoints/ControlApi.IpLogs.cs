@@ -32,6 +32,16 @@ namespace LyWaf.Control;
 
 public static partial class ControlApi
 {
+    private sealed record IpMonitoringResponse(bool Success, string Message, string Ip, DateTime Timestamp);
+    private sealed record IpLogDeletedResponse(bool Success, string Message, DateTime Timestamp);
+    private sealed record IpLogPage : ManagementPage<LogEntry>
+    {
+        public long FileSize { get; }
+        public IpLogPage(ManagementPage<LogEntry> page, long fileSize)
+            : base(page.Success, page.Data, page.Total, page.Page, page.PageSize, page.SortBy, page.SortDirection)
+            => FileSize = fileSize;
+    }
+
     private static void MapIpLogEndpoints(WebApplication app, int controlPort)
     {
         // =============== IP 请求日志 API ===============
@@ -56,21 +66,19 @@ public static partial class ControlApi
                 .OrderBy(x => x.ip)
                 .ToList();
 
-            return Results.Json(new
-            {
-                success = true,
-                count = targets.Count,
-                targets = targets,
-                timestamp = DateTime.Now
-            });
-        }).RequireHost($"*:{controlPort}");
+            return TypedResults.Ok(ManagementLists.From(targets)
+                .Sort("ip", item => item.ip)
+                .Sort("addedAt", item => item.addedAt)
+                .Sort("logFileSize", item => item.logFileSize)
+                .Search(item => item.ip)
+                .Timestamp(item => new DateTimeOffset(item.addedAt))
+                .Read(ctx.Request.Query, "ip"));
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 添加 IP 到请求日志监控
-        app.MapPost("/api/ip-log/add", async (HttpContext ctx) =>
+        app.MapPost("/api/ip-log/add", (HttpContext ctx, IpLogRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<IpLogRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Ip))
                 {
                     return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
@@ -87,19 +95,12 @@ public static partial class ControlApi
                     ip = ip,
                     timestamp = DateTime.Now
                 });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"添加失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+        }).Produces<IpMonitoringResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 停止 IP 请求日志监控
-        app.MapPost("/api/ip-log/remove", async (HttpContext ctx) =>
+        app.MapPost("/api/ip-log/remove", (HttpContext ctx, IpLogRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<IpLogRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Ip))
                 {
                     return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
@@ -114,53 +115,25 @@ public static partial class ControlApi
                     message = removed ? $"已停止记录 IP: {ip}" : "IP 不在监控列表中",
                     ip = ip,
                     timestamp = DateTime.Now
-                });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"移除失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+                }, statusCode: removed ? 200 : 404);
+        }).Produces<IpMonitoringResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 读取 IP 的请求日志（分页，按条目解析）
-        app.MapGet("/api/ip-log/read/{ip}", async (HttpContext ctx, string ip, int offset = 0, int limit = 50) =>
+        app.MapGet("/api/ip-log/read/{ip}", async (HttpContext ctx, string ip) =>
         {
-            var (exists, sizeBytes, lastWriteTime) = IpRequestLogger.GetLogFileInfo(ip);
-            if (!exists)
-            {
-                return Results.Json(new
-                {
-                    success = true,
-                    ip = ip,
-                    entries = Array.Empty<object>(),
-                    total = 0,
-                    fileSize = 0L,
-                    timestamp = DateTime.Now
-                });
-            }
-
-            var entries = await IpRequestLogger.ReadEntriesAsync(ip, offset, limit);
-            var total = await IpRequestLogger.CountEntriesAsync(ip);
-
-            return Results.Json(new
-            {
-                success = true,
-                ip = ip,
-                entries = entries,
-                total = total,
-                offset = offset,
-                limit = limit,
-                fileSize = sizeBytes,
-                timestamp = DateTime.Now
-            });
-        }).RequireHost($"*:{controlPort}");
+            if (!System.Net.IPAddress.TryParse(ip, out _)) throw new ArgumentException("IP 地址无效", "ip");
+            var query = ManagementListQuery.Parse(ctx.Request.Query, ["time"], "time", descending: true);
+            var path = IpRequestLogger.GetLogFilePath(ip);
+            if (!File.Exists(path)) return TypedResults.Ok(new IpLogPage(query.Result<LogEntry>([], 0), 0));
+            using var scanner = new ReverseLogScanner(path);
+            var size = new FileInfo(path).Length;
+            return TypedResults.Ok(new IpLogPage(await scanner.QueryAsync(query, ctx.RequestAborted), size));
+        }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // 删除 IP 的日志文件
-        app.MapPost("/api/ip-log/delete-file", async (HttpContext ctx) =>
+        app.MapPost("/api/ip-log/delete-file", (HttpContext ctx, IpLogRequest request) =>
         {
-            try
-            {
-                var request = await ctx.Request.ReadFromJsonAsync<IpLogRequest>();
+
                 if (request == null || string.IsNullOrWhiteSpace(request.Ip))
                 {
                     return Results.Json(new { success = false, message = "IP 不能为空" }, statusCode: 400);
@@ -174,14 +147,8 @@ public static partial class ControlApi
                     success = deleted,
                     message = deleted ? $"已删除 {ip} 的日志文件" : "日志文件不存在",
                     timestamp = DateTime.Now
-                });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { success = false, message = $"删除失败: {ex.Message}" }, statusCode: 500);
-            }
-        }).RequireHost($"*:{controlPort}");
+                }, statusCode: deleted ? 200 : 404);
+        }).Produces<IpLogDeletedResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
     }
 }
-

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
+import ListToolbar from '@/components/common/ListToolbar.vue'
 import { paramApi } from '@/api'
 import { useToast } from '@/composables/useToast'
 
@@ -14,13 +15,10 @@ const envLoading = ref(false)
 const envItems = ref<Array<{ key: string; value: string }>>([])
 const envFilter = ref('')
 
-const filteredEnvItems = computed(() => {
-  if (!envFilter.value) return envItems.value
-  const q = envFilter.value.toLowerCase()
-  return envItems.value.filter(
-    item => item.key.toLowerCase().includes(q) || item.value.toLowerCase().includes(q)
-  )
-})
+const envPage = ref(1)
+const envTotal = ref(0)
+let envRequest = 0
+onBeforeUnmount(() => { envRequest++ })
 
 const loadConfig = async () => {
   loading.value = true
@@ -37,16 +35,23 @@ const loadConfig = async () => {
 }
 
 const loadEnv = async () => {
+  const request = ++envRequest
   envLoading.value = true
   try {
-    const res = await paramApi.getEnv() as any
+    const res = await paramApi.getEnv(envPage.value, envFilter.value)
+    if (request !== envRequest) return
     if (res?.success) {
-      envItems.value = res.items
+      envItems.value = res.data
+      envTotal.value = res.total
+      if (!res.data.length && envPage.value > 1) {
+        envPage.value = Math.max(1, Math.ceil(res.total / 20))
+        await loadEnv()
+      }
     }
   } catch {
-    showError('加载环境变量失败')
+    if (request === envRequest) showError('加载环境变量失败')
   } finally {
-    envLoading.value = false
+    if (request === envRequest) envLoading.value = false
   }
 }
 
@@ -134,23 +139,10 @@ onMounted(() => {
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
           <h3 class="text-sm font-medium text-gray-300">环境变量</h3>
-          <span class="text-xs text-gray-500">共 {{ envItems.length }} 个</span>
-        </div>
-        <div class="flex items-center gap-2">
-          <input
-            v-model="envFilter"
-            type="text"
-            class="input text-xs !py-1.5 !px-3 w-56"
-            placeholder="搜索变量名或值..."
-          />
-          <button @click="loadEnv" class="btn btn-sm btn-primary flex items-center gap-1.5">
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            刷新
-          </button>
+          <span class="text-xs text-gray-500">共 {{ envTotal }} 个</span>
         </div>
       </div>
+      <ListToolbar v-model:page="envPage" v-model:search="envFilter" :total="envTotal" :busy="envLoading" @refresh="loadEnv" />
 
       <!-- 加载 -->
       <div v-if="envLoading" class="flex items-center justify-center py-12">
@@ -158,7 +150,7 @@ onMounted(() => {
       </div>
 
       <!-- 环境变量表格 -->
-      <div v-else-if="filteredEnvItems.length > 0" class="overflow-x-auto max-h-[500px] overflow-y-auto">
+      <div v-else-if="envItems.length > 0" class="overflow-x-auto max-h-[500px] overflow-y-auto">
         <table class="w-full text-sm">
           <thead class="sticky top-0 z-10">
             <tr class="text-left text-gray-400 border-b border-dark-border bg-dark-card">
@@ -168,7 +160,7 @@ onMounted(() => {
           </thead>
           <tbody>
             <tr
-              v-for="item in filteredEnvItems"
+              v-for="item in envItems"
               :key="item.key"
               class="border-b border-dark-border/50 hover:bg-white/[0.02]"
             >

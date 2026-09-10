@@ -15,6 +15,21 @@ namespace LyWaf.Tests;
 public sealed class DistributionAuthenticationTests
 {
     [Fact]
+    public async Task ChunkedRequestStopsReadingAtConfiguredLimit()
+    {
+        var options = new DistributionOptions { Enabled = true, Role = "Node", SharedSecret = "test-secret", MaxConfigBytes = 1024 };
+        var auth = new DistributionAuthentication(new StaticOptionsMonitor<DistributionOptions>(options));
+        var bytes = new byte[100000];
+        using var signed = new HttpRequestMessage(HttpMethod.Post, "http://node/");
+        DistributionAuthentication.Sign(signed, "prepare", options.SharedSecret, bytes);
+        var context = CreateContext(bytes, signed);
+        context.Request.ContentLength = null;
+        var (_, error) = await auth.ReadAndVerifyAsync<DistributionCommandRequest>(context, "prepare", default);
+        Assert.Equal("请求体超过节点限制", error);
+        Assert.True(context.Request.Body.Position <= 16384);
+    }
+
+    [Fact]
     public async Task SignedRequestIsAcceptedOnceAndReplayIsRejected()
     {
         var options = new DistributionOptions { Enabled = true, Role = "Node", SharedSecret = "test-secret" };
@@ -175,7 +190,34 @@ public sealed class DistributionControllerServiceTests
         });
     }
 
-    private static async Task WithControllerAsync(Func<DistributionControllerService, FakeNodeClient, string, Task> test)
+    [Fact]
+    public async Task ProductionQueueExposesUnifiedTaskId()
+    {
+        await WithControllerAsync(async (controller, client, versionId) =>
+        {
+            var created = await controller.CreateAsync(new(versionId, NodeIds: ["node-1"], PauseAfterEachBatch: false), default);
+            var completed = await WaitForAsync(controller, created.Id, x => x.State == "Completed");
+            Assert.NotNull(completed.TaskId);
+            Assert.Contains("node-1", client.Committed);
+        }, true);
+    }
+
+    [Fact]
+    public async Task RollbackFailureStillAttemptsOtherCommittedNodes()
+    {
+        await WithControllerAsync(async (controller, client, versionId) =>
+        {
+            client.CommitNackNode = "node-3";
+            client.RollbackThrowNode = "node-1";
+            var created = await controller.CreateAsync(new(versionId, CanaryCount: 3, BatchSize: 3, PauseAfterEachBatch: false), default);
+            var failed = await WaitForAsync(controller, created.Id, item => item.State == "Failed");
+            Assert.Contains("node-2", client.RolledBack);
+            Assert.Equal("RollbackNack", failed.Targets["node-1"].State);
+            Assert.Equal("RolledBack", failed.Targets["node-2"].State);
+        });
+    }
+
+    private static async Task WithControllerAsync(Func<DistributionControllerService, FakeNodeClient, string, Task> test, bool useJobs = false)
     {
         var oldPath = SharedData.ConfigFilePath;
         var directory = Path.Combine(Path.GetTempPath(), "lywaf-controller-" + Guid.NewGuid().ToString("N"));
@@ -183,6 +225,8 @@ public sealed class DistributionControllerServiceTests
         var configPath = Path.Combine(directory, "config.yaml");
         await File.WriteAllTextAsync(configPath, "Feature:\n  Value: old\n");
         SharedData.ConfigFilePath = configPath;
+        using var jobs = new LyWaf.Services.ManagementTasks.ManagementJobService();
+        if (useJobs) await jobs.StartAsync(default);
         try
         {
             var versions = new ConfigVersionService(new HttpContextAccessor());
@@ -199,11 +243,12 @@ public sealed class DistributionControllerServiceTests
             };
             var client = new FakeNodeClient();
             var controller = new DistributionControllerService(
-                new StaticOptionsMonitor<DistributionOptions>(opts), versions, client);
+                new StaticOptionsMonitor<DistributionOptions>(opts), versions, client, useJobs ? jobs : null);
             await test(controller, client, version.Id);
         }
         finally
         {
+            if (useJobs) await jobs.StopAsync(default);
             SharedData.ConfigFilePath = oldPath;
             Directory.Delete(directory, true);
         }
@@ -228,6 +273,7 @@ public sealed class DistributionControllerServiceTests
         public List<string> RolledBack { get; } = [];
         public string? PrepareNackNode { get; set; }
         public string? CommitNackNode { get; set; }
+        public string? RollbackThrowNode { get; set; }
 
         public Task<NodeAcknowledgement> PrepareAsync(string nodeId, PrepareConfigurationRequest request, CancellationToken cancellationToken)
         {
@@ -240,6 +286,7 @@ public sealed class DistributionControllerServiceTests
         {
             if (operation == "commit") Committed.Add(nodeId);
             if (operation == "rollback") RolledBack.Add(nodeId);
+            if (operation == "rollback" && nodeId == RollbackThrowNode) throw new HttpRequestException("unreachable node");
             var ack = operation != "commit" || nodeId != CommitNackNode;
             return Task.FromResult(new NodeAcknowledgement(ack, nodeId, request.DeploymentId, operation,
                 ConfigVersionId: ack ? "local-version" : null, Error: ack ? null : "commit failed"));

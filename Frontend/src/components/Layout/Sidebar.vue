@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { pcapApi } from '@/api'
+import { useAuth } from '@/composables/useAuth'
 
 interface MenuItem {
   path?: string
@@ -14,6 +15,7 @@ interface MenuItem {
 
 const route = useRoute()
 const router = useRouter()
+const { can } = useAuth()
 
 const proxyEnabled = ref(false)
 
@@ -27,6 +29,12 @@ onMounted(async () => {
 })
 
 const menuItems: MenuItem[] = [
+  { path: '/notifications', name: '通知告警', condition: () => can('system.manage') },
+  { path: '/backups', name: '配置备份', condition: () => can('system.manage') },
+  { path: '/security-incidents', name: '事件处置' },
+  { path: '/sites', name: '站点管理', condition: () => can('system.manage') },
+  { path: '/system-health', name: '系统健康', condition: () => can('system.manage') },
+  { path: '/management-tasks', name: '任务中心', condition: () => can('system.manage') },
   { path: '/', name: '统计报表', icon: '📊' },
   { path: '/security', name: '安全态势', icon: '🛡️' },
   { path: '/feature-status', name: '防护应用', icon: '⚙️' },
@@ -123,10 +131,10 @@ const scrollToSection = (sectionId: string) => {
         <template v-if="!item.condition || item.condition()">
         <!-- 带子菜单的项 -->
         <div v-if="item.children" class="mb-1">
-          <div 
+          <button type="button" :aria-expanded="expandedGroups.has(item.name)"
             @click="toggleGroup(item)"
             :class="[
-              'flex items-center gap-3 px-5 py-3 cursor-pointer transition-colors text-sm border-l-[3px]',
+              'w-full text-left flex items-center gap-3 px-5 py-3 cursor-pointer transition-colors text-sm border-l-[3px]',
               isGroupActive(item)
                 ? 'bg-primary-500/5 text-primary-400 border-l-primary-500/50'
                 : 'text-gray-400 border-l-transparent hover:bg-white/5 hover:text-gray-200'
@@ -138,34 +146,34 @@ const scrollToSection = (sectionId: string) => {
               class="text-xs transition-transform duration-200"
               :class="expandedGroups.has(item.name) ? 'rotate-90' : ''"
             >›</span>
-          </div>
+          </button>
           <div v-show="expandedGroups.has(item.name)" class="overflow-hidden">
             <template
               v-for="child in item.children"
               :key="child.name"
             >
-            <div
+            <button type="button"
               v-if="!child.condition || child.condition()"
               @click="handleClick(child)"
               :class="[
-                'flex items-center gap-3 pl-12 pr-5 py-2 cursor-pointer transition-colors text-sm border-l-[3px]',
+                'w-full text-left flex items-center gap-3 pl-12 pr-5 py-2 cursor-pointer transition-colors text-sm border-l-[3px]',
                 isActive(child)
                   ? 'bg-primary-500/10 text-primary-500 border-l-primary-500'
                   : 'text-gray-500 border-l-transparent hover:bg-white/5 hover:text-gray-300'
               ]"
             >
               <span>{{ child.name }}</span>
-            </div>
+            </button>
             </template>
           </div>
         </div>
         
         <!-- 普通菜单项 -->
-        <div
+        <button type="button"
           v-else
           @click="handleClick(item)"
           :class="[
-            'flex items-center gap-3 px-5 py-3 cursor-pointer transition-colors text-sm border-l-[3px]',
+            'w-full text-left flex items-center gap-3 px-5 py-3 cursor-pointer transition-colors text-sm border-l-[3px]',
             isActive(item) 
               ? 'bg-primary-500/10 text-primary-500 border-l-primary-500' 
               : 'text-gray-400 border-l-transparent hover:bg-white/5 hover:text-gray-200'
@@ -173,7 +181,7 @@ const scrollToSection = (sectionId: string) => {
         >
           <span class="w-5 text-center">{{ item.icon }}</span>
           <span class="flex-1">{{ item.name }}</span>
-        </div>
+        </button>
         </template>
       </template>
     </nav>

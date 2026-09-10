@@ -35,10 +35,10 @@ public sealed class DistributionPermissionOptions
 
 /// <summary>控制节点创建分发任务时使用的灰度批次参数。</summary>
 public sealed record CreateDistributionRequest(
-    string VersionId,
-    IReadOnlyList<string>? NodeIds = null,
-    int CanaryCount = 1,
-    int BatchSize = 10,
+    [property: System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(200)] string VersionId,
+    [property: System.ComponentModel.DataAnnotations.MaxLength(100)] IReadOnlyList<string>? NodeIds = null,
+    [property: System.ComponentModel.DataAnnotations.Range(1, 100)] int CanaryCount = 1,
+    [property: System.ComponentModel.DataAnnotations.Range(1, 100)] int BatchSize = 10,
     bool PauseAfterEachBatch = true);
 
 /// <summary>控制节点发送给目标节点的候选配置，其中内容摘要用于完整性校验。</summary>
@@ -80,7 +80,8 @@ public sealed record ConfigurationDeployment(
     bool PauseAfterEachBatch,
     int NextIndex,
     IReadOnlyList<string> NodeOrder,
-    IReadOnlyDictionary<string, DistributionTargetState> Targets);
+    IReadOnlyDictionary<string, DistributionTargetState> Targets,
+    string? TaskId = null);
 
 /// <summary>目标节点公开的运行版本与最近分发状态。</summary>
 public sealed record DistributionNodeStatus(
