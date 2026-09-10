@@ -13,7 +13,7 @@ public sealed record ManagementHealthSnapshot(DateTimeOffset CapturedAt, Managem
     string[] Listeners, ManagementUpstreamHealth[]? Upstreams, IReadOnlyList<CertificateStatusSnapshot>? Certificates,
     string Database, ManagementDiskHealth Disk, RulePackageState? Rules, ManagementQueueHealth Queue);
 public sealed record ManagementProcessHealth(int Id, DateTime StartedAt, long MemoryBytes, int Threads);
-public sealed record ManagementUpstreamHealth(string Cluster, string Destination, string Active, string Passive, int Connections);
+public sealed record ManagementUpstreamHealth(string Cluster, string Destination, string Active, string Passive, int Connections, string Address, string[] Hosts);
 public sealed record ManagementDiskHealth(long? AvailableBytes, long? CapacityBytes);
 public sealed record ManagementQueueHealth(int Queued, int Running, int Failed);
 
@@ -24,9 +24,13 @@ public sealed class ManagementHealthService(IServiceProvider services, Managemen
     {
         using var process = Process.GetCurrentProcess();
         var proxy = services.GetService<IProxyStateLookup>();
+        var hosts = proxy?.GetRoutes().Select(r => r.Config).Where(r => r.ClusterId != null)
+            .GroupBy(r => r.ClusterId!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.SelectMany(r => r.Match.Hosts is { Count: > 0 } names ? names : new[] { "*" })
+                .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(h => h, StringComparer.OrdinalIgnoreCase).ToArray(), StringComparer.OrdinalIgnoreCase);
         var upstreams = proxy?.GetClusters().SelectMany(cluster => cluster.Destinations.Values.Select(destination => new ManagementUpstreamHealth(
             cluster.ClusterId, destination.DestinationId, destination.Health.Active.ToString(), destination.Health.Passive.ToString(),
-            destination.ConcurrentRequestCount))).ToArray();
+            destination.ConcurrentRequestCount, destination.Model.Config.Address, hosts?.GetValueOrDefault(cluster.ClusterId) ?? []))).ToArray();
         var certificates = services.GetService<IAcmeService>()?.GetCertificateStatuses();
         var listeners = services.GetService<IServer>()?.Features.Get<IServerAddressesFeature>()?.Addresses.ToArray() ?? [];
         long? available = null;

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using LyWaf.Policy;
 using LyWaf.Services.Metrics;
 using LyWaf.Services.Telemetry;
 using Yarp.ReverseProxy.Forwarder;
@@ -55,6 +56,29 @@ internal sealed class RetryHandler(
     private readonly RetryBudget _budget = new();
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        try { return await SendWithRetriesAsync(request, cancellationToken); }
+        catch (HttpRequestException) when (HealthProbeRequestOptions.Contains(request) || !cancellationToken.IsCancellationRequested)
+        {
+            return FailureResponse(request, HttpStatusCode.BadGateway);
+        }
+        catch (OperationCanceledException) when (HealthProbeRequestOptions.Contains(request) || !cancellationToken.IsCancellationRequested)
+        {
+            return FailureResponse(request, HttpStatusCode.GatewayTimeout);
+        }
+    }
+
+    private HttpResponseMessage FailureResponse(HttpRequestMessage request, HttpStatusCode status)
+    {
+        metrics.RecordRetry(clusterId, Authority(request), status == HttpStatusCode.BadGateway ? "upstream_unavailable" : "upstream_timeout", 1);
+        return new HttpResponseMessage(status)
+        {
+            RequestMessage = request,
+            Content = new StringContent(status == HttpStatusCode.BadGateway ? "Bad Gateway" : "Gateway Timeout")
+        };
+    }
+
+    private async Task<HttpResponseMessage> SendWithRetriesAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var policy = request.Options.TryGetValue(RetryRequestOptions.Policy, out var routePolicy)
             ? routePolicy : clusterPolicy;
@@ -154,7 +178,7 @@ internal sealed class RetryHandler(
     }
 
     private static bool CanRetry(HttpRequestMessage request, RetryPolicy policy)
-        => policy.Enabled && policy.Methods.Contains(request.Method.Method)
+        => !HealthProbeRequestOptions.Contains(request) && policy.Enabled && policy.Methods.Contains(request.Method.Method)
             && (request.Content == null || request.Content.Headers.ContentLength == 0);
 
     private static HttpRequestMessage CloneWithoutBody(HttpRequestMessage source)

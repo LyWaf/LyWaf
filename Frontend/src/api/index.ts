@@ -96,6 +96,8 @@ export const managementTaskApi = {
 }
 
 export const siteApi = {
+  health: (id: string) => api.get<any>(`/lb/clusters/${encodeURIComponent(id)}/health-check`),
+  saveHealth: (id: string, data: object) => api.put<any>(`/lb/clusters/${encodeURIComponent(id)}/health-check`, data),
   list: (page = 1, search = '') => api.get<any>('/sites', { params: { page, pageSize: 20, search } }),
   save: (site: any, version: string) => api.post<any>('/sites', site, { headers: { 'If-Match': version } }),
   batch: (ids: string[], action: string, ruleIds?: string[] | null) => api.post<any>('/sites/batch', { ids, action, ruleIds }),

@@ -49,6 +49,7 @@ public static partial class ControlApi
         MapThrottlingEndpoints(app, controlPort);
         MapAbTestEndpoints(app, controlPort);
         MapLoadBalancingEndpoints(app, controlPort);
+        MapUpstreamHealthEndpoints(app, controlPort);
         MapRouteEndpoints(app, controlPort);
         MapFileServerEndpoints(app, controlPort);
         MapSimpleResponseEndpoints(app, controlPort);

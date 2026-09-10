@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { siteApi, wafRuleApi } from '@/api'
+import UpstreamHealthDialog from '@/components/UpstreamHealthDialog.vue'
+const healthCluster = ref('')
 const rows = ref<any[]>([])
 const clusters = ref<any[]>([])
 const rules = ref<any[]>([])
@@ -21,6 +23,13 @@ const publication = ref<any>(null)
 const version = ref('')
 const editVersion = ref('')
 const batchRules = ref<string[]>([])
+function healthLabel(status: string, enabled: boolean | undefined, active: boolean) {
+  if (enabled === false) return '未启用'
+  if (status === 'Healthy') return '正常'
+  if (status === 'Unhealthy') return '异常'
+  if (enabled === true) return active ? '等待探测' : '暂无观测'
+  return '状态未知'
+}
 async function load() {
   loading.value = true
   try {
@@ -107,6 +116,7 @@ onMounted(async () => {
 </script>
 <template>
   <div class="space-y-5">
+    <UpstreamHealthDialog v-if="healthCluster" :cluster-id="healthCluster" @close="healthCluster = ''" @saved="healthCluster = ''; load()" />
     <header class="flex flex-wrap items-center justify-between gap-3"><h1 class="text-xl font-semibold">站点管理</h1><div class="flex flex-wrap gap-3">
       <button class="bg-dark-card rounded-lg px-4 py-2" :disabled="loading" @click="load">刷新</button>
       <button class="bg-dark-card rounded-lg px-4 py-2" @click="exportSites">导出</button>
@@ -133,11 +143,11 @@ onMounted(async () => {
           <div v-for="listener in row.listeners" :key="`${listener.host}:${listener.port}`" class="text-xs text-gray-400">{{ listener.https ? 'HTTPS' : 'HTTP' }} :{{ listener.port }}</div>
         </td>
         <td class="py-3"><div>{{ row.site.route.clusterId }}</div><div v-for="upstream in row.upstreams" :key="upstream.id" class="text-xs text-gray-400 break-all">{{ upstream.address }}</div>
-          <div v-for="health in row.upstreamHealth" :key="health.id" class="text-xs" :class="health.active === 'Unhealthy' || health.passive === 'Unhealthy' ? 'text-red-400' : 'text-gray-400'">{{ health.id }}: {{ health.active }} / {{ health.passive }}</div>
+          <div v-for="health in row.upstreamHealth" :key="health.id" class="text-xs" :class="(health.activeEnabled !== false && health.active === 'Unhealthy') || (health.passiveEnabled !== false && health.passive === 'Unhealthy') ? 'text-red-400' : 'text-gray-400'">{{ health.id }}：主动 {{ healthLabel(health.active, health.activeEnabled, true) }} / 被动 {{ healthLabel(health.passive, health.passiveEnabled, false) }}</div>
         </td><td><span>{{ row.traffic?.requests ?? 0 }} / {{ row.traffic?.intercepts ?? 0 }}</span><div v-if="row.traffic?.requests" class="text-xs text-gray-500">非 5xx 比例 {{ ((1 - row.traffic.errors / row.traffic.requests) * 100).toFixed(1) }}%<br />自 {{ new Date(row.traffic.observedSince).toLocaleString() }}</div></td>
         <td :class="row.site.enabled ? 'text-green-400' : 'text-gray-500'">{{ row.site.enabled ? '启用' : '暂停' }}<div v-if="row.latestPublication" class="text-xs text-gray-400">{{ ['排队中', '发布中', '已生效', '发布失败', '已取消', '发布超时'][row.latestPublication.state] }}</div></td>
         <td><div v-for="cert in row.certificates" :key="cert.domain" :class="cert.daysRemaining < 15 ? 'text-red-400' : 'text-green-400'">{{ cert.daysRemaining }} 天</div><span v-if="!row.certificates.length" class="text-gray-500">未托管</span></td>
-        <td class="whitespace-nowrap space-x-3"><button class="text-primary-400" @click="edit(row.site)">编辑</button><button class="text-primary-400" @click="edit(row.site, true)">复制</button></td>
+        <td class="whitespace-nowrap space-x-3"><button class="text-primary-400" @click="edit(row.site)">编辑</button><button class="text-primary-400" @click="edit(row.site, true)">复制</button><button v-if="row.site.route.clusterId !== 'cluster_unuse'" class="text-primary-400" @click="healthCluster = row.site.route.clusterId">健康检查</button></td>
       </tr><tr v-if="!rows.length"><td colspan="7" class="text-center text-gray-500 py-12">暂无站点</td></tr>
     </tbody></table></div>
     <footer class="flex justify-end gap-4 text-sm"><span>共 {{ total }} 个</span><button :disabled="page <= 1 || loading" @click="page--; load()">上一页</button><span>{{ page }}</span><button :disabled="page * 20 >= total || loading" @click="page++; load()">下一页</button></footer>

@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Runtime.CompilerServices;
 using LyWaf.Utils;
 using LyWaf.Services.Metrics;
 using Newtonsoft.Json.Linq;
@@ -21,19 +22,21 @@ namespace LyWaf.Policy
             if (active != null)
             {
                 var metadata = cluster.Config.Metadata;
-                var method = (metadata?.GetValueOrDefault("LyxActiveHealth.Method") ?? "GET") switch
-                {
-                    "POST" => HttpMethod.Post,
-                    _ => HttpMethod.Get,
-                };
+                var method = new HttpMethod(metadata?.GetValueOrDefault("LyxActiveHealth.Method") ?? "GET");
                 var body = metadata?.GetValueOrDefault("LyxActiveHealth.Body");
+                var address = destination.Config.Health ?? destination.Config.Address;
                 var activePath = active.Path ?? "/";
-                var needSub = destination.Config.Address.EndsWith('/') && activePath.StartsWith('/');
-                var fullUri = needSub ? destination.Config.Address + activePath.TrimStart('/') : destination.Config.Address + active.Path;
-                var probeUri = new Uri(fullUri + "?" + active.Query ?? "");
+                var probeUri = new Uri(address.TrimEnd('/') + "/" + activePath.TrimStart('/') +
+                    (string.IsNullOrEmpty(active.Query) ? "" : "?" + active.Query.TrimStart('?')));
                 var request = new HttpRequestMessage(method, probeUri) { Version = HttpVersion.Version11 };
-                if (body != null)
+                request.Options.Set(HealthProbeRequestOptions.IsProbe, true);
+                if (!string.IsNullOrEmpty(body))
                 {
+                    if (metadata?.GetValueOrDefault("LyxActiveHealth.ContentType") is { } contentType)
+                    {
+                        request.Content = new StringContent(body, Encoding.UTF8, contentType);
+                        return request;
+                    }
                     var json = CommonUtil.SafeJson(body);
                     // 成功转成JSON
                     if (json.Count != 0)
@@ -50,7 +53,9 @@ namespace LyWaf.Policy
             else
             {
                 var probeUri = new Uri(destination.Config.Address);
-                return new HttpRequestMessage(HttpMethod.Get, probeUri) { Version = HttpVersion.Version11 };
+                var request = new HttpRequestMessage(HttpMethod.Get, probeUri) { Version = HttpVersion.Version11 };
+                request.Options.Set(HealthProbeRequestOptions.IsProbe, true);
+                return request;
             }
         }
     }
@@ -62,9 +67,14 @@ namespace LyWaf.Policy
         public string Name => "LyxActiveHealth";
 
         private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
-        private readonly Dictionary<string, int> FailTimes = [];
-        private readonly Dictionary<string, int> PassTimes = [];
-        private readonly Dictionary<string, HashSet<int>> CacheStatusCodes = [];
+        // Destination instances belong to one cluster; weak keys release removed destinations.
+        private sealed class ProbeCounter
+        {
+            public int Passes;
+            public int Fails;
+            public DestinationHealth State;
+        }
+        private readonly ConditionalWeakTable<DestinationState, ProbeCounter> counters = new();
         private readonly IDestinationHealthUpdater _healthUpdater = healthUpdater;
         private readonly PrometheusMetrics _metrics = metrics;
 
@@ -72,10 +82,6 @@ namespace LyWaf.Policy
         private const int DEFAULT_FAIL_TIMES = 2;
         private bool IsInStatus(string availdCode, int code)
         {
-            if (CacheStatusCodes.TryGetValue(availdCode, out var val))
-            {
-                return val.Contains(code);
-            }
             var codes = availdCode.Split(",");
             HashSet<int> hash = [];
             foreach (var k in codes)
@@ -105,7 +111,6 @@ namespace LyWaf.Policy
                     hash.Add(s);
                 }
             }
-            CacheStatusCodes[availdCode] = hash;
             return hash.Contains(code);
         }
 
@@ -115,11 +120,13 @@ namespace LyWaf.Policy
             {
                 return false;
             }
+            if (metadata?.ContainsKey("LyxActiveHealth.AvalidCode") != true && !result.Response.IsSuccessStatusCode)
+                return false;
             if (metadata != null)
             {
                 if (metadata.TryGetValue("LyxActiveHealth.AvalidCode", out var val))
                 {
-                    if (!IsInStatus(val, (int)result.Response!.StatusCode))
+                    if (!HealthStatusCodes.Matches(val, (int)result.Response!.StatusCode))
                     {
                         return false;
                     }
@@ -134,7 +141,9 @@ namespace LyWaf.Policy
                     string content;
                     try
                     {
-                        content = await result.Response!.Content.ReadAsStringAsync();
+                        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                        await result.Response.Content.LoadIntoBufferAsync(65536, timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
+                        content = await result.Response.Content.ReadAsStringAsync(timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
@@ -158,8 +167,8 @@ namespace LyWaf.Policy
                             break;
                         case "JSON":
                             {
-                                JObject contentObj = CommonUtil.SafeJson(content);
-                                JObject valObj = CommonUtil.SafeJson(val);
+                                JObject contentObj = JObject.Parse(content);
+                                JObject valObj = JObject.Parse(val);
                                 foreach (var property in valObj.Properties())
                                 {
                                     if (!contentObj.ContainsKey(property.Name))
@@ -175,14 +184,12 @@ namespace LyWaf.Policy
                             }
                         case "JSONM":
                             {
-                                JObject contentObj = CommonUtil.SafeJson(content);
-                                JObject valObj = CommonUtil.SafeJson(val);
+                                JObject contentObj = JObject.Parse(content);
+                                JObject valObj = JObject.Parse(val);
                                 return CommonUtil.ContainsAllProperties(contentObj, valObj);
                             }
-                    }
-                    if (val != content)
-                    {
-                        return false;
+                        default:
+                            return false;
                     }
                 }
                 if (metadata.TryGetValue("LyxActiveHealth.AvalidHeaders", out val))
@@ -221,7 +228,7 @@ namespace LyWaf.Policy
             }
             if (metadata.TryGetValue("LyxActiveHealth.Passes", out var val))
             {
-                var num = Convert.ToInt32(val);
+                var num = int.TryParse(val, out var parsed) ? parsed : DEFAULT_PASS_TIMES;
                 return num <= 0 ? DEFAULT_PASS_TIMES : num;
             }
             else
@@ -238,7 +245,7 @@ namespace LyWaf.Policy
             }
             if (metadata.TryGetValue("LyxActiveHealth.Fails", out var val))
             {
-                var num = Convert.ToInt32(val);
+                var num = int.TryParse(val, out var parsed) ? parsed : DEFAULT_FAIL_TIMES;
                 return num <= 0 ? DEFAULT_FAIL_TIMES : num;
             }
             else
@@ -247,7 +254,7 @@ namespace LyWaf.Policy
             }
         }
 
-        public async void ProbingCompleted(ClusterState cluster, IReadOnlyList<DestinationProbingResult> probingResults)
+        public void ProbingCompleted(ClusterState cluster, IReadOnlyList<DestinationProbingResult> probingResults)
         {
             var metadata = cluster.Model.Config.Metadata;
             if (probingResults.Count == 0)
@@ -260,55 +267,35 @@ namespace LyWaf.Policy
             for (var i = 0; i < probingResults.Count; i++)
             {
                 var address = probingResults[i].Destination.Model.Config.Address;
-                var succ = await IsSucc(metadata, probingResults[i]);
-
-                if (succ)
+                bool succ;
+                try
                 {
-                    // 成功时递增成功次数
-                    var now = PassTimes.GetValueOrDefault(address) + 1;
-                    PassTimes[address] = now;
-                    if (now >= passTimes)
+                    // YARP's callback is synchronous: finish consuming the bounded body before it returns.
+                    succ = IsSucc(metadata, probingResults[i]).GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warn(ex, "健康检查结果处理失败: {0}/{1}", cluster.ClusterId, probingResults[i].Destination.DestinationId);
+                    succ = false;
+                }
+                var counter = counters.GetOrCreateValue(probingResults[i].Destination);
+                lock (counter)
+                {
+                    if (succ)
                     {
-                        // 达到成功次数阈值，清除失败计数
-                        FailTimes[address] = 0;
+                        counter.Fails = 0;
+                        if (counter.Passes < passTimes) counter.Passes++;
+                        if (counter.Passes >= passTimes) counter.State = DestinationHealth.Healthy;
                     }
-                }
-                else
-                {
-                    // 失败时递增失败次数
-                    var now = FailTimes.GetValueOrDefault(address) + 1;
-                    FailTimes[address] = now;
-                    if (now >= failTimes)
+                    else
                     {
-                        // 达到失败次数阈值，清除成功计数
-                        PassTimes[address] = 0;
+                        counter.Passes = 0;
+                        if (counter.Fails < failTimes) counter.Fails++;
+                        if (counter.Fails >= failTimes) counter.State = DestinationHealth.Unhealthy;
                     }
-                }
-
-                // 确保字典中有对应的键
-                if (!PassTimes.ContainsKey(address))
-                {
-                    PassTimes[address] = 0;
-                }
-                if (!FailTimes.ContainsKey(address))
-                {
-                    FailTimes[address] = 0;
-                }
-
-                if (PassTimes[address] >= passTimes)
-                {
-                    newHealthStates[i] = new NewActiveDestinationHealth(probingResults[i].Destination, DestinationHealth.Healthy);
-                    _metrics.SetUpstreamHealth(cluster.Model.Config.ClusterId, address, 1);
-                }
-                else if (FailTimes[address] >= failTimes)
-                {
-                    newHealthStates[i] = new NewActiveDestinationHealth(probingResults[i].Destination, DestinationHealth.Unhealthy);
-                    _metrics.SetUpstreamHealth(cluster.Model.Config.ClusterId, address, 0);
-                }
-                else
-                {
-                    newHealthStates[i] = new NewActiveDestinationHealth(probingResults[i].Destination, DestinationHealth.Unknown);
-                    _metrics.SetUpstreamHealth(cluster.Model.Config.ClusterId, address, -1);
+                    newHealthStates[i] = new(probingResults[i].Destination, counter.State);
+                    _metrics.SetUpstreamHealth(cluster.ClusterId, address,
+                        counter.State == DestinationHealth.Healthy ? 1 : counter.State == DestinationHealth.Unhealthy ? 0 : -1);
                 }
             }
 

@@ -415,6 +415,10 @@ public static class LyToAppSettingsConverter
         // 添加 cluster_unuse（用于代理等无需后端的场景）
         ctx.Clusters["cluster_unuse"] = new Dictionary<string, object>
         {
+            ["HealthCheck"] = new Dictionary<string, object>
+            {
+                ["Active"] = new Dictionary<string, object> { ["Enabled"] = false }
+            },
             ["Destinations"] = new Dictionary<string, object>
             {
                 ["dest1"] = new Dictionary<string, object>
@@ -763,10 +767,7 @@ public static class LyToAppSettingsConverter
                             break;
 
                         case "health_check":
-                            if (directive.Value is Dictionary<string, object> hcConfig)
-                            {
-                                defaultClusterConfig["HealthCheck"] = hcConfig;
-                            }
+                            LyHealthCheckConfig.Apply(directive.Value, defaultClusterConfig);
                             break;
 
                         case "respond":
@@ -2015,10 +2016,7 @@ public static class LyToAppSettingsConverter
                             break;
 
                         case "health_check":
-                            if (kv.Value is Dictionary<string, object> hcConfig)
-                            {
-                                clusterConfig["HealthCheck"] = hcConfig;
-                            }
+                            LyHealthCheckConfig.Apply(kv.Value, clusterConfig);
                             break;
 
                         case "timeout":

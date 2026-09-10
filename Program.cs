@@ -1509,6 +1509,7 @@ public class Program
             reverse.LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
         }
         builder.Services.Replace(ServiceDescriptor.Singleton<IForwarderHttpClientFactory, RetryForwarderHttpClientFactory>());
+        reverse.AddConfigFilter<LyWaf.Policy.DefaultActiveHealthConfigFilter>();
         LyWaf.Services.Sites.ManagedSiteRegistration.AddManagedSites(builder.Services);
         _logger.Info("[启动耗时] YARP 配置: {}ms", startupSw.ElapsedMilliseconds);
         startupSw.Restart();

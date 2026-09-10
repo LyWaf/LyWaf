@@ -34,7 +34,9 @@ public static partial class ControlApi
             var clusters = sites.GetConfig().Clusters.ToDictionary(c => c.ClusterId, StringComparer.OrdinalIgnoreCase);
             var health = proxy.GetClusters().ToDictionary(c => c.ClusterId, c => c.Destinations.Values.Select(d => new
             {
-                id = d.DestinationId, active = d.Health.Active.ToString(), passive = d.Health.Passive.ToString(), connections = d.ConcurrentRequestCount
+                id = d.DestinationId, active = d.Health.Active.ToString(), passive = d.Health.Passive.ToString(), connections = d.ConcurrentRequestCount,
+                activeEnabled = c.Model.Config.HealthCheck?.Active?.Enabled == true,
+                passiveEnabled = c.Model.Config.HealthCheck?.Passive?.Enabled == true
             }).ToArray(), StringComparer.OrdinalIgnoreCase);
             return TypedResults.Ok(new
             {

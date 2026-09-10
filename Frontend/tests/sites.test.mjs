@@ -7,7 +7,7 @@ import { parse } from '@vue/compiler-sfc'
 
 const source = await readFile(new URL('../src/views/Sites.vue', import.meta.url), 'utf8')
 const { descriptor } = parse(source)
-const compiled = ts.transpileModule(descriptor.scriptSetup.content + '\nexport { rules, error, rows };', {
+const compiled = ts.transpileModule(descriptor.scriptSetup.content + '\nexport { rules, error, rows, healthLabel };', {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText
 
@@ -50,6 +50,17 @@ test('site rule selector accepts an empty data page', async () => {
   assert.equal(result.error.value, '')
   assert.equal(result.rules.value.length, 0)
   assert.equal(result.calls.length, 1)
+})
+
+test('upstream health distinguishes disabled checks from pending observations', async () => {
+  const { healthLabel } = await mountSites([{ success: true, data: [], total: 0 }])
+  assert.equal(healthLabel('Unknown', false, true), '未启用')
+  assert.equal(healthLabel('Unhealthy', false, false), '未启用')
+  assert.equal(healthLabel('Unknown', true, true), '等待探测')
+  assert.equal(healthLabel('Unknown', true, false), '暂无观测')
+  assert.equal(healthLabel('Healthy', true, true), '正常')
+  assert.equal(healthLabel('Unhealthy', true, false), '异常')
+  assert.equal(healthLabel('Unknown', undefined, true), '状态未知')
 })
 
 test('malformed rule responses show an actionable error without losing sites', async () => {
