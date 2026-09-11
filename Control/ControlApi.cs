@@ -21,7 +21,6 @@ public static partial class ControlApi
         
         MapFrontendEndpoints(app, controlPort);
         MapAuthenticationEndpoints(app, controlPort);
-        app.UseManagementStepUp(controlPort);
         app.UseManagementIdempotency(controlPort);
         MapManagementIdentityEndpoints(app, controlPort);
         MapManagementRoleEndpoints(app, controlPort);
@@ -49,6 +48,7 @@ public static partial class ControlApi
         MapThrottlingEndpoints(app, controlPort);
         MapAbTestEndpoints(app, controlPort);
         MapLoadBalancingEndpoints(app, controlPort);
+        MapClusterCreationEndpoints(app, controlPort);
         MapUpstreamHealthEndpoints(app, controlPort);
         MapRouteEndpoints(app, controlPort);
         MapFileServerEndpoints(app, controlPort);

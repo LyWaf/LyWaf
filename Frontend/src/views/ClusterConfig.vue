@@ -35,6 +35,23 @@ onBeforeUnmount(() => { destinationRequest++; configRequest++ })
 const showDialog = ref(false)
 const dialogMode = ref<'add' | 'edit'>('add')
 const saving = ref(false)
+const showClusterDialog = ref(false)
+const clusterForm = ref({ id: '', policy: 'RoundRobin', address: '' })
+const clusterError = ref('')
+const createCluster = async () => {
+  saving.value = true
+  clusterError.value = ''
+  try {
+    const res = await lbApi.createCluster(clusterForm.value)
+    if (!res.success) { clusterError.value = res.message || '创建失败'; return }
+    selectedClusterId.value = clusterForm.value.id
+    page.value = 1; search.value = ''
+    showClusterDialog.value = false
+    await loadData()
+    showSuccess('集群已创建')
+  } catch (e) { clusterError.value = getErrorMessage(e, '创建集群失败') }
+  finally { saving.value = false }
+}
 
 // 表单数据
 const form = ref({
@@ -307,10 +324,21 @@ onMounted(loadData)
 
 <template>
   <div class="space-y-6">
+    <div v-if="showClusterDialog" class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+      <form role="dialog" aria-modal="true" aria-label="添加集群" class="bg-dark-card border border-dark-border rounded-lg p-5 w-full max-w-lg space-y-4" @submit.prevent="createCluster">
+        <h2 class="font-medium">添加集群</h2>
+        <p v-if="clusterError" role="alert" class="text-red-400 break-all">{{ clusterError }}</p>
+        <label class="block">集群 ID<input v-model="clusterForm.id" required pattern="[a-zA-Z0-9_-]{1,100}" maxlength="100" class="input w-full mt-1" /></label>
+        <label class="block">负载均衡策略<select v-model="clusterForm.policy" class="input w-full mt-1"><option value="RoundRobin">RoundRobin</option><option v-for="p in policies.filter(p => p.name !== 'RoundRobin')" :key="p.name" :value="p.name">{{ p.name }}</option></select></label>
+        <label class="block">首个上游地址<input v-model="clusterForm.address" type="text" required maxlength="2048" placeholder="127.0.0.1:8080" class="input w-full mt-1" /></label>
+        <div class="flex justify-end gap-3"><button type="button" :disabled="saving" @click="showClusterDialog = false">取消</button><button :disabled="saving" class="btn btn-primary">{{ saving ? '创建中...' : '创建' }}</button></div>
+      </form>
+    </div>
     <!-- 集群选择 & 策略配置 -->
     <div class="card">
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-medium text-gray-100">配置集群</h2>
+        <button class="btn btn-primary" @click="clusterForm = { id: '', policy: 'RoundRobin', address: '' }; clusterError = ''; showClusterDialog = true">添加集群</button>
       </div>
 
       <div class="flex flex-wrap items-center gap-4">

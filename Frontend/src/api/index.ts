@@ -1,5 +1,4 @@
 import axios from 'axios'
-import { requestStepUp } from '@/composables/useStepUp'
 import type {
   ApiResponse,
   TrafficStats,
@@ -34,12 +33,6 @@ http.interceptors.request.use((config) => {
 http.interceptors.response.use(
   (response) => response.data,
   async (error) => {
-    if (error.response?.status === 428 && error.response?.data?.code === 'step_up_required' && !error.config?._stepUpRetried) {
-      const token = localStorage.getItem('lywaf_token')
-      const proof = await requestStepUp()
-      if (token !== localStorage.getItem('lywaf_token')) return Promise.reject(new Error('登录状态已变化，请重新操作'))
-      return http.request({ ...error.config, _stepUpRetried: true, headers: { ...error.config.headers, 'X-LyWaf-Step-Up': proof } } as any)
-    }
     if (error.response?.status === 401) {
       localStorage.removeItem('lywaf_token')
       localStorage.removeItem('lywaf_username')
@@ -867,6 +860,7 @@ interface LbPoliciesResponse {
 }
 
 export const lbApi = {
+  createCluster: (data: { id: string; policy: string; address: string }) => api.post<ApiResponse>('/lb/clusters', data),
   getClusterOptions: () => getAllManagementPages<Omit<LbCluster, 'destinations'> & { hasPatch: boolean }>('/lb/cluster-options'),
   destinations: (clusterId: string, page = 1, search = '') => api.get<ManagementPage<LbDestination & { outlier?: OutlierDestination }>>(
     `/lb/clusters/${encodeURIComponent(clusterId)}/destinations`, { params: { page, pageSize: 20, search } }),

@@ -92,11 +92,10 @@ for (const status of [400, 403, 409, 429, 500]) {
   })
 }
 
-test('step-up retry preserves the original idempotency key', async () => {
+test('legacy step-up response is rejected without prompting or retrying', async () => {
   const fixture = clientFixture()
   const config = { method: 'post', url: '/backups', headers: { 'Idempotency-Key': 'one-request-key' } }
-  await fixture.reject({ config, response: { status: 428, data: { code: 'step_up_required' } } })
-  assert.equal(fixture.retry().headers['Idempotency-Key'], 'one-request-key')
-  assert.equal(fixture.retry().headers['X-LyWaf-Step-Up'], 'proof')
-  assert.equal(fixture.retry()._stepUpRetried, true)
+  const error = { config, response: { status: 428, data: { code: 'step_up_required' } } }
+  await assert.rejects(fixture.reject(error))
+  assert.ok(!fixture.retry())
 })

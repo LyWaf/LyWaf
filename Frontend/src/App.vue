@@ -2,7 +2,6 @@
 import { RouterView, useRoute } from 'vue-router'
 import Layout from '@/components/Layout/Layout.vue'
 import GlobalToast from '@/components/common/GlobalToast.vue'
-import ManagementStepUp from '@/components/ManagementStepUp.vue'
 
 const route = useRoute()
 </script>
@@ -19,5 +18,4 @@ const route = useRoute()
     </Layout>
   </template>
   <GlobalToast />
-  <ManagementStepUp />
 </template>

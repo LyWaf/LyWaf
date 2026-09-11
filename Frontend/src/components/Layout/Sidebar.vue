@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { pcapApi } from '@/api'
 import { useAuth } from '@/composables/useAuth'
@@ -29,12 +29,6 @@ onMounted(async () => {
 })
 
 const menuItems: MenuItem[] = [
-  { path: '/notifications', name: '通知告警', condition: () => can('system.manage') },
-  { path: '/backups', name: '配置备份', condition: () => can('system.manage') },
-  { path: '/security-incidents', name: '事件处置' },
-  { path: '/sites', name: '站点管理', condition: () => can('system.manage') },
-  { path: '/system-health', name: '系统健康', condition: () => can('system.manage') },
-  { path: '/management-tasks', name: '任务中心', condition: () => can('system.manage') },
   { path: '/', name: '统计报表', icon: '📊' },
   { path: '/security', name: '安全态势', icon: '🛡️' },
   { path: '/feature-status', name: '防护应用', icon: '⚙️' },
@@ -51,6 +45,8 @@ const menuItems: MenuItem[] = [
   { path: '/api-timing', name: 'API 耗时', icon: '⏱️' },
   {
     name: '配置管理', icon: '📄', children: [
+      { path: '/sites', name: '站点管理', condition: () => can('system.manage') },
+      { path: '/system-health', name: '系统健康', condition: () => can('system.manage') },
       { path: '/config', name: '配置文件' },
       { path: '/config-overview', name: '配置概览' },
       { path: '/cluster-config', name: '配置集群' },
@@ -63,13 +59,26 @@ const menuItems: MenuItem[] = [
       { path: '/error-templates', name: '错误模板' },
     ]
   },
-  { path: '/general-settings', name: '通用设置', icon: '⚙️' },
+  {
+    name: '系统设置', icon: '⚙️', children: [
+      { path: '/general-settings', name: '通用设置' },
+      { path: '/notifications', name: '通知告警', condition: () => can('system.manage') },
+      { path: '/backups', name: '配置备份', condition: () => can('system.manage') },
+      { path: '/security-incidents', name: '事件处置' },
+      { path: '/management-tasks', name: '任务中心', condition: () => can('system.manage') },
+    ]
+  },
 ]
 
 // 展开状态：默认不展开，但当前路由所在分组自动展开
 const expandedGroups = ref<Set<string>>(new Set(
   menuItems.filter(m => m.children?.some(c => c.path && route.path === c.path)).map(m => m.name)
 ))
+watch(() => route.path, path => {
+  for (const item of menuItems) {
+    if (item.children?.some(child => child.path === path)) expandedGroups.value.add(item.name)
+  }
+})
 
 const isActive = (item: MenuItem) => {
   if (item.path) {
