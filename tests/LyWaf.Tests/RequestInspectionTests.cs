@@ -133,6 +133,33 @@ public sealed class RequestInspectionTests
         Assert.Contains(snapshot.ProtocolAnomalies, value => value.Contains("Content-Length", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("normal content")]
+    [InlineData("<script>alert(1)</script>")]
+    public async Task InspectsStandardZlibWrappedDeflate(string payload)
+    {
+        using var output = new MemoryStream();
+        using (var compressor = new ZLibStream(output, CompressionLevel.Fastest, leaveOpen: true))
+            compressor.Write(Encoding.UTF8.GetBytes(payload));
+        var context = CreateBodyContext(output.ToArray(), "text/plain");
+        context.Request.Headers.ContentEncoding = "deflate";
+        var snapshot = await CreateService(new ProtectOptions()).InspectAsync(context);
+        Assert.Empty(snapshot.ProtocolAnomalies);
+        Assert.Contains(payload, snapshot.BodyValues);
+        Assert.Equal(0, context.Request.Body.Position);
+    }
+
+    [Fact]
+    public async Task CandidateOverflowIsExplicitAndBounded()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.QueryString = new QueryString("?" + string.Join("&",
+            Enumerable.Range(0, 140).Select(i => $"p{i}=v{i}")) + "&last=attack");
+        var snapshot = await CreateService(new ProtectOptions()).InspectAsync(context);
+        Assert.Contains("Request inspection candidate limit exceeded", snapshot.ProtocolAnomalies);
+        Assert.True(snapshot.QueryValues.Count <= 128);
+    }
+
     private static RequestInspectionService CreateService(ProtectOptions options) =>
         new(new StaticOptionsMonitor<ProtectOptions>(options));
 

@@ -1,3 +1,5 @@
+using LyWaf.Services.Protect;
+
 namespace LyWaf.Services.WafRule;
 
 /// <summary>
@@ -14,6 +16,32 @@ public static class SystemWafRules
     {
         return
         [
+            new WafCustomRule
+            {
+                Id = "sys-xss",
+                Name = "全请求 XSS 防护",
+                Description = "检查路径、查询参数、请求体和所有请求头（含 Cookie），不限 HTTP 方法",
+                Enabled = true,
+                Priority = 15,
+                Source = WafRuleSource.System,
+                Action = WafRuleAction.Reject,
+                ResponseCode = 403,
+                GroupOperator = WafLogicalOperator.Or,
+                ConditionGroups =
+                [
+                    new WafConditionGroup
+                    {
+                        Operator = WafLogicalOperator.Or,
+                        Conditions =
+                        [
+                            new WafCondition { Field = WafMatchField.UriPath, Operator = WafMatchOperator.Regex, Value = XssSignatures.Pattern },
+                            new WafCondition { Field = WafMatchField.QueryString, Operator = WafMatchOperator.Regex, Value = XssSignatures.Pattern },
+                            new WafCondition { Field = WafMatchField.Body, Operator = WafMatchOperator.Regex, Value = XssSignatures.Pattern },
+                            new WafCondition { Field = WafMatchField.Header, FieldName = "*", Operator = WafMatchOperator.Regex, Value = XssSignatures.Pattern }
+                        ]
+                    }
+                ]
+            },
             // ────────────────── GET 参数注入防护 ──────────────────
             new WafCustomRule
             {

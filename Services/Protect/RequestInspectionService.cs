@@ -60,6 +60,8 @@ public sealed class RequestInspectionService(IOptionsMonitor<ProtectOptions> opt
             foreach (var value in item.Value) headers.Add(value);
         }
         var anomalies = FindProtocolAnomalies(context.Request);
+        if (query.LimitExceeded || headers.LimitExceeded)
+            anomalies.Add("Request inspection candidate limit exceeded");
 
         if (!MayHaveBody(context.Request))
             return new(query.Values, headers.Values, [], false, anomalies, query.Steps.Concat(headers.Steps).Distinct().ToArray());
@@ -77,6 +79,7 @@ public sealed class RequestInspectionService(IOptionsMonitor<ProtectOptions> opt
             if (decoded.Error is not null) anomalies.Add(decoded.Error);
             await ExtractBodyValuesAsync(context.Request.ContentType, decoded.Bytes, body, cancellationToken);
         }
+        if (body.LimitExceeded) anomalies.Add("Request inspection candidate limit exceeded");
         return new(query.Values, headers.Values, body.Values, truncated, anomalies, query.Steps.Concat(headers.Steps).Concat(body.Steps).Distinct().ToArray());
     }
 
@@ -254,6 +257,10 @@ public sealed class RequestInspectionService(IOptionsMonitor<ProtectOptions> opt
                 using Stream decoder = encoding.ToLowerInvariant() switch
                 {
                     "gzip" => new GZipStream(input, CompressionMode.Decompress),
+                    // RFC 1950 header distinguishes standard HTTP deflate from legacy raw streams.
+                    "deflate" when current.Length >= 2 && (current[0] & 0x0f) == 8 &&
+                        (current[0] >> 4) <= 7 && ((current[0] << 8) + current[1]) % 31 == 0
+                        => new ZLibStream(input, CompressionMode.Decompress),
                     "deflate" => new DeflateStream(input, CompressionMode.Decompress),
                     "br" => new BrotliStream(input, CompressionMode.Decompress),
                     _ => throw new NotSupportedException()
@@ -332,16 +339,21 @@ public sealed class RequestInspectionService(IOptionsMonitor<ProtectOptions> opt
         private readonly int _maxDepth = Math.Clamp(options.InspectionDecodeDepth, 0, 5);
 
         public IReadOnlyList<string> Values => _seen.ToArray();
+        public bool LimitExceeded { get; private set; }
 
         public void Add(string? value)
         {
-            if (string.IsNullOrEmpty(value) || _seen.Count >= _maxCandidates) return;
+            if (string.IsNullOrEmpty(value)) return;
+            if (_seen.Count >= _maxCandidates && !_seen.Contains(value)) { LimitExceeded = true; return; }
             AddRecursive(value.Length > _maxLength ? value[.._maxLength] : value, 0);
         }
 
         private void AddRecursive(string value, int depth)
         {
-            if (!_seen.Add(value) || _seen.Count >= _maxCandidates || depth >= _maxDepth) return;
+            if (_seen.Contains(value)) return;
+            if (_seen.Count >= _maxCandidates) { LimitExceeded = true; return; }
+            _seen.Add(value);
+            if (depth >= _maxDepth) return;
             var unicode = value.Normalize(NormalizationForm.FormKC);
             if (!string.Equals(unicode, value, StringComparison.Ordinal)) { Steps.Add("Unicode NFKC"); AddRecursive(unicode, depth + 1); }
             TryAdd(Uri.UnescapeDataString, value, depth);

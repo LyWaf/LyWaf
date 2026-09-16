@@ -569,6 +569,9 @@ public class LbPatchProvider(string? filePath = null, bool validateSource = true
                 FlattenJsonElement("SpeedLimit", speedLimitEl);
             }
 
+            if (root.TryGetProperty("PluginEnabledStates", out var enabledStates))
+                FlattenJsonElement("Plugins:EnabledOverrides", enabledStates);
+
             // 加载 PluginConfigs 补丁（插件配置）
             if (root.TryGetProperty("PluginConfigs", out var pluginConfigsEl))
             {

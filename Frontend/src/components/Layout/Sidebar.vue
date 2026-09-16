@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { pluginMenus, refreshPluginMenus } from '@/composables/usePluginMenus'
 import { useRoute, useRouter } from 'vue-router'
 import { pcapApi } from '@/api'
 import { useAuth } from '@/composables/useAuth'
@@ -18,6 +19,12 @@ const router = useRouter()
 const { can } = useAuth()
 
 const proxyEnabled = ref(false)
+let menuTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  void refreshPluginMenus()
+  menuTimer = setInterval(refreshPluginMenus, 15000)
+})
+onUnmounted(() => clearInterval(menuTimer))
 
 onMounted(async () => {
   try {
@@ -28,7 +35,7 @@ onMounted(async () => {
   } catch { /* 静默处理 */ }
 })
 
-const menuItems: MenuItem[] = [
+const staticMenuItems: MenuItem[] = [
   { path: '/', name: '统计报表', icon: '📊' },
   { path: '/security', name: '安全态势', icon: '🛡️' },
   { path: '/feature-status', name: '防护应用', icon: '⚙️' },
@@ -36,7 +43,6 @@ const menuItems: MenuItem[] = [
   {
     name: '规则管理', icon: '📐', children: [
       { path: '/ip-control', name: 'IP 管理' },
-      { path: '/cc-protection', name: 'CC 防护' },
       { path: '/waf-rules', name: 'WAF 规则' },
       { path: '/speed-limit', name: '速度限制' },
       { path: '/packet-capture', name: '代理管理', condition: () => proxyEnabled.value },
@@ -69,14 +75,25 @@ const menuItems: MenuItem[] = [
     ]
   },
 ]
+const menuItems = computed<MenuItem[]>(() => [
+  ...staticMenuItems,
+  ...(pluginMenus.value.length ? [{ name: '插件', icon: '▦', children: pluginMenus.value.map(menu => ({ name: menu.name, path: menu.path })) }] : []),
+])
 
 // 展开状态：默认不展开，但当前路由所在分组自动展开
 const expandedGroups = ref<Set<string>>(new Set(
-  menuItems.filter(m => m.children?.some(c => c.path && route.path === c.path)).map(m => m.name)
+  menuItems.value.filter(m => m.children?.some(c => c.path && route.path === c.path)).map(m => m.name)
 ))
 watch(() => route.path, path => {
-  for (const item of menuItems) {
+  void refreshPluginMenus()
+  for (const item of menuItems.value) {
     if (item.children?.some(child => child.path === path)) expandedGroups.value.add(item.name)
+  }
+})
+watch(pluginMenus, menus => {
+  if (menus.some(menu => menu.path === route.path)) expandedGroups.value.add('插件')
+  if (route.path.startsWith('/plugins/') && !menus.some(menu => menu.path === route.path)) {
+    void router.replace('/plugin-management')
   }
 })
 

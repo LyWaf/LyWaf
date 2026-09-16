@@ -12,9 +12,22 @@ namespace LyWaf.Plugins.Sys;
 /// 系统插件：流量分析器
 /// 后台运行，分析访问流量并进行 CC 攻击检测
 /// </summary>
-public class AnalysisPlugin : LyWafPluginBase
+public class AnalysisPlugin : LyWafPluginBase, IPluginApiHandler
 {
     private bool _isRunning = false;
+    public Task<IResult> HandleApiAsync(string path, HttpContext context) => Task.FromResult<IResult>(
+        HttpMethods.IsGet(context.Request.Method) && path.Trim('/') == "ban-logs"
+            ? Results.Ok(new { success = true, logs = CcBanLog.Shared.Read() })
+            : Results.NotFound());
+
+    private static void RecordBan(string ip, string reason, TimeSpan? timeout = null, SecurityEventType? eventType = null)
+    {
+        var duration = timeout ?? ServiceLocator.GetRequiredService<IStatisticService>()?.GetOption().GetDefaultFbTime()
+            ?? TimeSpan.FromSeconds(600);
+        CcBanCoordinator.Shared.TryBan(ip, reason, duration,
+            () => WafUtil.GetFbReason(ip) != null,
+            () => WafUtil.DoFbIp(ip, reason, duration, eventType: eventType));
+    }
     private Thread? _workerThread;
     private IDisposable? _eventSubscriptionComplete;
 
@@ -28,6 +41,11 @@ public class AnalysisPlugin : LyWafPluginBase
         Priority = PluginPriority.High,  // 低优先级，后台运行
         EnabledByDefault = true
     };
+
+    public override IReadOnlyList<PluginAction> GetActions() =>
+    [
+        new PluginAction { Id = "cc", Name = "CC 防护", Type = "page-link", Path = "/plugins/analysis/cc" }
+    ];
 
     public override Task InitializeAsync(IPluginContext context)
     {
@@ -223,7 +241,7 @@ public class AnalysisPlugin : LyWafPluginBase
                     if (count > limit.LimitNum)
                     {
                         isFb = true;
-                        WafUtil.DoFbIp(ip, $"超过{limit.Path}的CC的访问限制频率", limit.FbTime, 
+                        RecordBan(ip, $"超过{limit.Path}的CC的访问限制频率", limit.FbTime,
                             eventType: Shared.SecurityEventType.CcAttack);
                         break;
                     }
@@ -242,7 +260,7 @@ public class AnalysisPlugin : LyWafPluginBase
         var ratio = option.GetNotWaitFbRatio();
         if (notWaitCount * 1.0 / allCount > ratio)
         {
-            WafUtil.DoFbIp(ip, $"同一条请求未完成又重复请求占比 {notWaitCount * 1.0 / allCount}, 总次数 {allCount}",
+            RecordBan(ip, $"同一条请求未完成又重复请求占比 {notWaitCount * 1.0 / allCount}, 总次数 {allCount}",
                 eventType: Shared.SecurityEventType.AbnormalBehavior);
             return;
         }
@@ -282,7 +300,7 @@ public class AnalysisPlugin : LyWafPluginBase
         var maxRatio = allMaxTimes * 1.0 / allVisitTimes;
         if (allVisitTimes > option.GetMaxFreqMinReqs() && maxRatio > option.GetMaxFreqFbRatio())
         {
-            WafUtil.DoFbIp(ip, $"前{maxFreqGetNums}种请求({allMaxTimes * 1.0 / allVisitTimes}) 请求占比超过{maxRatio}",
+            RecordBan(ip, $"前{maxFreqGetNums}种请求({allMaxTimes * 1.0 / allVisitTimes}) 请求占比超过{maxRatio}",
                 eventType: Shared.SecurityEventType.CcAttack);
             SharedData.ClientStas.Remove(ip);
         }

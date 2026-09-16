@@ -224,14 +224,20 @@ public class CcRuleChecker : ICcRuleChecker
             case CcAction.Block:
                 // 封禁 IP
                 var blockDuration = TimeSpan.FromSeconds(result.ActionSeconds);
-                SharedData.ClientFb.Set(clientIp, $"CC 规则触发: {rule.Name}", blockDuration);
-                _runtimeState.Set("ip.blocked", clientIp, $"CC 规则触发: {rule.Name}", blockDuration);
-                _logger.Info("CC 封禁: IP={ClientIp}, Rule={Rule}, Duration={Duration}秒",
+                var newBan = CcBanCoordinator.Shared.TryBan(clientIp, $"CC 规则触发: {rule.Name}", blockDuration,
+                    () => SharedData.ClientFb.TryGetValue(clientIp, out _) ||
+                        _runtimeState.TryGet<string>("ip.blocked", clientIp, out _),
+                    () =>
+                    {
+                        SharedData.ClientFb.Set(clientIp, $"CC 规则触发: {rule.Name}", blockDuration);
+                        _runtimeState.Set("ip.blocked", clientIp, $"CC 规则触发: {rule.Name}", blockDuration);
+                    });
+                if (newBan) _logger.Info("CC 封禁: IP={ClientIp}, Rule={Rule}, Duration={Duration}秒",
                     clientIp, rule.Name, result.ActionSeconds);
 
                 await WafUtil.WriteErrorOutput(context, 403, new Dictionary<string, string?>
                 {
-                    ["reason"] = $"触发 CC 防护规则 [{rule.Name}]，已被封禁 {result.ActionSeconds} 秒"
+                    ["reason"] = newBan ? $"触发 CC 防护规则 [{rule.Name}]，已被封禁 {result.ActionSeconds} 秒" : "IP 仍处于封禁期内"
                 });
                 break;
                 

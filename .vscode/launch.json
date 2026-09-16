@@ -6,6 +6,7 @@
             // 将悬停用于现有属性的说明
             // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
             "name": ".NET Core Launch (web)",
+            "logging": { "exceptions": false, "programOutput": true },
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
@@ -33,6 +34,7 @@
             // 将悬停用于现有属性的说明
             // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
             "name": ".ly config",
+            "logging": { "exceptions": false, "programOutput": true },
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
@@ -62,6 +64,7 @@
             // 将悬停用于现有属性的说明
             // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
             "name": "testing .ly config",
+            "logging": { "exceptions": false, "programOutput": true },
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
@@ -91,6 +94,7 @@
             // 将悬停用于现有属性的说明
             // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
             "name": "release .NET Core Launch (web)",
+            "logging": { "exceptions": false, "programOutput": true },
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "publish",
@@ -116,6 +120,7 @@
             // 将悬停用于现有属性的说明
             // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
             "name": "run by command",
+            "logging": { "exceptions": false, "programOutput": true },
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
@@ -148,6 +153,7 @@
             // 将悬停用于现有属性的说明
             // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
             "name": "run by proxy",
+            "logging": { "exceptions": false, "programOutput": true },
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
@@ -177,6 +183,7 @@
             // 将悬停用于现有属性的说明
             // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
             "name": "run by respond",
+            "logging": { "exceptions": false, "programOutput": true },
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
@@ -206,6 +213,7 @@
             // 将悬停用于现有属性的说明
             // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
             "name": "run by start",
+            "logging": { "exceptions": false, "programOutput": true },
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
@@ -228,6 +236,7 @@
             // 将悬停用于现有属性的说明
             // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
             "name": "run by validate",
+            "logging": { "exceptions": false, "programOutput": true },
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
@@ -250,6 +259,7 @@
             // 将悬停用于现有属性的说明
             // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
             "name": "run by start Release",
+            "logging": { "exceptions": false, "programOutput": true },
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "publish",
@@ -272,6 +282,7 @@
             // 将悬停用于现有属性的说明
             // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md。
             "name": "dotnet test",
+            "logging": { "exceptions": false, "programOutput": true },
             "type": "coreclr",
             "request": "launch",
             // 如果已更改目标框架，请确保更新程序路径。
@@ -295,6 +306,7 @@
         },
         {
             "name": ".NET Core Attach",
+            "logging": { "exceptions": false, "programOutput": true },
             "type": "coreclr",
             "request": "attach"
         }

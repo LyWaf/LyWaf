@@ -219,7 +219,8 @@ public class WafRuleService : IWafRuleService
             .ToList(); // _mergedRules 已按优先级排好序
         RequestInspectionSnapshot? snapshot = null;
         if (enabledRules.Any(rule => rule.ConditionGroups.Any(group =>
-                group.Conditions.Any(condition => condition.Field is WafMatchField.QueryString or WafMatchField.Body))))
+                group.Conditions.Any(condition => condition.Field is WafMatchField.QueryString or WafMatchField.Body ||
+                    condition.Field == WafMatchField.Header && condition.FieldName == "*"))))
             snapshot = await _inspection.InspectAsync(context, context.RequestAborted);
 
         foreach (var rule in enabledRules)
@@ -235,6 +236,8 @@ public class WafRuleService : IWafRuleService
                 context.Items["LyWaf.RuleId"] = rule.Id;
                 context.Items["LyWaf.AttackType"] = "CustomRule";
                 _logger.Info("WAF 规则命中: {Message}", result.Message);
+                // Observation is not an allow rule: later rules must still be able to reject the request.
+                if (rule.Action == WafRuleAction.Observe) continue;
                 return result;
             }
         }
@@ -366,6 +369,8 @@ public class WafRuleService : IWafRuleService
         var request = context.Request;
         if (condition.Field == WafMatchField.Body)
             return MatchCandidateValues(snapshot?.BodyValues ?? [], condition);
+        if (condition.Field == WafMatchField.Header && condition.FieldName == "*")
+            return MatchCandidateValues(snapshot?.HeaderValues ?? [], condition);
         if (condition.Field == WafMatchField.QueryString && snapshot is not null)
             return MatchCandidateValues([request.QueryString.Value ?? "", .. snapshot.QueryValues], condition);
 

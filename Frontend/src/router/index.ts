@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 import { pluginRoutes } from '@/plugins'
+import { pluginMenus, refreshPluginMenus } from '@/composables/usePluginMenus'
 
 const routes: RouteRecordRaw[] = [
   { path: '/notifications', name: 'Notifications', component: () => import('@/views/Notifications.vue'), meta: { title: '通知告警' } },
@@ -35,9 +36,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/cc-protection',
-    name: 'CcProtection',
-    component: () => import('@/views/CcProtection.vue'),
-    meta: { title: 'CC 防护', icon: '🛡️' }
+    redirect: '/plugins/analysis/cc',
   },
   {
     path: '/ip-control',
@@ -149,7 +148,7 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   document.title = `${to.meta.title || 'LyWaf'} - LyWaf 控制面板`
 
   const token = localStorage.getItem('lywaf_token')
@@ -170,6 +169,13 @@ router.beforeEach((to, _from, next) => {
     return
   }
 
+  if (to.path.startsWith('/plugins/')) {
+    await refreshPluginMenus()
+    if (!pluginMenus.value.some(menu => menu.path === to.path)) {
+      next('/plugin-management')
+      return
+    }
+  }
   next()
 })
 

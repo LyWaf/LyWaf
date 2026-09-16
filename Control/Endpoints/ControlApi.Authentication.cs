@@ -92,7 +92,8 @@ public static partial class ControlApi
             if (string.IsNullOrEmpty(authHeader))
             {
                 context.Response.StatusCode = 401;
-                context.Response.Headers["WWW-Authenticate"] = "Basic realm=\"LyWaf\", Bearer";
+                // Advertise Bearer only so browsers leave sign-in to the SPA instead of opening a Basic dialog.
+                context.Response.Headers["WWW-Authenticate"] = "Bearer";
                 await context.Response.WriteAsJsonAsync(ManagementApiContract.CreateError(context, "unauthorized", "未授权访问"));
                 return;
             }
@@ -190,7 +191,7 @@ public static partial class ControlApi
             }
 
             context.Response.StatusCode = 401;
-            context.Response.Headers["WWW-Authenticate"] = "Basic realm=\"LyWaf\", Bearer";
+            context.Response.Headers["WWW-Authenticate"] = "Bearer";
             await context.Response.WriteAsJsonAsync(ManagementApiContract.CreateError(context, "invalid_auth_scheme", "无效的认证方式"));
         });
 

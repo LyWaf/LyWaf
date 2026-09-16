@@ -1,12 +1,28 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { advancedCcApi, pluginApi, statisticApi } from '@/api'
+import { refreshPluginMenus } from '@/composables/usePluginMenus'
+import { advancedCcApi, pluginApi, statisticApi, pluginProxyApi } from '@/api'
 import ListToolbar from '@/components/common/ListToolbar.vue'
 import CcRuleEditor from '@/components/cc/CcRuleEditor.vue'
 import { useToast } from '@/composables/useToast'
 import type { AdvancedCcRule, CcRuleType } from '@/types'
 
 const { showSuccess, showError } = useToast()
+const banLogs = ref<{ id: number; time: string; ip: string; reason: string; durationSeconds: number }[]>([])
+const logError = ref('')
+const logsLoading = ref(false)
+const loadBanLogs = async () => {
+  if (logsLoading.value) return
+  logsLoading.value = true
+  try {
+    const result = await pluginProxyApi('analysis').get<{ success: boolean; logs: typeof banLogs.value }>('ban-logs')
+    if (result.success) { banLogs.value = result.logs; logError.value = '' }
+  } catch { logError.value = '封禁日志加载失败' }
+  finally { logsLoading.value = false }
+}
+let logTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => { void loadBanLogs(); logTimer = setInterval(loadBanLogs, 10000) })
+onUnmounted(() => clearInterval(logTimer))
 
 // CC 分析插件开关
 const analysisEnabled = ref(true)
@@ -28,6 +44,7 @@ const toggleAnalysis = async () => {
     const res = await pluginApi.togglePlugin('analysis')
     if (res.success) {
       analysisEnabled.value = res.isEnabled
+      await refreshPluginMenus()
       showSuccess(res.isEnabled ? '已开启 CC 分析' : '已关闭 CC 分析')
     }
   } catch {
@@ -484,6 +501,26 @@ onUnmounted(() => {
     </div>
 
     <!-- 规则编辑器 -->
+    <section class="border-t border-dark-border pt-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold text-gray-100">CC 封禁日志 ({{ banLogs.length }}/1000)</h2>
+        <button class="btn btn-sm btn-secondary" :disabled="logsLoading" @click="loadBanLogs">刷新</button>
+      </div>
+      <p v-if="logError" role="alert" class="text-red-400 mb-3">{{ logError }}</p>
+      <div class="max-h-96 overflow-auto border border-dark-border rounded-md" tabindex="0" aria-label="CC 封禁日志">
+        <table class="w-full text-sm text-left">
+          <thead class="sticky top-0 bg-dark-card text-gray-400"><tr>
+            <th class="p-3 whitespace-nowrap">时间</th><th class="p-3">IP</th><th class="p-3">封禁原因</th><th class="p-3 whitespace-nowrap">时长（秒）</th>
+          </tr></thead>
+          <tbody><tr v-for="log in banLogs" :key="log.id" class="border-t border-dark-border">
+            <td class="p-3 whitespace-nowrap">{{ new Date(log.time).toLocaleString() }}</td>
+            <td class="p-3 font-mono">{{ log.ip }}</td>
+            <td class="p-3 break-all min-w-48">{{ log.reason }}</td><td class="p-3">{{ log.durationSeconds }}</td>
+          </tr><tr v-if="!banLogs.length"><td colspan="4" class="p-8 text-center text-gray-500">暂无 CC 封禁日志</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
     <CcRuleEditor
       :show="showEditor"
       :edit-rule="editingRule"

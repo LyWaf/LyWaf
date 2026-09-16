@@ -15,15 +15,19 @@ public sealed class SemanticThreatDetector : ISemanticThreatDetector
     private static readonly TimeSpan MatchTimeout = TimeSpan.FromMilliseconds(100);
     private static readonly Signature[] Signatures =
     [
+        S("semantic-xss", "XSS", XssSignatures.Pattern),
         S("semantic-xxe", "XXE", @"<!DOCTYPE[\s\S]{0,512}<!ENTITY[\s\S]{0,512}(?:SYSTEM|PUBLIC)"),
-        S("semantic-template", "模板/表达式注入", @"(?:\{\{\s*7\s*\*\s*7\s*\}\}|\$\{\s*(?:jndi:|T\s*\(|#)|<%=\s*[^%]+%>)"),
+        S("semantic-template", "模板/表达式注入", @"(?:\{\{\s*\d{1,16}\s*[*+/-]\s*\d{1,16}\s*\}\}|\$\{\s*(?:jndi:|T\s*\(|#)|<%=\s*[^%]+%>)"),
+        S("semantic-sqli-error", "SQL注入", @"\b(?:extractvalue|updatexml)\s*\("),
+        S("semantic-command-newline", "命令注入", @"[\r\n]\s*(?:whoami|id|sh|bash|cmd|powershell|curl|wget|nc|netcat|cat)(?:\s|$)"),
+        S("semantic-crlf", "CRLF", @"\r?\n[\t ]*[A-Za-z][A-Za-z0-9-]{0,63}:[\t ]*[^\r\n]+"),
         S("semantic-ssrf-scheme", "SSRF", @"\b(?:file|gopher|dict|ftp|ldap)://"),
         S("semantic-ssrf-local", "SSRF", @"https?://(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?::1\]?|169\.254\.169\.254)(?::\d+)?(?:/|$)"),
         S("semantic-traversal", "路径穿越", @"(?:\.\.[/\\]){2,}|%2e%2e(?:%2f|%5c)"),
         S("semantic-lfi", "本地文件包含", @"(?:/etc/(?:passwd|shadow|hosts)|/proc/self/(?:environ|cmdline)|\\+windows\\+win\.ini)"),
         S("semantic-rfi", "远程文件包含", @"\b(?:include|require)(?:_once)?\s*[=(]\s*https?://"),
         S("semantic-java-deser", "Java反序列化", @"(?:rO0AB|aced0005|com\.sun\.org\.apache\.xalan|org\.apache\.commons\.collections)"),
-        S("semantic-php-deser", "PHP反序列化", @"(?:^|[;{}])O:\d+:""[^""\r\n]{1,128}"":\d+:\{|C:\d+:""[^""\r\n]+"":\d+:\{"),
+        S("semantic-php-deser", "PHP反序列化", @"(?:^|[=;{}\s])O:\d+:""[^""\r\n]{1,128}"":\d+:\{|C:\d+:""[^""\r\n]+"":\d+:\{"),
         S("semantic-dotnet-deser", ".NET反序列化", @"(?:AAEAAAD/////|System\.Runtime\.Serialization|ObjectDataProvider|LosFormatter|__VIEWSTATE)"),
         S("semantic-nosql", "NoSQL注入", @"(?:\$(?:where|ne|gt|regex|expr)\b|\bthis\.[a-z_$][\w$]*\s*==)"),
         S("semantic-ldap", "LDAP注入", @"(?:\)\s*\([|&!]|\*\)\s*\(|\(\|\s*\([^)]*=\*)"),
@@ -34,6 +38,9 @@ public sealed class SemanticThreatDetector : ISemanticThreatDetector
     {
         foreach (var candidate in Enumerate(snapshot, path))
         {
+            if (ContainsLoopbackUrl(candidate.Value))
+                return new("semantic-ssrf-address", "SSRF", candidate.Source,
+                    candidate.Value[..Math.Min(candidate.Value.Length, 160)]);
             if (InjectionSyntaxDetector.Detect(candidate.Value) is { } syntax)
                 return new(syntax.RuleId, syntax.Category, candidate.Source,
                     candidate.Value.Length <= 160 ? candidate.Value : candidate.Value[..160]);
@@ -53,6 +60,20 @@ public sealed class SemanticThreatDetector : ISemanticThreatDetector
         foreach (var value in snapshot.QueryValues) yield return ("query", value);
         foreach (var value in snapshot.HeaderValues) yield return ("header", value);
         foreach (var value in snapshot.BodyValues) yield return ("body", value);
+    }
+
+    private static readonly Regex HttpUrl = new(@"https?://[^\s<>""']{1,2048}", RegexOptions.IgnoreCase, MatchTimeout);
+
+    // IPAddress parses legacy integer/hex IPv4 forms without DNS or outbound requests.
+    private static bool ContainsLoopbackUrl(string value)
+    {
+        foreach (Match match in HttpUrl.Matches(value))
+            if (Uri.TryCreate(match.Value, UriKind.Absolute, out var uri) &&
+                System.Net.IPAddress.TryParse(uri.Host.Trim('[', ']'), out var ip) &&
+                (System.Net.IPAddress.IsLoopback(ip) ||
+                 ip.IsIPv4MappedToIPv6 && System.Net.IPAddress.IsLoopback(ip.MapToIPv4())))
+                return true;
+        return false;
     }
 
     private static Signature S(string id, string category, string pattern) =>
@@ -88,6 +109,9 @@ internal static class InjectionSyntaxDetector
             if (tokens[i].Kind == TokenKind.Quote && (IsWord(tokens, i + 1, "or") || IsWord(tokens, i + 1, "and")) &&
                 IsNumber(tokens, i + 2) && IsSymbol(tokens, i + 3, "=") && IsNumber(tokens, i + 4))
                 return ("semantic-sqli-boolean-syntax", "SQL注入");
+            if (IsNumber(tokens, i) && (IsWord(tokens, i + 1, "and") || IsWord(tokens, i + 1, "or")) &&
+                IsNumber(tokens, i + 2) && IsSymbol(tokens, i + 3, "=") && IsNumber(tokens, i + 4))
+                return ("semantic-sqli-numeric-syntax", "SQL注入");
             if (tokens[i].Kind == TokenKind.Word && DelayFunctions.Contains(tokens[i].Value) && IsSymbol(tokens, i + 1, "("))
                 return ("semantic-sqli-delay-syntax", "SQL注入");
             if (IsWord(tokens, i, "waitfor") && IsWord(tokens, i + 1, "delay"))
@@ -114,6 +138,8 @@ internal static class InjectionSyntaxDetector
             { var end = input[(i + 2)..].IndexOf("*/", StringComparison.Ordinal); i = end < 0 ? input.Length : i + end + 4; continue; }
             if (i + 1 < input.Length && input[i] == '-' && input[i + 1] == '-')
             { var end = input[(i + 2)..].IndexOfAny('\r', '\n'); i = end < 0 ? input.Length : i + end + 2; continue; }
+            if (input[i] == '$' && i + 1 < input.Length && input[i + 1] == '(')
+            { result.Add(new(TokenKind.Symbol, "$(")); i += 2; continue; }
             if (char.IsLetter(input[i]) || input[i] is '_' or '$')
             { var start = i++; while (i < input.Length && (char.IsLetterOrDigit(input[i]) || input[i] is '_' or '$' or '.')) i++; result.Add(new(TokenKind.Word, input[start..i].ToString())); continue; }
             if (char.IsDigit(input[i]))

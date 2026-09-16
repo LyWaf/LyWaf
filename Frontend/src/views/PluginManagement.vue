@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { refreshPluginMenus } from '@/composables/usePluginMenus'
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { pluginApi } from '@/api'
 import ListToolbar from '@/components/common/ListToolbar.vue'
@@ -268,7 +269,8 @@ const togglePlugin = async (plugin: PluginItem) => {
     const res = await pluginApi.togglePlugin(plugin.id)
     if (res.success) {
       plugin.isEnabled = res.isEnabled
-      plugin.state = res.state
+        plugin.state = res.state
+        await refreshPluginMenus()
       showSuccess(res.message || '操作成功')
     } else {
       showError(res.message || '操作失败')

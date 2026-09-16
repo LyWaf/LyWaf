@@ -35,6 +35,9 @@ public class PluginOptions
     /// </summary>
     public HashSet<string> DisabledPlugins { get; set; } = [];
 
+    /// <summary>Persisted console choices override configured/default activation, but not permission checks.</summary>
+    public Dictionary<string, bool> EnabledOverrides { get; set; } = [];
+
     /// <summary>
     /// 是否启用热重载
     /// </summary>
@@ -113,6 +116,8 @@ public class PluginManager : IPluginManager
     private readonly IConfiguration _configuration;
     private readonly IPluginEventBus _eventBus;
     private IServiceProvider? _serviceProvider;
+    private readonly SemaphoreSlim _activationLock = new(1, 1);
+    private long _optionsRevision;
 
     public PluginManager(IConfiguration configuration, IPluginEventBus eventBus, IOptionsMonitor<PluginOptions> optionsMonitor)
     {
@@ -122,19 +127,22 @@ public class PluginManager : IPluginManager
 
         optionsMonitor.OnChange(newOptions =>
         {
-            _options = newOptions;
+            var revision = Interlocked.Increment(ref _optionsRevision);
             _logger.Info("插件配置已动态更新");
-            _ = Task.Run(() => OnOptionsChangedAsync(newOptions));
+            _ = Task.Run(() => OnOptionsChangedAsync(newOptions, revision));
         });
     }
 
     /// <summary>
     /// 配置变更时动态更新插件启用/禁用状态
     /// </summary>
-    private async Task OnOptionsChangedAsync(PluginOptions newOptions)
+    private async Task OnOptionsChangedAsync(PluginOptions newOptions, long revision)
     {
+        await _activationLock.WaitAsync();
         try
         {
+            if (revision != Volatile.Read(ref _optionsRevision)) return;
+            _options = newOptions;
             foreach (var (pluginId, info) in _plugins)
             {
                 var isSystemPlugin = newOptions.SystemPlugins.Contains(pluginId);
@@ -144,13 +152,13 @@ public class PluginManager : IPluginManager
                 if (shouldBeEnabled && !info.IsEnabled)
                 {
                     _logger.Info("配置变更：启用插件 {Id}", pluginId);
-                    try { await EnablePluginAsync(pluginId); }
+                    try { await EnablePluginCoreAsync(pluginId); }
                     catch (Exception ex) { _logger.Error(ex, "配置变更启用插件 {Id} 失败", pluginId); }
                 }
                 else if (!shouldBeEnabled && info.IsEnabled)
                 {
                     _logger.Info("配置变更：禁用插件 {Id}", pluginId);
-                    try { await DisablePluginAsync(pluginId); }
+                    try { await DisablePluginCoreAsync(pluginId); }
                     catch (Exception ex) { _logger.Error(ex, "配置变更禁用插件 {Id} 失败", pluginId); }
                 }
             }
@@ -159,6 +167,7 @@ public class PluginManager : IPluginManager
         {
             _logger.Error(ex, "处理插件配置变更失败");
         }
+        finally { _activationLock.Release(); }
     }
 
     /// <summary>
@@ -549,8 +558,9 @@ public class PluginManager : IPluginManager
     /// <param name="isSystemPlugin">是否是系统插件</param>
     /// <param name="enabledByDefault">插件默认启用状态</param>
     /// <returns>插件是否启用</returns>
-    private bool GetPluginEnabledState(string pluginId, bool isSystemPlugin, bool enabledByDefault)
+    internal bool GetPluginEnabledState(string pluginId, bool isSystemPlugin, bool enabledByDefault)
     {
+        if (_options.EnabledOverrides.TryGetValue(pluginId, out var enabled)) return enabled;
         // 1. 首先检查 PluginConfigs 中是否有该插件的配置
         if (_options.PluginConfigs.TryGetValue(pluginId, out var pluginConfig))
         {
@@ -657,6 +667,13 @@ public class PluginManager : IPluginManager
 
     public async Task EnablePluginAsync(string pluginId)
     {
+        await _activationLock.WaitAsync();
+        try { await EnablePluginCoreAsync(pluginId); }
+        finally { _activationLock.Release(); }
+    }
+
+    private async Task EnablePluginCoreAsync(string pluginId)
+    {
         if (!_plugins.TryGetValue(pluginId, out var info))
         {
             throw new ArgumentException($"插件不存在: {pluginId}");
@@ -694,6 +711,13 @@ public class PluginManager : IPluginManager
     }
 
     public async Task DisablePluginAsync(string pluginId)
+    {
+        await _activationLock.WaitAsync();
+        try { await DisablePluginCoreAsync(pluginId); }
+        finally { _activationLock.Release(); }
+    }
+
+    private async Task DisablePluginCoreAsync(string pluginId)
     {
         if (!_plugins.TryGetValue(pluginId, out var info))
         {

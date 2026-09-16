@@ -1137,6 +1137,7 @@ export interface PluginConfigResponse {
 }
 
 export const pluginApi = {
+  getMenus: () => api.get<{ success: boolean; menus: { pluginId: string; id: string; name: string; path: string }[] }>('/plugins/menus'),
   list: (page = 1, search = '') => api.get<ManagementPage<PluginItem>>('/plugins', { params: { page, pageSize: 20, search } }),
   getPlugins: async (): Promise<PluginsResponse> => ({ success: true, plugins: await getAllManagementPages<PluginItem>('/plugins') }),
 

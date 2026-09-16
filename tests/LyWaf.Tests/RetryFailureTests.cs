@@ -30,7 +30,7 @@ public sealed class RetryFailureTests
         }
     }
 
-    private static HttpMessageInvoker Client(FailedTransport transport, RetryPolicy? policy = null)
+    private static HttpMessageInvoker Client(HttpMessageHandler transport, RetryPolicy? policy = null)
     {
         var metrics = new PrometheusMetrics(new StaticOptionsMonitor<MetricsOptions>(new()));
         return new HttpMessageInvoker(new RetryHandler("test", policy ?? RetryPolicy.Disabled, metrics,
@@ -66,5 +66,43 @@ public sealed class RetryFailureTests
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.SendAsync(request, cancelled.Token));
+    }
+
+    [Fact]
+    public async Task RealInvalidUpstreamResponseReturns502()
+    {
+        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var accepted = listener.AcceptTcpClientAsync(limit.Token).AsTask();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var client = Client(new SocketsHttpHandler { UseProxy = false, ConnectTimeout = TimeSpan.FromSeconds(2) });
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{port}/");
+        var pending = client.SendAsync(request, limit.Token);
+        using var connection = await accepted;
+        // Exercise a real HttpClient failure without relying on firewall-specific closed-port behavior.
+        await connection.GetStream().WriteAsync("INVALID HTTP RESPONSE\r\n\r\n"u8.ToArray(), limit.Token);
+        using var response = await pending;
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RealProbeTimeoutReturns504()
+    {
+        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var accepted = listener.AcceptTcpClientAsync(limit.Token).AsTask();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using var client = Client(new SocketsHttpHandler { UseProxy = false });
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{port}/");
+        request.Options.Set(HealthProbeRequestOptions.IsProbe, true);
+        using var probeTimeout = CancellationTokenSource.CreateLinkedTokenSource(limit.Token);
+        var pending = client.SendAsync(request, probeTimeout.Token);
+        using var connection = await accepted;
+        // Accept the connection but send no HTTP response, then expire the probe's deadline.
+        probeTimeout.CancelAfter(TimeSpan.FromMilliseconds(100));
+        using var response = await pending;
+        Assert.Equal(HttpStatusCode.GatewayTimeout, response.StatusCode);
     }
 }

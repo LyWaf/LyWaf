@@ -46,6 +46,15 @@ public static partial class ControlApi
         string Priority, string State, bool IsEnabled, bool IsSystem, bool EnabledByDefault, bool HasOptions, List<PluginAction> Actions);
     private static void MapPluginEndpoints(WebApplication app, int controlPort)
     {
+        app.MapGet("/api/plugins/menus", (IPluginManager manager) =>
+        {
+            var menus = manager.GetAllPlugins()
+                .SelectMany(plugin => PluginMenuCatalog.GetEntries(plugin, manager.GetPluginState(plugin.Metadata.Id)))
+                .DistinctBy(item => item.Path)
+                .OrderBy(item => item.PluginId).ThenBy(item => item.Id).ToArray();
+            return TypedResults.Ok(new PluginMenusResponse(true, menus));
+        }).Produces<PluginMenusResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
+
         // =============== 插件管理 API ===============
 
         app.MapPost("/api/plugins/install", async (HttpContext ctx, PluginPackageManager packages) =>
@@ -91,7 +100,7 @@ public static partial class ControlApi
                 .Search(item => $"{item.Id} {item.Name} {item.Description} {item.Author} {item.State}").Read(context.Request.Query, "name"));
         }).Produces<ManagementPage<PluginListItem>>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
-        app.MapPost("/api/plugins/toggle", async (HttpContext ctx, IPluginManager pluginManager, PluginToggleRequest request) =>
+        app.MapPost("/api/plugins/toggle", async (HttpContext ctx, IConfiguration config, IPluginManager pluginManager, PluginToggleRequest request) =>
         {
 
             if (request == null || string.IsNullOrEmpty(request.PluginId))
@@ -105,6 +114,9 @@ public static partial class ControlApi
                 return Results.Json(new { success = false, message = $"插件 {request.PluginId} 不存在" }, statusCode: 404);
             }
 
+            await _lbPatchLock.WaitAsync(ctx.RequestAborted);
+            try
+            {
             var currentState = pluginManager.GetPluginState(request.PluginId);
             var isRunning = currentState == PluginState.Running || currentState == PluginState.Initialized;
 
@@ -117,14 +129,26 @@ public static partial class ControlApi
                 await pluginManager.EnablePluginAsync(request.PluginId);
             }
 
+            var patch = await ReadPatchFile();
+            var states = EnsurePatchSection(patch, "PluginEnabledStates");
+            states[request.PluginId] = !isRunning;
+            UpdatePatchSourceTracking(patch);
+            await SavePatchAndReload(patch, config);
+
+            // Wait for any in-flight reload transition before returning the actual activation state.
+            if (isRunning) await pluginManager.DisablePluginAsync(request.PluginId);
+            else await pluginManager.EnablePluginAsync(request.PluginId);
+
             var newState = pluginManager.GetPluginState(request.PluginId);
             return Results.Json(new
             {
                 success = true,
-                message = isRunning ? "插件已禁用" : "插件已启用",
+                message = isRunning ? "插件已禁用并保存" : "插件已启用并保存",
                 state = newState.ToString(),
                 isEnabled = newState == PluginState.Running || newState == PluginState.Initialized,
             });
+            }
+            finally { _lbPatchLock.Release(); }
         }).RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // =============== 插件配置读取 ===============
