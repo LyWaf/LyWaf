@@ -43,7 +43,6 @@ public static partial class ControlApi
         MapBlockedIpEndpoints(app, controlPort);
         MapIpLogEndpoints(app, controlPort);
         MapLegacyWafEndpoints(app, controlPort);
-        MapCcProtectionEndpoints(app, controlPort);
         MapGeoAccessEndpoints(app, controlPort);
         MapThrottlingEndpoints(app, controlPort);
         MapAbTestEndpoints(app, controlPort);

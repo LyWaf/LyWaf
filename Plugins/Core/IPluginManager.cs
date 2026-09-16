@@ -340,7 +340,6 @@ public class PluginManager : IPluginManager
     {
         // 所有插件都注册服务，确保运行时启用插件时依赖已经存在。
         var enabledPlugins = _plugins.Values
-            .Where(plugin => plugin.IsEnabled)
             .OrderBy(p => (int)p.Plugin.Metadata.Priority)
             .ThenBy(p => p.Plugin.Metadata.Id)
             .ToList();
@@ -425,18 +424,17 @@ public class PluginManager : IPluginManager
     /// </summary>
     public void ConfigureProxyPipeline(IApplicationBuilder proxyApp)
     {
-        var enabledPlugins = GetEnabledPluginsSorted();
+        var plugins = GetAllPlugins().OrderBy(p => p.Metadata.Priority);
 
-        foreach (var info in enabledPlugins)
+        foreach (var plugin in plugins)
         {
             try
             {
-                _logger.Debug("配置插件代理管道: {Id}", info.Plugin.Metadata.Id);
-                info.Plugin.ConfigureProxyPipeline(proxyApp);
+                PluginProxyStages.UseWhenActive(proxyApp, () => plugin.State, plugin.ConfigureProxyPipeline);
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "配置插件 {Id} 代理管道失败", info.Plugin.Metadata.Id);
+                _logger.Error(ex, "配置插件 {Id} 代理管道失败", plugin.Metadata.Id);
             }
         }
     }
@@ -446,20 +444,20 @@ public class PluginManager : IPluginManager
     /// </summary>
     public void ConfigureProxyPipelineHigh(IApplicationBuilder proxyApp)
     {
-        var highPriorityPlugins = GetEnabledPluginsSorted()
-            .Where(p => p.Plugin.Metadata.Priority <= PluginPriority.High);
+        var highPriorityPlugins = GetAllPlugins().OrderBy(p => p.Metadata.Priority)
+            .Where(p => p.Metadata.Priority <= PluginPriority.High);
 
         foreach (var info in highPriorityPlugins)
         {
             try
             {
                 _logger.Debug("配置高优先级插件代理管道: {Id} (Priority={Priority})",
-                    info.Plugin.Metadata.Id, info.Plugin.Metadata.Priority);
-                info.Plugin.ConfigureProxyPipeline(proxyApp);
+                    info.Metadata.Id, info.Metadata.Priority);
+                PluginProxyStages.UseWhenActive(proxyApp, () => info.State, info.ConfigureProxyPipeline);
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "配置插件 {Id} 代理管道失败", info.Plugin.Metadata.Id);
+                _logger.Error(ex, "配置插件 {Id} 代理管道失败", info.Metadata.Id);
             }
         }
     }
@@ -469,20 +467,20 @@ public class PluginManager : IPluginManager
     /// </summary>
     public void ConfigureProxyPipelineNormal(IApplicationBuilder proxyApp)
     {
-        var normalPriorityPlugins = GetEnabledPluginsSorted()
-            .Where(p => p.Plugin.Metadata.Priority > PluginPriority.High);
+        var normalPriorityPlugins = GetAllPlugins().OrderBy(p => p.Metadata.Priority)
+            .Where(p => p.Metadata.Priority > PluginPriority.High);
 
         foreach (var info in normalPriorityPlugins)
         {
             try
             {
                 _logger.Debug("配置普通优先级插件代理管道: {Id} (Priority={Priority})",
-                    info.Plugin.Metadata.Id, info.Plugin.Metadata.Priority);
-                info.Plugin.ConfigureProxyPipeline(proxyApp);
+                    info.Metadata.Id, info.Metadata.Priority);
+                PluginProxyStages.UseWhenActive(proxyApp, () => info.State, info.ConfigureProxyPipeline);
             }
             catch (Exception ex)
             {
-                _logger.Error(ex, "配置插件 {Id} 代理管道失败", info.Plugin.Metadata.Id);
+                _logger.Error(ex, "配置插件 {Id} 代理管道失败", info.Metadata.Id);
             }
         }
     }

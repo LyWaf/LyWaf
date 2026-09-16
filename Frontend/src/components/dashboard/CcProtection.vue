@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import Section from '@/components/common/Section.vue'
-import { ccApi } from '@/api'
+import { ccApi } from '@/plugins/analysis/api'
 import { useToast } from '@/composables/useToast'
 import type { CcRule } from '@/types'
 

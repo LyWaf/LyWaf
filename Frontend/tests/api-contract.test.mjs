@@ -6,6 +6,8 @@ import ts from 'typescript'
 
 const source = await readFile(new URL('../src/api/index.ts', import.meta.url), 'utf8')
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
+const analysisSource = await readFile(new URL('../src/plugins/analysis/api.ts', import.meta.url), 'utf8')
+const analysisCompiled = ts.transpileModule(analysisSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
 
 function clientFixture(response) {
   let rejectResponse
@@ -13,6 +15,7 @@ function clientFixture(response) {
   const calls = []
   const client = {
     get(url, config) { calls.push({ url, config }); return Promise.resolve(response) },
+    post(url, data, config) { calls.push({ url, data, config }); return Promise.resolve(response) },
     interceptors: {
       request: { use() {} },
       response: { use(_success, failure) { rejectResponse = failure } },
@@ -31,8 +34,29 @@ function clientFixture(response) {
     console: { error() { throw new Error('Do not log request credentials') } },
   }
   vm.runInNewContext(compiled, context)
-  return { reject: error => rejectResponse(error), retry: () => retryConfig, api: module.exports, calls }
+  const plugin = { exports: {} }
+  vm.runInNewContext(analysisCompiled, { module: plugin, exports: plugin.exports, require: name => {
+    if (name === '@/api') return module.exports
+    throw new Error(`Unexpected plugin import: ${name}`)
+  } })
+  return { reject: error => rejectResponse(error), retry: () => retryConfig, api: module.exports, analysis: plugin.exports, calls }
 }
+
+test('CC management uses the analysis proxy for reads, paging and writes', async () => {
+  const fixture = clientFixture({ success: true, data: [], total: 0 })
+  await fixture.analysis.advancedCcApi.list(2, 'rule')
+  await fixture.analysis.advancedCcApi.getRules()
+  await fixture.analysis.advancedCcApi.getRulesByType('FrequentAccess')
+  await fixture.analysis.advancedCcApi.addRule({ name: 'test' })
+  await fixture.analysis.statisticApi.getConfig()
+  await fixture.analysis.statisticApi.addWhitePath('/health')
+  await fixture.analysis.ccApi.addRule('/api', 10, 10, 90061)
+  assert.ok(fixture.calls.every(call => call.url.startsWith('/plugins/analysis/proxy/')))
+  assert.equal(fixture.calls[0].config.params.page, 2)
+  assert.equal(fixture.calls[1].config.params.pageSize, 100)
+  assert.equal(fixture.calls.at(-1).data.fbTime, '1.01:01:01')
+  assert.equal(fixture.api.advancedCcApi, undefined)
+})
 
 test('timing list requests only the selected page and retains global aggregates', async () => {
   const response = { data: [], total: 10000, summary: { apiCount: 10000 }, backendStats: [{ backend: 'origin', apiCount: 10000 }] }

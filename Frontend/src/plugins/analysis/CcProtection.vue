@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 import { refreshPluginMenus } from '@/composables/usePluginMenus'
-import { advancedCcApi, pluginApi, statisticApi, pluginProxyApi } from '@/api'
+import { pluginApi, pluginProxyApi } from '@/api'
+import { advancedCcApi, statisticApi } from './api'
 import ListToolbar from '@/components/common/ListToolbar.vue'
 import CcRuleEditor from '@/components/cc/CcRuleEditor.vue'
 import { useToast } from '@/composables/useToast'

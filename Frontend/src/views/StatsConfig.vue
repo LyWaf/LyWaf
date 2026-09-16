@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { statisticApi, advancedCcApi } from '@/api'
+import { statisticApi, advancedCcApi } from '@/plugins/analysis/api'
 import CcRuleEditor from '@/components/cc/CcRuleEditor.vue'
 import { useToast } from '@/composables/useToast'
 import type { AdvancedCcRule, CcRuleType } from '@/types'

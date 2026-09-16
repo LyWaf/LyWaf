@@ -12,13 +12,11 @@ namespace LyWaf.Plugins.Sys;
 /// 系统插件：流量分析器
 /// 后台运行，分析访问流量并进行 CC 攻击检测
 /// </summary>
-public class AnalysisPlugin : LyWafPluginBase, IPluginApiHandler
+public class AnalysisPlugin : LyWafPluginBase, IPluginApiHandler, IPluginProxyStages
 {
     private bool _isRunning = false;
-    public Task<IResult> HandleApiAsync(string path, HttpContext context) => Task.FromResult<IResult>(
-        HttpMethods.IsGet(context.Request.Method) && path.Trim('/') == "ban-logs"
-            ? Results.Ok(new { success = true, logs = CcBanLog.Shared.Read() })
-            : Results.NotFound());
+    public Task<IResult> HandleApiAsync(string path, HttpContext context) =>
+        Analysis.AnalysisAdminApi.HandleAsync(path, context);
 
     private static void RecordBan(string ip, string reason, TimeSpan? timeout = null, SecurityEventType? eventType = null)
     {
@@ -101,6 +99,14 @@ public class AnalysisPlugin : LyWafPluginBase, IPluginApiHandler
     public override void ConfigureProxyPipeline(IApplicationBuilder proxyApp)
     {
         proxyApp.UseMiddleware<StatisticLogMiddleware>();
+    }
+
+    public void ConfigureProxyStage(IApplicationBuilder app, PluginProxyStage stage)
+    {
+        if (stage == PluginProxyStage.RequestProtection)
+            app.UseMiddleware<LyWaf.Middleware.CcProtectionMiddleware>();
+        else if (stage == PluginProxyStage.ResponseMonitoring)
+            app.UseMiddleware<LyWaf.Middleware.CcResponseMonitorMiddleware>();
     }
 
     /// <summary>

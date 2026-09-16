@@ -58,13 +58,13 @@ type UnwrappedAxios = {
 
 const api = http as unknown as UnwrappedAxios
 
-interface ManagementPage<T> { success: boolean; data: T[]; total: number; page: number; pageSize: number }
+export interface ManagementPage<T> { success: boolean; data: T[]; total: number; page: number; pageSize: number }
 
 // Configuration selectors require the complete set; normal tables should request one page.
-async function getAllManagementPages<T>(url: string): Promise<T[]> {
+export async function getAllManagementPages<T>(url: string, client: Pick<UnwrappedAxios, 'get'> = api): Promise<T[]> {
   const items: T[] = []
   for (let page = 1; page <= 100; page++) {
-    const result = await api.get<ManagementPage<T>>(url, { params: { page, pageSize: 100 } })
+    const result = await client.get<ManagementPage<T>>(url, { params: { page, pageSize: 100 } })
     if (!result.success) throw new Error('读取列表失败')
     items.push(...result.data)
     if (items.length >= result.total) return items
@@ -315,95 +315,6 @@ export const wafApi = {
     api.post<ApiResponse>('/waf/post/remove', { pattern }),
 }
 
-// ==================== CC 防护 API ====================
-
-export const ccApi = {
-  addRule: (path: string, limitNum: number, period: number, fbTime: number) =>
-    api.post<ApiResponse>('/cc/rules/add', { path, limitNum, period, fbTime }),
-    
-  removeRule: (path: string) =>
-    api.post<ApiResponse>('/cc/rules/remove', { path }),
-}
-
-// ==================== 高级 CC 规则 API ====================
-
-import type { AdvancedCcRule } from '@/types'
-
-interface AdvancedCcRulesResponse {
-  success: boolean
-  count: number
-  rules: AdvancedCcRule[]
-}
-
-interface AdvancedCcRuleResponse {
-  success: boolean
-  rule: AdvancedCcRule
-}
-
-interface CcEnumsResponse {
-  success: boolean
-  matchTargets: { name: string; value: string }[]
-  matchOperators: { name: string; value: string }[]
-  ruleTypes: { name: string; value: string }[]
-  actions: { name: string; value: string }[]
-}
-
-export interface CreateAdvancedCcRuleRequest {
-  groupOperator?: 'And' | 'Or'
-  conditionGroups?: AdvancedCcRule['conditionGroups']
-  name: string
-  enabled?: boolean
-  type?: string
-  conditions?: Array<{
-    target: string
-    operator: string
-    values: string[]
-  }>
-  period?: number
-  threshold?: number
-  action?: string
-  actionSeconds?: number
-  priority?: number
-}
-
-export const advancedCcApi = {
-  // 获取所有高级 CC 规则
-  getRules: async (): Promise<AdvancedCcRulesResponse> => {
-    const rules = await getAllManagementPages<AdvancedCcRule>('/cc/advanced')
-    return { success: true, count: rules.length, rules }
-  },
-  list: (page = 1, search = '') => api.get<ManagementPage<AdvancedCcRule>>('/cc/advanced', { params: { page, pageSize: 20, search } }),
-    
-  // 按类型获取规则
-  getRulesByType: async (type: string): Promise<AdvancedCcRulesResponse> => {
-    const rules = await getAllManagementPages<AdvancedCcRule>(`/cc/advanced/type/${encodeURIComponent(type)}`)
-    return { success: true, count: rules.length, rules }
-  },
-    
-  // 获取单个规则
-  getRule: (ruleId: string) =>
-    api.get<AdvancedCcRuleResponse>(`/cc/advanced/${ruleId}`),
-    
-  // 添加规则
-  addRule: (rule: CreateAdvancedCcRuleRequest) =>
-    api.post<ApiResponse & { ruleId: string }>('/cc/advanced/add', rule),
-    
-  // 更新规则
-  updateRule: (rule: CreateAdvancedCcRuleRequest & { id: string }) =>
-    api.post<ApiResponse & { ruleId: string }>('/cc/advanced/update', rule),
-    
-  // 删除规则
-  removeRule: (ruleId: string) =>
-    api.post<ApiResponse>('/cc/advanced/remove', { ruleId }),
-    
-  // 启用/禁用规则
-  toggleRule: (ruleId: string, enabled?: boolean) =>
-    api.post<ApiResponse & { enabled: boolean }>('/cc/advanced/toggle', { ruleId, enabled }),
-    
-  // 获取枚举值
-  getEnums: () =>
-    api.get<CcEnumsResponse>('/cc/advanced/enums'),
-}
 
 // ==================== 流量统计 API ====================
 
@@ -1167,26 +1078,6 @@ export const pluginApi = {
     ),
 }
 
-// ==================== 统计配置 API ====================
-
-import type { StatisticConfig } from '@/types'
-
-export const statisticApi = {
-  getConfig: () =>
-    api.get<StatisticConfig & { success: boolean }>('/statistic/config'),
-
-  addWhitePath: (path: string) =>
-    api.post<ApiResponse>('/statistic/white-paths/add', { path }),
-
-  removeWhitePath: (path: string) =>
-    api.post<ApiResponse>('/statistic/white-paths/remove', { path }),
-
-  addPathSta: (path: string) =>
-    api.post<ApiResponse>('/statistic/path-stas/add', { path }),
-
-  removePathSta: (path: string) =>
-    api.post<ApiResponse>('/statistic/path-stas/remove', { path }),
-}
 
 // ==================== 通用设置 API ====================
 

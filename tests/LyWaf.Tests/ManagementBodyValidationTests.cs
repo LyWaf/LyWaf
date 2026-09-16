@@ -5,6 +5,7 @@ using Xunit;
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
 using LyWaf.Control;
+using LyWaf.Plugins.Sys.Analysis;
 using LyWaf.Services.WafRule;
 
 namespace LyWaf.Tests;

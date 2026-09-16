@@ -21,6 +21,18 @@ internal static class ManagementBodyValidation
             if (!metadata.IsOptional) errors["$body"] = ["请求体不能为空"];
             return errors;
         }
+        return ValidateBody(body);
+    }
+
+    public static Dictionary<string, string[]> ValidateBody(object? body)
+    {
+        var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        if (body == null)
+        {
+            errors["$body"] = ["请求体不能为空"];
+            return errors;
+        }
+        var bodyType = body.GetType();
         var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
         var nullability = new NullabilityInfoContext();
         var visited = 0;

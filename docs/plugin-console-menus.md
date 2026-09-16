@@ -19,7 +19,7 @@ public override IReadOnlyList<PluginAction> GetActions() =>
 - 路径必须位于 `/plugins/{插件ID}` 下，不接受外部地址、父目录跳转或编码路径。
 - 前端页面在 `Frontend/src/plugins/{插件ID}/plugin.ts` 注册路由，通过模块扫描加入控制台；注册菜单并不会自动生成任意页面组件，新增前端模块需重新构建。
 - 插件管理中启停后立即刷新菜单，另有 15 秒刷新用于反映其他会话和配置变更。禁用当前页面所属插件后跳转到插件管理。
-- CC 页面由 analysis 模块提供，地址为 `/plugins/analysis/cc`，旧 `/cc-protection` 跳转到新地址。当前仍复用已有 CC 业务接口；本次没有迁移 CC 检测中间件和业务服务。
+- CC 页面由 analysis 模块提供，地址为 `/plugins/analysis/cc`，旧 `/cc-protection` 跳转到新地址。CC 规则和统计配置 API 由 `Plugins/Sys/Analysis/AnalysisAdminApi.cs` 提供，经 `/api/v1/plugins/analysis/proxy/` 访问；前端 API 位于 `Frontend/src/plugins/analysis/api.ts`。CC 检测通过插件管道阶段注册。
 - 网页防篡改复用现有 page-link 注册，自动出现在插件菜单中。没有页面动作的插件不显示子菜单。
 
 菜单隐藏不是后端访问控制。插件自己的 API 仍必须通过插件代理与权限校验；共享业务接口沿用原有管理端权限。

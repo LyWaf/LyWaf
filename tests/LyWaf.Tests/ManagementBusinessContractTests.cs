@@ -47,7 +47,7 @@ public sealed class ManagementBusinessContractTests
         await using var app = builder.Build();
         foreach (var method in new[] { "MapSiteEndpoints", "MapSecurityIncidentEndpoints", "MapBackupEndpoints", "MapNotificationEndpoints", "MapGeoAccessEndpoints", "MapThrottlingEndpoints", "MapConnectionLimitEndpoints", "MapAccessControlEndpoints", "MapIpLogEndpoints", "MapBlockedIpEndpoints", "MapAbTestEndpoints", "MapParameterEndpoints", "MapLegacyWafEndpoints" })
             typeof(ControlApi).GetMethod(method, BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [app, 12345]);
-        typeof(ControlApi).GetMethod("MapCcProtectionEndpoints", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [app, 12345]);
+        Assert.Null(typeof(ControlApi).GetMethod("MapCcProtectionEndpoints", BindingFlags.Static | BindingFlags.NonPublic));
         app.MapWafRuleEndpoints(12345);
         typeof(ControlApi).GetMethod("MapDestinationListEndpoints", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [app, 12345]);
         typeof(ControlApi).GetMethod("MapSettingsEndpoints", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null,

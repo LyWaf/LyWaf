@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { advancedCcApi, type CreateAdvancedCcRuleRequest } from '@/api'
+import { advancedCcApi, type CreateAdvancedCcRuleRequest } from '@/plugins/analysis/api'
 import type { AdvancedCcRule, CcCondition, CcMatchTarget, CcMatchOperator, CcRuleType, CcAction } from '@/types'
 
 interface Props {

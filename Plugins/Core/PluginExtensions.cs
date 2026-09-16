@@ -117,7 +117,7 @@ public static class PluginExtensions
                 {
                     AuditProxy(context, pluginId, pluginPath, outcome == "ok", $"{outcome}, {stopwatch.ElapsedMilliseconds}ms");
                 }
-            }).RequireHost($"*:{controlPort}");
+            }).AddEndpointFilter<ManagementErrorFilter>().RequireHost($"*:{controlPort}");
         return app;
     }
 
