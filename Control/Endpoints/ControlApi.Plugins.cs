@@ -39,13 +39,51 @@ public static partial class ControlApi
 {
     private sealed record PluginPackageResponse(bool Success, string Id, string Version, bool RequiresRestart, string Message);
     private sealed record PluginConfigResponse(bool Success, string PluginId, Dictionary<string, string> Config,
-        Dictionary<string, string> Defaults, Dictionary<string, string> Labels, Dictionary<string, string> FieldDefaults);
+        Dictionary<string, string> Defaults, Dictionary<string, string> Labels, Dictionary<string, string> FieldDefaults,
+        IReadOnlyList<PluginConfigurationField> Schema, bool SupportsScopedConfiguration);
+    private sealed record PluginConfigValidationResponse(bool Success, Dictionary<string, string[]> Errors);
+
+    private static Dictionary<string, string[]> PreparePluginConfiguration(ILyWafPlugin plugin,
+        Dictionary<string, string>? body, out Dictionary<string, string> candidate)
+    {
+        candidate = new(StringComparer.OrdinalIgnoreCase);
+        if (body == null || plugin.Metadata.DefaultOptions == null)
+            return new() { ["$body"] = ["请求体为空或插件未声明通用配置模型"] };
+        var options = plugin.Metadata.DefaultOptions;
+        var type = options.GetType();
+        if (body.Count > 2048) return new() { ["$body"] = ["配置字段最多 2048 项"] };
+        var current = new Dictionary<string, string>();
+        SerializeOptionsToFlat(options, "", current);
+        foreach (var pair in body) candidate[pair.Key] = pair.Value;
+        foreach (var key in body.Keys.Where(k => PluginConfigurationSchema.SensitivePath(type, k)))
+            return new() { [key] = ["敏感配置请通过插件专用接口或部署配置修改"] };
+        foreach (var pair in current.Where(p => PluginConfigurationSchema.SensitivePath(type, p.Key)))
+            candidate[pair.Key] = pair.Value;
+        if (body.Keys.Distinct(StringComparer.OrdinalIgnoreCase).Count() != body.Count)
+            return new() { ["$body"] = ["配置字段重复（不区分大小写）"] };
+        foreach (var field in PluginConfigurationSchema.Describe(type).Where(f => f.RequiresRestart))
+        {
+            if (field.Path.Contains('*'))
+                return new() { [field.Path] = ["包含需重启的集合配置，请通过部署配置修改并重启"] };
+            var before = current.Where(p => p.Key.Equals(field.Path, StringComparison.OrdinalIgnoreCase) || p.Key.StartsWith(field.Path + ":", StringComparison.OrdinalIgnoreCase));
+            var after = candidate.Where(p => p.Key.Equals(field.Path, StringComparison.OrdinalIgnoreCase) || p.Key.StartsWith(field.Path + ":", StringComparison.OrdinalIgnoreCase));
+            if (!before.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase).SequenceEqual(after.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)))
+                return new() { [field.Path] = ["此配置需要重启，请通过部署配置修改并重启"] };
+        }
+        return PluginConfigurationSchema.Validate(type, candidate);
+    }
     private sealed record PluginActionView(string Id, string Name, string Type, string? Description);
     private sealed record PluginActionsResponse(bool Success, string PluginId, PluginActionView[] Actions);
     private sealed record PluginListItem(string Id, string Name, string Version, string? Description, string? Author,
         string Priority, string State, bool IsEnabled, bool IsSystem, bool EnabledByDefault, bool HasOptions, List<PluginAction> Actions);
     private static void MapPluginEndpoints(WebApplication app, int controlPort)
     {
+        app.MapGet("/api/plugins/{pluginId}/config/effective", (string pluginId, string? host, string? path,
+            HttpContext context, [Microsoft.AspNetCore.Mvc.FromServices] PluginScopedConfiguration resolver) =>
+        {
+            try { return Results.Ok(resolver.Describe(pluginId, host ?? "", path ?? "/")); }
+            catch (KeyNotFoundException) { return ManagementApiContract.Error(context, 404, "plugin_scope_unavailable", "插件未支持分层配置"); }
+        }).Produces<PluginEffectiveConfiguration>().RequireHost($"*:{controlPort}").RequireManagementPermission();
         app.MapGet("/api/plugins/menus", (IPluginManager manager) =>
         {
             var menus = manager.GetAllPlugins()
@@ -153,7 +191,8 @@ public static partial class ControlApi
 
         // =============== 插件配置读取 ===============
 
-        app.MapGet("/api/plugins/{pluginId}/config", (string pluginId, IConfiguration config, IPluginManager pluginManager) =>
+        app.MapGet("/api/plugins/{pluginId}/config", (string pluginId, IConfiguration config, IPluginManager pluginManager,
+            [Microsoft.AspNetCore.Mvc.FromServices] PluginScopedConfiguration resolver) =>
         {
             var plugin = pluginManager.GetPlugin(pluginId);
             if (plugin == null)
@@ -181,6 +220,8 @@ public static partial class ControlApi
             {
                 SerializeOptionsToFlat(defaultOptions, "", current);
             }
+            if (plugin.Metadata.SupportsScopedConfiguration)
+                current = resolver.Describe(pluginId, "", "/").Config;
 
             // 3. 提取属性的中文标签
             var labels = defaultOptions != null
@@ -192,8 +233,27 @@ public static partial class ControlApi
                 ? ExtractListElementDefaults(defaultOptions.GetType())
                 : new Dictionary<string, string>();
 
-            return Results.Json(new { success = true, pluginId, config = current, defaults, labels, fieldDefaults });
+            var schema = defaultOptions == null ? [] : PluginConfigurationSchema.Describe(defaultOptions.GetType());
+            if (defaultOptions != null)
+            {
+                foreach (var values in new[] { current, defaults, fieldDefaults })
+                    foreach (var key in values.Keys.Where(k => PluginConfigurationSchema.SensitivePath(defaultOptions.GetType(), k)).ToArray())
+                        values.Remove(key);
+            }
+            return Results.Json(new { success = true, pluginId, config = current, defaults, labels, fieldDefaults, schema,
+                supportsScopedConfiguration = plugin.Metadata.SupportsScopedConfiguration });
         }).Produces<PluginConfigResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
+
+        app.MapPost("/api/plugins/{pluginId}/config/validate", (string pluginId, HttpContext ctx,
+            IPluginManager pluginManager, Dictionary<string, string> body) =>
+        {
+            var plugin = pluginManager.GetPlugin(pluginId);
+            if (plugin == null) return Results.NotFound();
+            var errors = PreparePluginConfiguration(plugin, body, out _);
+            return errors.Count == 0
+                ? Results.Ok(new PluginConfigValidationResponse(true, errors))
+                : ManagementApiContract.Error(ctx, 400, "validation_failed", "插件配置校验失败", errors);
+        }).Produces<PluginConfigValidationResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // =============== 插件配置更新 ===============
 
@@ -211,10 +271,14 @@ public static partial class ControlApi
                 return Results.Json(new { success = false, message = "请求体不能为空" }, statusCode: 400);
             }
 
+            var errors = PreparePluginConfiguration(plugin, body, out var candidate);
+            if (errors.Count != 0)
+                return ManagementApiContract.Error(ctx, 400, "validation_failed", "插件配置校验失败", errors);
+
             var result = await ModifyPluginConfigPatch(config, pluginId, pluginConfigs =>
             {
                 // 将 flat key-value 转为嵌套结构后写入
-                var nested = FlatKeysToNestedDict(body);
+                var nested = FlatKeysToNestedDict(candidate);
                 pluginConfigs[pluginId] = nested;
                 return null;
             });

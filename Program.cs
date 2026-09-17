@@ -1609,10 +1609,10 @@ public class Program
             proxyApp.UseMiddleware<WafControlMiddleware>();
             proxyApp.UseMiddleware<LyWaf.Services.AntiBot.AntiBotMiddleware>();
             proxyApp.UseMiddleware<CaptchaMiddleware>();
-    proxyApp.UseLyWafPluginStage(PluginProxyStage.RequestProtection);
+            proxyApp.UseLyWafPluginStage(PluginProxyStage.RequestProtection);
             proxyApp.UseMiddleware<ThrottledMiddleware>();
             proxyApp.UseMiddleware<SpeedLimitMiddleware>();
-    proxyApp.UseLyWafPluginStage(PluginProxyStage.ResponseMonitoring);
+            proxyApp.UseLyWafPluginStage(PluginProxyStage.ResponseMonitoring);
             
             // 普通及低优先级插件（Normal, Low, Lowest）- 在核心中间件之后
             proxyApp.UseLyWafPluginsInProxyNormal();

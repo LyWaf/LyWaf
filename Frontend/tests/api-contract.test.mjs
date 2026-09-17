@@ -58,6 +58,15 @@ test('CC management uses the analysis proxy for reads, paging and writes', async
   assert.equal(fixture.api.advancedCcApi, undefined)
 })
 
+test('plugin config preflight posts the candidate without calling the save endpoint', async () => {
+  const fixture = clientFixture({ success: true })
+  const candidate = { DefaultQuality: '85' }
+  await fixture.api.pluginApi.validateConfig('image-process', candidate)
+  assert.equal(fixture.calls.length, 1)
+  assert.equal(fixture.calls[0].url, '/plugins/image-process/config/validate')
+  assert.equal(fixture.calls[0].data, candidate)
+})
+
 test('timing list requests only the selected page and retains global aggregates', async () => {
   const response = { data: [], total: 10000, summary: { apiCount: 10000 }, backendStats: [{ backend: 'origin', apiCount: 10000 }] }
   const fixture = clientFixture(response)
@@ -115,6 +124,15 @@ for (const status of [400, 403, 409, 429, 500]) {
     await assert.rejects(fixture.reject(error), value => value === error && value.message === 'business failure')
   })
 }
+
+test('effective plugin config queries host and path without saving', async () => {
+  const fixture = clientFixture({ config: {}, sources: {} })
+  await fixture.api.pluginApi.getEffectiveConfig('image-process', 'img.example.com', '/thumb/a.png')
+  assert.equal(fixture.calls.length, 1)
+  assert.equal(fixture.calls[0].url, '/plugins/image-process/config/effective')
+  assert.equal(fixture.calls[0].config.params.host, 'img.example.com')
+  assert.equal(fixture.calls[0].config.params.path, '/thumb/a.png')
+})
 
 test('legacy step-up response is rejected without prompting or retrying', async () => {
   const fixture = clientFixture()

@@ -3,7 +3,7 @@ import { refreshPluginMenus } from '@/composables/usePluginMenus'
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { pluginApi } from '@/api'
 import ListToolbar from '@/components/common/ListToolbar.vue'
-import type { PluginItem, PluginLogEntry, PluginLogFile, PluginActionItem } from '@/api'
+import type { PluginItem, PluginLogEntry, PluginLogFile, PluginActionItem, PluginConfigurationField } from '@/api'
 import { useToast } from '@/composables/useToast'
 import { useRouter } from 'vue-router'
 
@@ -33,6 +33,23 @@ const editConfigVisible = ref(false)
 const editConfigPlugin = ref<PluginItem | null>(null)
 const editConfigLoading = ref(false)
 const editConfigSaving = ref(false)
+const editConfigValidating = ref(false)
+const editConfigErrors = ref<Record<string, string[]>>({})
+const editConfigSchema = ref<Record<string, PluginConfigurationField>>({})
+const supportsScopedConfig = ref(false)
+const effectiveHost = ref('')
+const effectivePath = ref('/')
+const effectiveLoading = ref(false)
+const effectiveResult = ref<{ config: Record<string, string>; sources: Record<string, string>; lastReloadError?: string } | null>(null)
+
+const queryEffectiveConfig = async () => {
+  if (!editConfigPlugin.value) return
+  effectiveLoading.value = true
+  effectiveResult.value = null
+  try { effectiveResult.value = await pluginApi.getEffectiveConfig(editConfigPlugin.value.id, effectiveHost.value, effectivePath.value) }
+  catch (error: any) { showError(error?.message || '生效配置查询失败') }
+  finally { effectiveLoading.value = false }
+}
 const editConfigItems = ref<ConfigItem[]>([])
 const editConfigLabels = ref<Record<string, string>>({})
 const editConfigFieldDefaults = ref<Record<string, string>>({})
@@ -316,14 +333,20 @@ const openEditConfig = async (plugin: PluginItem) => {
   editConfigVisible.value = true
   editConfigLoading.value = true
   editConfigItems.value = []
+  editConfigErrors.value = {}
+  editConfigSchema.value = {}
+  supportsScopedConfig.value = false
+  effectiveResult.value = null
 
   try {
     const res = await pluginApi.getConfig(plugin.id)
     if (res.success) {
+      supportsScopedConfig.value = res.supportsScopedConfiguration === true
       const lbls = res.labels || {}
       const fDefs = res.fieldDefaults || {}
       editConfigLabels.value = lbls
       editConfigFieldDefaults.value = fDefs
+      editConfigSchema.value = Object.fromEntries((res.schema || []).map(field => [field.path, field]))
       const items = parseFlatToStructured(res.config || {}, res.defaults || {}, lbls, fDefs)
       editConfigItems.value = items
       editConfigSnapshot.value = JSON.stringify(flattenItems(items))
@@ -340,6 +363,7 @@ const openEditConfig = async (plugin: PluginItem) => {
 const saveConfig = async () => {
   if (!editConfigPlugin.value) return
   editConfigSaving.value = true
+  editConfigErrors.value = {}
   try {
     const configMap = flattenItems(editConfigItems.value)
     const res = await pluginApi.saveConfig(editConfigPlugin.value.id, configMap)
@@ -351,10 +375,24 @@ const saveConfig = async () => {
       showError(res.message || '保存失败')
     }
   } catch (error: any) {
+    editConfigErrors.value = error?.response?.data?.error?.details || {}
     showError(error?.response?.data?.message || error?.message || '保存失败')
   } finally {
     editConfigSaving.value = false
   }
+}
+
+const validateConfig = async () => {
+  if (!editConfigPlugin.value) return
+  editConfigValidating.value = true
+  editConfigErrors.value = {}
+  try {
+    await pluginApi.validateConfig(editConfigPlugin.value.id, flattenItems(editConfigItems.value))
+    showSuccess('配置校验通过，尚未保存')
+  } catch (error: any) {
+    editConfigErrors.value = error?.response?.data?.error?.details || {}
+    showError(error?.response?.data?.message || error?.message || '配置校验失败')
+  } finally { editConfigValidating.value = false }
 }
 
 // =============== 数组操作 ===============
@@ -892,7 +930,11 @@ onMounted(loadPlugins)
                     (item as SimpleItem).value === 'true' ? 'translate-x-6' : 'translate-x-1'
                   ]" />
                 </button>
-                <input v-else v-model="(item as SimpleItem).value" type="text"
+                <input v-else :value="(item as SimpleItem).value"
+                  @input="(item as SimpleItem).value = ($event.target as HTMLInputElement).value"
+                  :type="['Int32', 'Int64', 'Double', 'Single', 'Decimal'].includes(editConfigSchema[item.key]?.type || '') ? 'number' : 'text'"
+                  step="any"
+                  :min="editConfigSchema[item.key]?.minimum" :max="editConfigSchema[item.key]?.maximum"
                   :class="[
                     'w-full bg-dark-sidebar border rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500',
                     isSimpleModified(item as SimpleItem) ? 'border-yellow-500/40' : 'border-dark-border'
@@ -1055,8 +1097,29 @@ onMounted(loadPlugins)
         </div>
 
         <!-- 底部按钮 -->
+        <section v-if="supportsScopedConfig" class="px-6 py-3 border-t border-gray-700 max-h-64 overflow-auto">
+          <h3 class="text-sm font-medium mb-2">生效配置</h3>
+          <div class="flex flex-wrap gap-2">
+            <input v-model="effectiveHost" aria-label="站点域名" placeholder="img.example.com" class="input min-w-0 flex-1" />
+            <input v-model="effectivePath" aria-label="请求路径" placeholder="/thumb/a.png" class="input min-w-0 flex-1" />
+            <button class="btn btn-sm btn-secondary" :disabled="effectiveLoading" @click="queryEffectiveConfig">{{ effectiveLoading ? '查询中...' : '查询' }}</button>
+          </div>
+          <p v-if="effectiveResult?.lastReloadError" role="alert" class="text-sm text-red-400 mt-2">{{ effectiveResult.lastReloadError }}</p>
+          <table v-if="effectiveResult" class="w-full text-xs mt-3 table-fixed">
+            <thead><tr><th class="text-left">字段</th><th class="text-left">值</th><th class="text-left">来源</th></tr></thead>
+            <tbody><tr v-for="(value, key) in effectiveResult.config" :key="key">
+              <td class="break-all py-1">{{ key }}</td><td class="break-all">{{ value }}</td><td class="break-all">{{ effectiveResult.sources[key] }}</td>
+            </tr></tbody>
+          </table>
+        </section>
+        <div v-if="Object.keys(editConfigErrors).length" role="alert" class="px-6 py-3 text-sm text-red-400 max-h-32 overflow-auto">
+          <p v-for="(messages, field) in editConfigErrors" :key="field">{{ field }}: {{ messages.join('；') }}</p>
+        </div>
         <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-border">
           <button @click="editConfigVisible = false" class="btn btn-sm btn-secondary">取消</button>
+          <button @click="validateConfig" :disabled="editConfigSaving || editConfigValidating || editConfigLoading" class="btn btn-sm btn-secondary">
+            {{ editConfigValidating ? '校验中...' : '校验配置' }}
+          </button>
           <button @click="saveConfig"
             :disabled="editConfigSaving || !hasConfigChanges"
             :class="['btn btn-sm', hasConfigChanges ? 'btn-primary' : 'btn-secondary opacity-50 cursor-not-allowed']">

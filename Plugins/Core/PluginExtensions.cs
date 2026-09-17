@@ -38,6 +38,9 @@ public static class PluginExtensions
 
         services.AddSingleton(manager);
         services.AddSingleton<IPluginManager>(manager);
+        services.AddSingleton<PluginScopedConfiguration>(provider => new(configuration,
+            manager.GetAllPlugins().Select(p => p.Metadata), provider.GetRequiredService<ILogger<PluginScopedConfiguration>>()));
+        services.AddSingleton<IPluginRequestConfiguration>(provider => provider.GetRequiredService<PluginScopedConfiguration>());
 
         // 注册插件生命周期管理器
         services.AddHostedService<PluginHostedService>();
@@ -156,6 +159,8 @@ public static class PluginExtensions
     /// </summary>
     public static async Task<IHost> InitializeLyWafPluginsAsync(this IHost host)
     {
+        // Validate all scoped candidates before any plugin starts serving requests.
+        host.Services.GetRequiredService<PluginScopedConfiguration>();
         var manager = host.Services.GetRequiredService<PluginManager>();
         await manager.InitializePluginsAsync(host.Services);
         return host;
@@ -165,12 +170,13 @@ public static class PluginExtensions
 /// <summary>
 /// 插件生命周期托管服务
 /// </summary>
-public class PluginHostedService(PluginManager pluginManager) : IHostedService
+public class PluginHostedService(PluginManager pluginManager, PluginScopedConfiguration configuration) : IHostedService
 {
     private readonly PluginManager _pluginManager = pluginManager;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        _ = configuration;
         await _pluginManager.StartPluginsAsync(cancellationToken);
     }
     

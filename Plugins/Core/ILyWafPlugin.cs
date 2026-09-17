@@ -4,6 +4,25 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace LyWaf.Plugins.Core;
 
+/// <summary>Declares configuration display and reload requirements for host management tools.</summary>
+[AttributeUsage(AttributeTargets.Property)]
+public sealed class PluginConfigurationAttribute : Attribute
+{
+    public bool Sensitive { get; set; }
+    public bool RequiresRestart { get; set; }
+    public PluginConfigurationScope Scopes { get; set; } = PluginConfigurationScope.All;
+}
+
+/// <summary>Configuration levels accepted by an individual plugin field.</summary>
+[Flags]
+public enum PluginConfigurationScope { Global = 1, Site = 2, Route = 4, All = 7 }
+
+/// <summary>Returns detached effective options for the current request.</summary>
+public interface IPluginRequestConfiguration
+{
+    T Get<T>(Microsoft.AspNetCore.Http.HttpContext context, string pluginId) where T : class;
+}
+
 /// <summary>
 /// 插件优先级
 /// </summary>
@@ -63,6 +82,8 @@ public enum PluginPermission
 /// </summary>
 public class PluginMetadata
 {
+    /// <summary>Opt in only when request handlers consume IPluginRequestConfiguration.</summary>
+    public bool SupportsScopedConfiguration { get; init; }
     /// <summary>插件唯一标识</summary>
     public required string Id { get; init; }
     

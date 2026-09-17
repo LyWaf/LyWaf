@@ -15,6 +15,7 @@ public class ImageProcessPlugin : LyWafPluginBase
     private readonly PluginMetadata _metadata = new()
     {
         Id = "image-process",
+        SupportsScopedConfiguration = true,
         Name = "图片处理器",
         Version = "1.0.0",
         Description = "实时处理图片：缩放、旋转、裁剪、格式转换",
@@ -80,6 +81,7 @@ public class ImageProcessOptions
     /// <summary>默认输出质量 (1-100)</summary>
     [ConfigurationKeyName("DefaultQuality")]
     [System.ComponentModel.Description("默认质量 (1-100)")]
+    [System.ComponentModel.DataAnnotations.Range(1, 100)]
     public int DefaultQuality { get; set; } = 85;
 
     // 别名：支持 Quality
@@ -89,11 +91,13 @@ public class ImageProcessOptions
     /// <summary>最大输出宽度</summary>
     [ConfigurationKeyName("MaxWidth")]
     [System.ComponentModel.Description("最大宽度")]
+    [System.ComponentModel.DataAnnotations.Range(1, 16384)]
     public int MaxWidth { get; set; } = 4096;
 
     /// <summary>最大输出高度</summary>
     [ConfigurationKeyName("MaxHeight")]
     [System.ComponentModel.Description("最大高度")]
+    [System.ComponentModel.DataAnnotations.Range(1, 16384)]
     public int MaxHeight { get; set; } = 4096;
 
     /// <summary>启用 URL 参数处理</summary>
@@ -104,6 +108,7 @@ public class ImageProcessOptions
     /// <summary>缓存处理后的图片（秒）</summary>
     [ConfigurationKeyName("CacheSeconds")]
     [System.ComponentModel.Description("缓存时长(秒)")]
+    [System.ComponentModel.DataAnnotations.Range(0, 86400)]
     public int CacheSeconds { get; set; } = 3600;
 
     // 别名：支持 Cache
@@ -124,11 +129,23 @@ public class ImageProcessOptions
 /// 
 /// 示例：/image.jpg?w=200&h=200&f=webp&q=80
 /// </summary>
-public class ImageProcessMiddleware(RequestDelegate next, IConfiguration configuration)
+public class ImageProcessMiddleware
 {
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
-    private readonly RequestDelegate _next = next;
-    private readonly ImageProcessOptions _options = GetOptions(configuration);
+    private readonly RequestDelegate _next;
+    private readonly ImageProcessOptions _options;
+
+    public ImageProcessMiddleware(RequestDelegate next, IConfiguration configuration)
+    {
+        _next = next;
+        _options = GetOptions(configuration);
+    }
+
+    private ImageProcessMiddleware(RequestDelegate next, ImageProcessOptions options)
+    {
+        _next = next;
+        _options = options;
+    }
 
     private static ImageProcessOptions GetOptions(IConfiguration configuration)
     {
@@ -137,7 +154,14 @@ public class ImageProcessMiddleware(RequestDelegate next, IConfiguration configu
         return options;
     }
 
-    public async Task InvokeAsync(HttpContext context)
+    public Task InvokeAsync(HttpContext context)
+    {
+        var resolver = context.RequestServices.GetService<IPluginRequestConfiguration>();
+        var worker = resolver == null ? this : new ImageProcessMiddleware(_next, resolver.Get<ImageProcessOptions>(context, "image-process"));
+        return worker.InvokeCoreAsync(context);
+    }
+
+    private async Task InvokeCoreAsync(HttpContext context)
     {
         // 检查是否需要处理图片
         if (!ShouldProcessImage(context))

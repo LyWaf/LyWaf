@@ -15,6 +15,8 @@ namespace LyWaf.Plugins.Core;
 /// </summary>
 public class PluginOptions
 {
+    /// <summary>Explicit activation list; changes require restart. Null keeps legacy discovery behavior.</summary>
+    public string[]? Load { get; set; }
     /// <summary>
     /// 是否启用插件系统
     /// </summary>
@@ -113,6 +115,7 @@ public class PluginManager : IPluginManager
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
     private readonly ConcurrentDictionary<string, PluginInfo> _plugins = new();
     private PluginOptions _options;
+    private readonly string[]? _load;
     private readonly IConfiguration _configuration;
     private readonly IPluginEventBus _eventBus;
     private IServiceProvider? _serviceProvider;
@@ -124,6 +127,7 @@ public class PluginManager : IPluginManager
         _configuration = configuration;
         _eventBus = eventBus;
         _options = optionsMonitor.CurrentValue;
+        _load = _options.Load?.ToArray();
 
         optionsMonitor.OnChange(newOptions =>
         {
@@ -280,6 +284,7 @@ public class PluginManager : IPluginManager
                 }
 
                 var metadata = plugin.Metadata;
+                if (_load != null && !_load.Contains(metadata.Id, StringComparer.OrdinalIgnoreCase)) continue;
                 if (assemblyPath != null) PluginPackageManager.ValidateLoadedMetadata(assemblyPath, metadata);
 
                 // 检查是否是系统插件（仅由 SystemPlugins 配置决定）
@@ -559,6 +564,9 @@ public class PluginManager : IPluginManager
     internal bool GetPluginEnabledState(string pluginId, bool isSystemPlugin, bool enabledByDefault)
     {
         if (_options.EnabledOverrides.TryGetValue(pluginId, out var enabled)) return enabled;
+        // With explicit loading, Enabled belongs to request configuration, not lifecycle activation.
+        if (_load != null)
+            return _load.Contains(pluginId, StringComparer.OrdinalIgnoreCase) && !_options.DisabledPlugins.Contains(pluginId);
         // 1. 首先检查 PluginConfigs 中是否有该插件的配置
         if (_options.PluginConfigs.TryGetValue(pluginId, out var pluginConfig))
         {

@@ -215,6 +215,7 @@ public class LyConfigProvider : ConfigurationProvider
                 break;
 
             case List<object> list:
+                if (list.Count == 0) target[key] = "";
                 for (var i = 0; i < list.Count; i++)
                 {
                     var itemKey = $"{key}:{i}";
@@ -223,6 +224,7 @@ public class LyConfigProvider : ConfigurationProvider
                 break;
 
             case System.Collections.IList genericList:
+                if (genericList.Count == 0) target[key] = "";
                 var index = 0;
                 foreach (var item in genericList)
                 {

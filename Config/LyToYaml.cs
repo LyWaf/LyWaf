@@ -2957,6 +2957,12 @@ public static class LyToAppSettingsConverter
                 case "enabled":
                     plugins["Enabled"] = kv.Value is bool b ? b : kv.Value?.ToString()?.ToLower() == "true";
                     break;
+                case "load":
+                    plugins["Load"] = ParseStringList(kv.Value);
+                    break;
+                case "enabledoverrides":
+                    plugins["EnabledOverrides"] = kv.Value!;
+                    break;
                 case "plugindirectory":
                 case "plugin_directory":
                 case "directory":
@@ -3011,6 +3017,7 @@ public static class LyToAppSettingsConverter
                             if (configKv.Value is Dictionary<string, object> pluginConfig)
                             {
                                 pluginConfigs[configKv.Key] = pluginConfig;
+                                plugins[configKv.Key] = pluginConfig;
                             }
                         }
                         if (pluginConfigs.Count > 0)
@@ -3025,6 +3032,7 @@ public static class LyToAppSettingsConverter
                     {
                         var pluginConfigs = EnsureDict(plugins, "PluginConfigs");
                         pluginConfigs[kv.Key] = pluginConfigDict;
+                        plugins[kv.Key] = pluginConfigDict;
                     }
                     break;
             }

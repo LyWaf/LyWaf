@@ -1039,12 +1039,19 @@ export interface PluginsResponse {
 }
 
 export interface PluginConfigResponse {
+  supportsScopedConfiguration?: boolean
   success: boolean
   pluginId: string
   config: Record<string, string>
   defaults: Record<string, string>
   labels?: Record<string, string>
   fieldDefaults?: Record<string, string>
+  schema?: PluginConfigurationField[]
+}
+
+export interface PluginConfigurationField {
+  path: string; type: string; label: string; required: boolean
+  minimum?: string; maximum?: string; sensitive: boolean; requiresRestart: boolean
 }
 
 export const pluginApi = {
@@ -1070,6 +1077,13 @@ export const pluginApi = {
 
   saveConfig: (pluginId: string, config: Record<string, string>) =>
     api.post<ApiResponse>(`/plugins/${encodeURIComponent(pluginId)}/config`, config),
+
+  validateConfig: (pluginId: string, config: Record<string, string>) =>
+    api.post<ApiResponse>(`/plugins/${encodeURIComponent(pluginId)}/config/validate`, config),
+
+  getEffectiveConfig: (pluginId: string, host: string, path: string) =>
+    api.get<{ config: Record<string, string>; sources: Record<string, string>; lastReloadError?: string }>(
+      `/plugins/${encodeURIComponent(pluginId)}/config/effective`, { params: { host, path } }),
 
   executeAction: (pluginId: string, actionId: string, parameters?: Record<string, string>) =>
     api.post<PluginActionResponse>(
