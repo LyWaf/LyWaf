@@ -358,6 +358,13 @@ public class FileProviderMiddleware
         
         // 使用 FileServerItem 的配置直接获取文件
         var fileConfig = fileServerItem.ToFileEveryConfig();
+        using var publication = DirectoryPublication.Acquire(fileConfig.BasePath);
+        fileConfig.BasePath = publication.Path;
+        if (path.Split('/', '\\').Any(DirectoryPublication.IsInternalName))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
         var real = await fileService.GetFileRealAsync(context.Request, fileConfig, requestPath,  path);
         _logger.Debug("请求本地的文件服务:'{}':'{}', 实际映射:{}", prefix, path, real);
         if (real == null)

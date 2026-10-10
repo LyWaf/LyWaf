@@ -4,7 +4,9 @@ namespace LyWaf.Plugins.Core;
 public enum PluginProxyStage
 {
     RequestProtection,
-    ResponseMonitoring
+    ResponseMonitoring,
+    /// <summary>Runs before all other proxy middleware, including request body readers.</summary>
+    First
 }
 
 /// <summary>Allows a plugin to supply middleware at a stable proxy execution position.</summary>

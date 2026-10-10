@@ -574,6 +574,9 @@ public class LbPatchProvider(string? filePath = null, bool validateSource = true
             if (root.TryGetProperty("PluginEnabledStates", out var enabledStates))
                 FlattenJsonElement("Plugins:EnabledOverrides", enabledStates);
 
+            if (root.TryGetProperty("PluginConfigSnapshots", out var snapshots))
+                FlattenJsonElement("PluginConfigSnapshots", snapshots);
+
             // 加载 PluginConfigs 补丁（插件配置）
             if (root.TryGetProperty("PluginConfigs", out var pluginConfigsEl))
             {

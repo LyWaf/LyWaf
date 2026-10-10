@@ -8,6 +8,20 @@ namespace LyWaf.Tests;
 public sealed class ManagementErrorFilterTests
 {
     [Fact]
+    public async Task PluginPermissionRejectionIsActionableForbidden()
+    {
+        var result = await new ManagementErrorFilter().InvokeAsync(new DefaultEndpointFilterInvocationContext(new DefaultHttpContext()),
+            _ => throw new LyWaf.Plugins.Core.PluginPermissionException("http-upload",
+                LyWaf.Plugins.Core.PluginPermission.DataDirectory | LyWaf.Plugins.Core.PluginPermission.SensitiveConfiguration));
+        Assert.Equal(403, Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode);
+        var envelope = Assert.IsType<ApiErrorEnvelope>(Assert.IsAssignableFrom<IValueHttpResult>(result).Value);
+        Assert.Equal("plugin_permission_denied", envelope.Error.Code);
+        Assert.Contains("DataDirectory", envelope.Error.Message);
+        Assert.Contains("SensitiveConfiguration", envelope.Error.Message);
+        Assert.Contains("Plugins.Permissions", envelope.Error.Message);
+    }
+
+    [Fact]
     public async Task BusinessValidationUsesJsonFieldCasing()
     {
         var result = await new ManagementErrorFilter().InvokeAsync(new DefaultEndpointFilterInvocationContext(new DefaultHttpContext()),

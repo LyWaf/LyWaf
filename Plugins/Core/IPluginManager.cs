@@ -691,7 +691,8 @@ public class PluginManager : IPluginManager
         }
 
         if (!HasRequiredPermissions(info.Plugin.Metadata, IsSystemPlugin(pluginId), _options))
-            throw new UnauthorizedAccessException($"插件 {pluginId} 缺少其声明的宿主权限。");
+            throw new PluginPermissionException(pluginId, info.Plugin.Metadata.RequestedPermissions
+                & ~_options.Permissions.GetValueOrDefault(pluginId, PluginPermission.None));
 
         info.IsEnabled = true;
         _options.DisabledPlugins.Remove(pluginId);

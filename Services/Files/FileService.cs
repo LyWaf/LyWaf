@@ -211,7 +211,7 @@ public sealed class FileService : IFileService
         return config.FollowLinks || !ContainsReparsePoint(root, target);
     }
 
-    public bool IsVisible(FileEveryConfig config, string path) => IsAllowedExistingPath(config, path) &&
+    public bool IsVisible(FileEveryConfig config, string path) => !DirectoryPublication.IsInternalName(Path.GetFileName(path)) && IsAllowedExistingPath(config, path) &&
         (config.ShowHidden || !Path.GetFileName(path).StartsWith(".", StringComparison.Ordinal)) &&
         (Directory.Exists(path) || !IsDeniedExtension(config, path));
 

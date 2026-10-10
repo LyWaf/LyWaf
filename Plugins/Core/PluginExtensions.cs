@@ -41,6 +41,7 @@ public static class PluginExtensions
         services.AddSingleton<PluginScopedConfiguration>(provider => new(configuration,
             manager.GetAllPlugins().Select(p => p.Metadata), provider.GetRequiredService<ILogger<PluginScopedConfiguration>>()));
         services.AddSingleton<IPluginRequestConfiguration>(provider => provider.GetRequiredService<PluginScopedConfiguration>());
+        services.AddSingleton<PluginConfigurationPublisher>();
 
         // 注册插件生命周期管理器
         services.AddHostedService<PluginHostedService>();
@@ -142,6 +143,10 @@ public static class PluginExtensions
         manager.ConfigureProxyPipelineHigh(proxyApp);
         return proxyApp;
     }
+
+    /// <summary>Registers plugin preparation middleware before any other proxy middleware.</summary>
+    public static IApplicationBuilder UseLyWafPluginsInProxyFirst(this IApplicationBuilder proxyApp) =>
+        proxyApp.UseLyWafPluginStage(PluginProxyStage.First);
     
     /// <summary>
     /// 在代理管道中使用普通及低优先级插件（Normal, Low, Lowest）

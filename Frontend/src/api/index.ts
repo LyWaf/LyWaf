@@ -1039,6 +1039,7 @@ export interface PluginsResponse {
 }
 
 export interface PluginConfigResponse {
+  version: string
   supportsScopedConfiguration?: boolean
   success: boolean
   pluginId: string
@@ -1075,8 +1076,9 @@ export const pluginApi = {
   getConfig: (pluginId: string) =>
     api.get<PluginConfigResponse>(`/plugins/${encodeURIComponent(pluginId)}/config`),
 
-  saveConfig: (pluginId: string, config: Record<string, string>) =>
-    api.post<ApiResponse>(`/plugins/${encodeURIComponent(pluginId)}/config`, config),
+  saveConfig: (pluginId: string, config: Record<string, string>, version: string) =>
+    api.post<ApiResponse & { status: string; version: string }>(`/plugins/${encodeURIComponent(pluginId)}/config`, config,
+      { headers: { 'If-Match': version } }),
 
   validateConfig: (pluginId: string, config: Record<string, string>) =>
     api.post<ApiResponse>(`/plugins/${encodeURIComponent(pluginId)}/config/validate`, config),

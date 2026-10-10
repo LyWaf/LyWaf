@@ -14,6 +14,10 @@ public sealed class ManagementErrorFilter : IEndpointFilter
             return ManagementApiContract.Error(context.HttpContext, 400, "validation_failed", "请求字段校验失败", validation);
         object? result;
         try { result = await next(context); }
+        catch (LyWaf.Plugins.Core.PluginPermissionException ex)
+        {
+            return ManagementApiContract.Error(context.HttpContext, 403, "plugin_permission_denied", ex.Message);
+        }
         catch (ArgumentException ex)
         {
             return ManagementApiContract.Error(context.HttpContext, 400, "validation_failed", ex.Message,

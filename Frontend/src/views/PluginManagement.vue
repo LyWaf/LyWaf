@@ -37,6 +37,7 @@ const editConfigValidating = ref(false)
 const editConfigErrors = ref<Record<string, string[]>>({})
 const editConfigSchema = ref<Record<string, PluginConfigurationField>>({})
 const supportsScopedConfig = ref(false)
+const editConfigVersion = ref('')
 const effectiveHost = ref('')
 const effectivePath = ref('/')
 const effectiveLoading = ref(false)
@@ -61,7 +62,7 @@ const hasConfigChanges = computed(() => {
 })
 
 // =============== flat → 结构化 ===============
-function parseFlatToStructured(flat: Record<string, string>, defaults: Record<string, string>, labels: Record<string, string>, fieldDefaults: Record<string, string>): ConfigItem[] {
+function parseFlatToStructured(flat: Record<string, string>, defaults: Record<string, string>, labels: Record<string, string>, fieldDefaults: Record<string, string>, schema: Record<string, PluginConfigurationField> = {}): ConfigItem[] {
   // 按顶层 key 分组
   const groups = new Map<string, { sub: Map<string, string>; defSub: Map<string, string> }>()
 
@@ -120,10 +121,14 @@ function parseFlatToStructured(flat: Record<string, string>, defaults: Record<st
       continue
     }
 
-    const allSub = new Map(g.defSub)
-    for (const [k, v] of g.sub) allSub.set(k, v)
+    const allSub = new Map(g.sub.size ? g.sub : g.defSub)
+    const shape = new Map([...g.defSub, ...g.sub])
+    const type = schema[topKey]?.type || ''
+    const listType = type.startsWith('List') || type.endsWith('[]')
+    const dictionaryType = type.startsWith('Dictionary')
+    const objectFields = Object.keys(labels).some(key => key.startsWith(topKey + ':'))
 
-    if (allSub.size === 1 && allSub.has('')) {
+    if (shape.size === 1 && shape.has('') && !listType && !dictionaryType && !objectFields) {
       result.push({
         type: 'simple',
         key: topKey,
@@ -131,23 +136,20 @@ function parseFlatToStructured(flat: Record<string, string>, defaults: Record<st
         defaultValue: g.defSub.get('') ?? '',
       })
     } else {
-      const subKeys = [...allSub.keys()].filter(k => k !== '')
+      const subKeys = [...shape.keys()].filter(k => k !== '')
 
       // 对象数组：子 key 格式为 "N:field"
-      const isObjectArray = subKeys.length > 0 && subKeys.every(k => /^\d+:.+/.test(k))
+      const isObjectArray = subKeys.length > 0 ? subKeys.every(k => /^\d+:.+/.test(k)) : objectFields && !dictionaryType
       // 简单数组：子 key 全是数字
-      const isArray = !isObjectArray && subKeys.length > 0 && subKeys.every(k => /^\d+$/.test(k))
+      const isArray = !isObjectArray && (listType || subKeys.length > 0 && subKeys.every(k => /^\d+$/.test(k)))
 
       if (isObjectArray) {
         result.push(parseObjectArray(topKey, allSub, g.defSub, labels, fieldDefaults))
       } else if (isArray) {
-        const maxIdx = Math.max(...subKeys.map(Number))
-        const items: string[] = []
-        const defaultItems: string[] = []
-        for (let i = 0; i <= maxIdx; i++) {
-          items.push(allSub.get(String(i)) ?? '')
-          defaultItems.push(g.defSub.get(String(i)) ?? '')
-        }
+        const arrayValues = (values: Map<string, string>) => [...values].filter(([key]) => /^\d+$/.test(key))
+          .sort(([a], [b]) => Number(a) - Number(b)).map(([, value]) => value)
+        const items = arrayValues(allSub)
+        const defaultItems = arrayValues(g.defSub)
         result.push({ type: 'array', key: topKey, items, defaultItems })
       } else {
         const entries: { key: string; value: string }[] = []
@@ -233,10 +235,12 @@ function flattenItems(items: ConfigItem[]): Record<string, string> {
     if (item.type === 'simple') {
       result[item.key] = item.value
     } else if (item.type === 'array') {
+      if (item.items.length === 0) result[item.key] = ''
       for (let i = 0; i < item.items.length; i++) {
         result[`${item.key}:${i}`] = item.items[i]
       }
     } else if (item.type === 'dict') {
+      if (!item.entries.some(entry => entry.key)) result[item.key] = ''
       for (const entry of item.entries) {
         if (entry.key) result[`${item.key}:${entry.key}`] = entry.value
       }
@@ -253,6 +257,7 @@ function flattenItems(items: ConfigItem[]): Record<string, string> {
         }
         idx++
       }
+      if (idx === 0) result[item.key] = ''
     }
   }
   return result
@@ -336,18 +341,22 @@ const openEditConfig = async (plugin: PluginItem) => {
   editConfigErrors.value = {}
   editConfigSchema.value = {}
   supportsScopedConfig.value = false
+  editConfigVersion.value = ''
   effectiveResult.value = null
 
   try {
     const res = await pluginApi.getConfig(plugin.id)
     if (res.success) {
       supportsScopedConfig.value = res.supportsScopedConfiguration === true
+      editConfigVersion.value = res.version
       const lbls = res.labels || {}
       const fDefs = res.fieldDefaults || {}
       editConfigLabels.value = lbls
       editConfigFieldDefaults.value = fDefs
       editConfigSchema.value = Object.fromEntries((res.schema || []).map(field => [field.path, field]))
-      const items = parseFlatToStructured(res.config || {}, res.defaults || {}, lbls, fDefs)
+      const visibleConfig = { ...(res.config || {}) }
+      if (plugin.id === 'http-upload') visibleConfig.Key = ''
+      const items = parseFlatToStructured(visibleConfig, res.defaults || {}, lbls, fDefs, editConfigSchema.value)
       editConfigItems.value = items
       editConfigSnapshot.value = JSON.stringify(flattenItems(items))
     } else {
@@ -366,7 +375,7 @@ const saveConfig = async () => {
   editConfigErrors.value = {}
   try {
     const configMap = flattenItems(editConfigItems.value)
-    const res = await pluginApi.saveConfig(editConfigPlugin.value.id, configMap)
+    const res = await pluginApi.saveConfig(editConfigPlugin.value.id, configMap, editConfigVersion.value)
     if (res.success) {
       showSuccess(res.message || '插件配置已保存')
       editConfigSnapshot.value = JSON.stringify(configMap)
@@ -932,14 +941,15 @@ onMounted(loadPlugins)
                 </button>
                 <input v-else :value="(item as SimpleItem).value"
                   @input="(item as SimpleItem).value = ($event.target as HTMLInputElement).value"
-                  :type="['Int32', 'Int64', 'Double', 'Single', 'Decimal'].includes(editConfigSchema[item.key]?.type || '') ? 'number' : 'text'"
+                  :type="editConfigSchema[item.key]?.sensitive ? 'password' : ['Int32', 'Int64', 'Double', 'Single', 'Decimal'].includes(editConfigSchema[item.key]?.type || '') ? 'number' : 'text'"
+                  autocomplete="new-password"
                   step="any"
                   :min="editConfigSchema[item.key]?.minimum" :max="editConfigSchema[item.key]?.maximum"
                   :class="[
                     'w-full bg-dark-sidebar border rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500',
                     isSimpleModified(item as SimpleItem) ? 'border-yellow-500/40' : 'border-dark-border'
                   ]"
-                  :placeholder="(item as SimpleItem).defaultValue || ''" />
+                  :placeholder="editConfigSchema[item.key]?.sensitive ? '留空保留当前值' : (item as SimpleItem).defaultValue || ''" />
                 <button v-if="isSimpleModified(item as SimpleItem)" @click="resetSimple(item as SimpleItem)"
                   class="flex-shrink-0 text-gray-500 hover:text-yellow-400 transition-colors p-1"
                   :title="`重置为默认值: ${(item as SimpleItem).defaultValue}`">

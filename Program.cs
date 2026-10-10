@@ -1582,6 +1582,7 @@ public class Program
         
         app.MapReverseProxy(proxyApp =>
         {
+            proxyApp.UseLyWafPluginsInProxyFirst();
             proxyApp.UseMiddleware<LyWaf.Services.Sites.SiteStatisticsMiddleware>();
             proxyApp.UseMiddleware<LyWaf.Services.Incidents.SecurityIncidentMiddleware>();
             proxyApp.UseMiddleware<LyWaf.Services.Lifecycle.RequestDrainMiddleware>();

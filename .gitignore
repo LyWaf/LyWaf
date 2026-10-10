@@ -36,3 +36,4 @@ tests/**/bin/
 tests/**/obj/
 sdk/**/bin/
 sdk/**/obj/
+*/http-upload/*

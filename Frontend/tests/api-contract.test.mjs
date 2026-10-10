@@ -125,6 +125,13 @@ for (const status of [400, 403, 409, 429, 500]) {
   })
 }
 
+test('plugin publication sends the version read by the editor', async () => {
+  const fixture = clientFixture({ success: true, status: 'applied' })
+  await fixture.api.pluginApi.saveConfig('image-process', { DefaultQuality: '70' }, 'version-one')
+  assert.equal(fixture.calls.length, 1)
+  assert.equal(fixture.calls[0].config.headers['If-Match'], 'version-one')
+})
+
 test('effective plugin config queries host and path without saving', async () => {
   const fixture = clientFixture({ config: {}, sources: {} })
   await fixture.api.pluginApi.getEffectiveConfig('image-process', 'img.example.com', '/thumb/a.png')

@@ -369,29 +369,16 @@ public static partial class ControlApi
     /// <summary>
     /// 修改补丁文件中的 PluginConfigs 节点
     /// </summary>
-    private static async Task<IResult> ModifyPluginConfigPatch(IConfiguration config, string pluginId,
-        Func<Dictionary<string, object>, string?> modifier)
+    private static async Task PersistPluginConfigPatch(IConfiguration config, string pluginId,
+        Dictionary<string, string> candidate, bool scoped, Action validateApplied)
     {
-        await _lbPatchLock.WaitAsync();
-        try
-        {
-            var patch = await ReadPatchFile();
-            var pluginConfigs = EnsurePatchSection(patch, "PluginConfigs");
-
-            var error = modifier(pluginConfigs);
-            if (error != null)
-            {
-                return Results.Json(new { success = false, message = error }, statusCode: 400);
-            }
-
-            UpdatePatchSourceTracking(patch);
-            await SavePatchAndReload(patch, config);
-            return Results.Json(new { success = true, message = "插件配置已更新" });
-        }
-        finally
-        {
-            _lbPatchLock.Release();
-        }
+        // Caller holds ConfigurationMutationGate.Patch across version check and persistence.
+        var patch = await ReadPatchFile(strict: true);
+        var nested = FlatKeysToNestedDict(candidate);
+        EnsurePatchSection(patch, "PluginConfigs")[pluginId] = nested;
+        if (scoped) EnsurePatchSection(patch, "PluginConfigSnapshots")[pluginId] = nested;
+        UpdatePatchSourceTracking(patch);
+        await SavePatchAndReload(patch, config, validateApplied);
     }
 
     // =============== 配置来源检测辅助方法 ===============
@@ -533,7 +520,7 @@ public static partial class ControlApi
     /// <summary>
     /// 读取补丁文件并反序列化为可操作的字典
     /// </summary>
-    private static async Task<Dictionary<string, object>> ReadPatchFile()
+    private static async Task<Dictionary<string, object>> ReadPatchFile(bool strict = false)
     {
         var patchPath = LbPatchConfig.GetPatchFilePath();
         Dictionary<string, object> patch;
@@ -545,7 +532,7 @@ public static partial class ControlApi
                 patch = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json,
                 new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = false }) ?? new();
             }
-            catch (System.Exception)
+            catch (System.Exception) when (!strict)
             {
                 patch = new Dictionary<string, object>();
             }
@@ -634,13 +621,15 @@ public static partial class ControlApi
     private static async Task<ConfigurationChangeImpact> ApplyVersionReloadOrRollback(
         ConfigVersionInfo version,
         IConfigurationRoot root,
-        IReadOnlyDictionary<string, string?> before)
+        IReadOnlyDictionary<string, string?> before, Action? validateApplied = null)
     {
         var lifecycle = ServiceLocator.GetRequiredService<ConfigurationLifecycleService>()
             ?? throw new InvalidOperationException("配置生命周期服务尚未初始化");
         try
         {
-            return lifecycle.ReloadAndValidate(root, before);
+            var impact = lifecycle.ReloadAndValidate(root, before);
+            validateApplied?.Invoke();
+            return impact;
         }
         catch
         {
@@ -662,7 +651,7 @@ public static partial class ControlApi
     /// <summary>
     /// 保存补丁文件并触发配置重载
     /// </summary>
-    private static async Task SavePatchAndReload(Dictionary<string, object> patch, IConfiguration config)
+    private static async Task SavePatchAndReload(Dictionary<string, object> patch, IConfiguration config, Action? validateApplied = null)
     {
         var patchPath = LbPatchConfig.GetPatchFilePath();
         var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
@@ -675,7 +664,7 @@ public static partial class ControlApi
         {
             var lifecycle = ServiceLocator.GetRequiredService<ConfigurationLifecycleService>()
                 ?? throw new InvalidOperationException("配置生命周期服务尚未初始化");
-            await ApplyVersionReloadOrRollback(version, configRoot, lifecycle.Capture(configRoot));
+            await ApplyVersionReloadOrRollback(version, configRoot, lifecycle.Capture(configRoot), validateApplied);
         }
     }
 

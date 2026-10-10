@@ -67,7 +67,7 @@ public class PluginConfigurationSchemaTests
 
     private static Dictionary<string, string[]> Prepare(ILyWafPlugin plugin, Dictionary<string, string> body, out Dictionary<string, string> candidate)
     {
-        object?[] arguments = [plugin, body, null];
+        object?[] arguments = [plugin, body, null, null];
         var result = (Dictionary<string, string[]>)typeof(ControlApi).GetMethod("PreparePluginConfiguration", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, arguments)!;
         candidate = (Dictionary<string, string>)arguments[2]!;
         return result;

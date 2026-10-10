@@ -67,18 +67,45 @@ public sealed class PluginScopedConfiguration : IPluginRequestConfiguration, IDi
         return plugins.TryGetValue(id, out var values) ? values : throw new KeyNotFoundException("Plugin does not support scoped configuration.");
     }
 
-    private string[]? ReadLoad()
+    private string[]? ReadLoad(IConfiguration? configuration = null)
     {
-        var section = _configuration.GetSection("Plugins:Load");
+        var section = (configuration ?? _configuration).GetSection("Plugins:Load");
         return section.Exists() ? section.GetChildren().Select(c => c.Value ?? "").ToArray() : null;
     }
 
-    private Snapshot Build()
+    public string ValidateGlobalCandidate(string pluginId, IReadOnlyDictionary<string, string> fields)
     {
-        var load = ReadLoad();
+        var prefix = $"PluginConfigSnapshots:{pluginId}:";
+        var values = _configuration.AsEnumerable().Where(p => p.Value != null &&
+            !p.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
+        foreach (var field in fields) values[prefix + field.Key] = field.Value;
+        using var candidate = (ConfigurationRoot)new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+        return Fingerprint(Build(candidate));
+    }
+
+    public void EnsureApplied(string expectedFingerprint)
+    {
+        if (LastReloadError != null) throw new InvalidOperationException(LastReloadError);
+        if (Fingerprint(Volatile.Read(ref _snapshot)) != expectedFingerprint)
+            throw new InvalidOperationException("运行中的插件配置与待发布配置不一致");
+    }
+
+    private static string Fingerprint(Snapshot snapshot)
+    {
+        object DescribeValues(Dictionary<string, Values> values) => values.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(p => new { Id = p.Key, Fields = p.Value.Fields.OrderBy(f => f.Key, StringComparer.OrdinalIgnoreCase) });
+        var value = new { Global = DescribeValues(snapshot.Global), Sites = snapshot.Sites.Select(s => new {
+            s.Id, s.Hosts, Plugins = DescribeValues(s.Plugins), Routes = s.Routes.Select(r => new { r.Id, r.Path, Plugins = DescribeValues(r.Plugins) }) }) };
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(value)));
+    }
+
+    private Snapshot Build(IConfiguration? candidate = null)
+    {
+        var source = candidate ?? _configuration;
+        var load = ReadLoad(source);
         if ((_load == null) != (load == null) || !Enumerable.SequenceEqual(_load ?? [], load ?? [], StringComparer.OrdinalIgnoreCase))
             throw new InvalidOperationException("Plugins:Load changes require restart.");
-        if (_configuration["Plugins:Enabled"]?.Equals("false", StringComparison.OrdinalIgnoreCase) == true)
+        if (source["Plugins:Enabled"]?.Equals("false", StringComparison.OrdinalIgnoreCase) == true)
             return new(new(StringComparer.OrdinalIgnoreCase), []);
         foreach (var id in _load ?? [])
             if (!_metadata.Any(m => m.Id.Equals(id, StringComparison.OrdinalIgnoreCase)))
@@ -90,12 +117,17 @@ public sealed class PluginScopedConfiguration : IPluginRequestConfiguration, IDi
             var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             FlattenDefaults(Activator.CreateInstance(defaults.GetType())!, "", fields);
             var value = new Values(defaults.GetType(), fields, fields.Keys.ToDictionary(k => k, _ => "default", StringComparer.OrdinalIgnoreCase));
-            value = Merge(value, _configuration.GetSection($"Plugins:PluginConfigs:{metadata.Id}"), PluginConfigurationScope.Global, "global");
-            global[metadata.Id] = Merge(value, _configuration.GetSection($"Plugins:{metadata.Id}"), PluginConfigurationScope.Global, "global");
+            var published = source.GetSection($"PluginConfigSnapshots:{metadata.Id}");
+            if (published.Exists()) global[metadata.Id] = Merge(value, published, PluginConfigurationScope.Global, "global");
+            else
+            {
+                value = Merge(value, source.GetSection($"Plugins:PluginConfigs:{metadata.Id}"), PluginConfigurationScope.Global, "global");
+                global[metadata.Id] = Merge(value, source.GetSection($"Plugins:{metadata.Id}"), PluginConfigurationScope.Global, "global");
+            }
         }
         var sites = new List<Site>();
         var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var section in _configuration.GetSection("Sites").GetChildren())
+        foreach (var section in source.GetSection("Sites").GetChildren())
         {
             CheckKeys(section, "Hosts", "Plugins", "Routes");
             var names = section.GetSection("Hosts").GetChildren().Select(c => c.Value?.Trim().ToLowerInvariant() ?? "").ToArray();
