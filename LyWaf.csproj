@@ -6,6 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <StartupObject>Program</StartupObject>
   </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Localization\*.json" LogicalName="LyWaf.Localization.%(Filename)%(Extension)" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="CommandLineParser" Version="2.9.1" />

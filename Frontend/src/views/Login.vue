@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
+import LanguageSelect from '@/components/common/LanguageSelect.vue'
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { authApi } from '@/api'
@@ -69,7 +71,7 @@ const handleLogin = async () => {
     return
   }
   if (cooldownSeconds.value > 0) {
-    showError(`请等待 ${cooldownSeconds.value} 秒后再试`)
+    showError(t('login.wait', { seconds: cooldownSeconds.value }))
     return
   }
 
@@ -109,41 +111,42 @@ const handleLogin = async () => {
 <template>
   <div class="min-h-screen bg-dark-bg flex items-center justify-center px-4">
     <div class="w-full max-w-sm">
+      <div class="flex justify-end mb-4"><LanguageSelect /></div>
       <!-- Logo -->
       <div class="flex flex-col items-center mb-8">
         <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-2xl font-bold text-gray-900 mb-4 shadow-lg shadow-primary-500/20">
           W
         </div>
-        <h1 class="text-2xl font-bold text-gray-100">LyWaf 控制台</h1>
-        <p class="text-sm text-gray-500 mt-1">请登录以继续</p>
+        <h1 class="text-2xl font-bold text-gray-100">{{ t('login.title') }}</h1>
+        <p class="text-sm text-gray-500 mt-1">{{ t('login.subtitle') }}</p>
       </div>
 
       <!-- 登录表单 -->
       <form @submit.prevent="handleLogin" class="bg-dark-card border border-dark-border rounded-2xl p-6 space-y-5 shadow-2xl">
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1.5">用户名</label>
+          <label class="block text-sm font-medium text-gray-300 mb-1.5">{{ t('login.username') }}</label>
           <input
             v-model="username"
             type="text"
             autocomplete="username"
             autofocus
             class="w-full bg-dark-sidebar border border-dark-border rounded-lg px-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 transition-colors"
-            placeholder="请输入用户名"
+            :placeholder="t('login.usernamePlaceholder')"
           />
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1.5">密码</label>
+          <label class="block text-sm font-medium text-gray-300 mb-1.5">{{ t('login.password') }}</label>
           <input
             v-model="password"
             type="password"
             autocomplete="current-password"
             class="w-full bg-dark-sidebar border border-dark-border rounded-lg px-4 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 transition-colors"
-            placeholder="请输入密码"
+            :placeholder="t('login.passwordPlaceholder')"
           />
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1.5">动态码 / 恢复码（已启用双因素认证时填写）</label>
+          <label class="block text-sm font-medium text-gray-300 mb-1.5">{{ t('login.secondFactor') }}</label>
           <input v-model="secondFactor" autocomplete="one-time-code" maxlength="64"
             class="w-full bg-dark-sidebar border border-dark-border rounded-lg px-4 py-2.5 text-sm text-gray-200" />
         </div>
@@ -153,7 +156,7 @@ const handleLogin = async () => {
           class="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm"
         >
           <span class="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin"></span>
-          <span>登录已锁定，请 <strong>{{ cooldownSeconds }}</strong> 秒后再试</span>
+          <span>{{ t('login.wait', { seconds: cooldownSeconds }) }}</span>
         </div>
 
         <button
@@ -168,10 +171,10 @@ const handleLogin = async () => {
         >
           <span v-if="loading" class="inline-flex items-center gap-2">
             <span class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-            登录中...
+            {{ t('login.submitting') }}
           </span>
-          <span v-else-if="cooldownSeconds > 0">请等待 {{ cooldownSeconds }}s</span>
-          <span v-else>登 录</span>
+          <span v-else-if="cooldownSeconds > 0">{{ t('login.wait', { seconds: cooldownSeconds }) }}</span>
+          <span v-else>{{ t('login.submit') }}</span>
         </button>
       </form>
 

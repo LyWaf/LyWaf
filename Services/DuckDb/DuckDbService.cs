@@ -15,6 +15,8 @@ public class DuckDbService : IDuckDbService
     private readonly DuckDbOptions _options;
     private volatile DuckDBConnection? _connection;
     private readonly object _lock = new();
+    private readonly SemaphoreSlim _schemaGate = new(1, 1);
+    private bool _schemaInitialized;
     private bool _disposed;
     private readonly PrometheusMetrics _metrics;
 
@@ -104,6 +106,18 @@ public class DuckDbService : IDuckDbService
 
     public async Task InitializeSchemaAsync()
     {
+        // Recovery and periodic flushing start independently but share one connection.
+        await _schemaGate.WaitAsync();
+        try
+        {
+            if (_schemaInitialized || _disposed) return;
+            await InitializeSchemaCoreAsync();
+        }
+        finally { _schemaGate.Release(); }
+    }
+
+    private async Task InitializeSchemaCoreAsync()
+    {
         if (!IsEnabled) return;
         EnsureConnection();
         if (_connection == null) return;
@@ -125,6 +139,7 @@ public class DuckDbService : IDuckDbService
                 await cmd.ExecuteNonQueryAsync();
             }
 
+            _schemaInitialized = true;
             _logger.Info("DuckDB 表结构初始化完成");
             _metrics.ObserveDuckDbOperation("schema", true, System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
         }

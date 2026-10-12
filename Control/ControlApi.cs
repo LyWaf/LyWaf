@@ -2,6 +2,7 @@ using LyWaf.Control.Endpoints;
 using LyWaf.Services.WafInfo;
 using LyWaf.Services.ManagementApi;
 using LyWaf.Services.Auth;
+using LyWaf.Localization;
 
 namespace LyWaf.Control;
 
@@ -15,6 +16,7 @@ public static partial class ControlApi
         var controlListen = wafInfos.GetControlListen();
         var controlPort = controlListen.Port;
 
+        app.UseManagementLocalization(controlPort, app.Configuration["Localization:DefaultLanguage"]);
         app.UseManagementApiContract(controlPort);
         // 显式固定顺序：版本路径重写必须发生在端点路由匹配之前。
         app.UseRouting();

@@ -4,6 +4,7 @@ import { pluginMenus, refreshPluginMenus } from '@/composables/usePluginMenus'
 import { useRoute, useRouter } from 'vue-router'
 import { pcapApi } from '@/api'
 import { useAuth } from '@/composables/useAuth'
+import { translateText, t } from '@/i18n'
 
 interface MenuItem {
   path?: string
@@ -61,7 +62,6 @@ const staticMenuItems: MenuItem[] = [
       { path: '/fileserver-config', name: '文件服务' },
       { path: '/simpleres-config', name: '简单响应' },
       { path: '/param-config', name: '参数配置' },
-      { path: '/plugin-management', name: '插件管理' },
       { path: '/error-templates', name: '错误模板' },
     ]
   },
@@ -77,7 +77,12 @@ const staticMenuItems: MenuItem[] = [
 ]
 const menuItems = computed<MenuItem[]>(() => [
   ...staticMenuItems,
-  ...(pluginMenus.value.length ? [{ name: '插件', icon: '▦', children: pluginMenus.value.map(menu => ({ name: menu.name, path: menu.path })) }] : []),
+  {
+    name: '插件', icon: '▦', children: [
+      { path: '/plugin-management', name: '插件管理' },
+      ...pluginMenus.value.map(menu => ({ name: menu.name, path: menu.path })),
+    ]
+  },
 ])
 
 // 展开状态：默认不展开，但当前路由所在分组自动展开
@@ -167,7 +172,7 @@ const scrollToSection = (sectionId: string) => {
             ]"
           >
             <span class="w-5 text-center">{{ item.icon }}</span>
-            <span class="flex-1">{{ item.name }}</span>
+            <span class="flex-1">{{ translateText(item.name) }}</span>
             <span
               class="text-xs transition-transform duration-200"
               :class="expandedGroups.has(item.name) ? 'rotate-90' : ''"
@@ -188,7 +193,7 @@ const scrollToSection = (sectionId: string) => {
                   : 'text-gray-500 border-l-transparent hover:bg-white/5 hover:text-gray-300'
               ]"
             >
-              <span>{{ child.name }}</span>
+              <span>{{ translateText(child.name) }}</span>
             </button>
             </template>
           </div>
@@ -206,7 +211,7 @@ const scrollToSection = (sectionId: string) => {
           ]"
         >
           <span class="w-5 text-center">{{ item.icon }}</span>
-          <span class="flex-1">{{ item.name }}</span>
+          <span class="flex-1">{{ translateText(item.name) }}</span>
         </button>
         </template>
       </template>
@@ -216,7 +221,7 @@ const scrollToSection = (sectionId: string) => {
     <div class="p-4 border-t border-dark-border text-xs text-gray-500">
       <div class="flex items-center gap-2">
         <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse-dot"></span>
-        <span>服务运行中</span>
+        <span>{{ t('common.serviceRunning') }}</span>
       </div>
     </div>
   </aside>

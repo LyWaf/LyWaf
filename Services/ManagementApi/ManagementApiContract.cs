@@ -139,8 +139,11 @@ public static class ManagementApiContract
         Results.Json(CreateError(context, code, message, details), statusCode: statusCode);
 
     /// <summary>从当前请求创建稳定错误信封。</summary>
-    public static ApiErrorEnvelope CreateError(HttpContext context, string code, string message, object? details = null) =>
-        new(false, message, new ApiError(code, message, context.TraceIdentifier, details));
+    public static ApiErrorEnvelope CreateError(HttpContext context, string code, string message, object? details = null)
+    {
+        message = LyWaf.Localization.TextLocalizer.Display(message);
+        return new(false, message, new ApiError(code, message, context.TraceIdentifier, details));
+    }
 
     /// <summary>根据当前端点数据源生成 OpenAPI 3.1 文档。</summary>
     public static object BuildOpenApiDocument(EndpointDataSource endpointDataSource)

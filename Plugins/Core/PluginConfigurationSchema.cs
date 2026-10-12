@@ -8,7 +8,8 @@ namespace LyWaf.Plugins.Core;
 
 /// <summary>Describes one configuration field; collection elements use a wildcard segment.</summary>
 public sealed record PluginConfigurationField(string Path, string Type, string Label, bool Required,
-    string? Minimum, string? Maximum, bool Sensitive, bool RequiresRestart, PluginConfigurationScope Scopes);
+    string? Minimum, string? Maximum, bool Sensitive, bool RequiresRestart, PluginConfigurationScope Scopes,
+    string? LabelKey = null, string? DescriptionKey = null);
 
 /// <summary>Builds configuration metadata and validates a detached candidate before persistence.</summary>
 public static class PluginConfigurationSchema
@@ -29,11 +30,13 @@ public static class PluginConfigurationSchema
                 var secret = sensitive || IsSensitive(property);
                 var range = property.GetCustomAttribute<RangeAttribute>();
                 var valueType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+                var metadata = property.GetCustomAttribute<PluginConfigurationAttribute>();
+                var labelKey = metadata?.LabelKey ?? (LyWaf.Localization.TextLocalizer.HasKey("fields." + Key(property)) ? "fields." + Key(property) : null);
                 fields.Add(new(path, valueType.Name,
-                    property.GetCustomAttribute<DescriptionAttribute>()?.Description ?? Key(property),
+                    labelKey != null ? LyWaf.Localization.TextLocalizer.Get(labelKey) : property.GetCustomAttribute<DescriptionAttribute>()?.Description ?? Key(property),
                     property.IsDefined(typeof(RequiredAttribute)), range?.Minimum.ToString(), range?.Maximum.ToString(),
                     secret, property.GetCustomAttribute<PluginConfigurationAttribute>()?.RequiresRestart ?? false,
-                    property.GetCustomAttribute<PluginConfigurationAttribute>()?.Scopes ?? PluginConfigurationScope.All));
+                    metadata?.Scopes ?? PluginConfigurationScope.All, labelKey, metadata?.DescriptionKey));
                 var element = ElementType(valueType);
                 if (element != null && !IsScalar(element)) Visit(element, path + ":*:", depth + 1, secret);
                 else if (!IsScalar(valueType) && element == null) Visit(valueType, path + ":", depth + 1, secret);

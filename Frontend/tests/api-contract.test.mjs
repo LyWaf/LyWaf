@@ -12,12 +12,13 @@ const analysisCompiled = ts.transpileModule(analysisSource, { compilerOptions: {
 function clientFixture(response) {
   let rejectResponse
   let retryConfig
+  let prepareRequest
   const calls = []
   const client = {
     get(url, config) { calls.push({ url, config }); return Promise.resolve(response) },
     post(url, data, config) { calls.push({ url, data, config }); return Promise.resolve(response) },
     interceptors: {
-      request: { use() {} },
+      request: { use(handler) { prepareRequest = handler } },
       response: { use(_success, failure) { rejectResponse = failure } },
     },
     request(config) { retryConfig = config; return Promise.resolve({ success: true }) },
@@ -27,6 +28,7 @@ function clientFixture(response) {
     module, exports: module.exports,
     require(name) {
       if (name === 'axios') return { default: { create: () => client } }
+      if (name === '@/i18n') return { locale: { value: 'en-US' } }
       if (name === '@/composables/useStepUp') return { requestStepUp: async () => 'proof' }
       throw new Error(`Unexpected runtime import: ${name}`)
     },
@@ -39,8 +41,14 @@ function clientFixture(response) {
     if (name === '@/api') return module.exports
     throw new Error(`Unexpected plugin import: ${name}`)
   } })
-  return { reject: error => rejectResponse(error), retry: () => retryConfig, api: module.exports, analysis: plugin.exports, calls }
+  return { prepareRequest, reject: error => rejectResponse(error), retry: () => retryConfig, api: module.exports, analysis: plugin.exports, calls }
 }
+
+test('management requests include the selected UI language without changing authentication', () => {
+  const result = clientFixture({}).prepareRequest({ method: 'get', headers: {} })
+  assert.equal(result.headers['Accept-Language'], 'en-US')
+  assert.equal(result.headers.Authorization, 'Bearer session')
+})
 
 test('CC management uses the analysis proxy for reads, paging and writes', async () => {
   const fixture = clientFixture({ success: true, data: [], total: 0 })

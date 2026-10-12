@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import LanguageSelect from '@/components/common/LanguageSelect.vue'
+import { t } from '@/i18n'
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import ListToolbar from '@/components/common/ListToolbar.vue'
 import { useRouter } from 'vue-router'
@@ -441,10 +443,15 @@ onMounted(() => {
     <!-- 页面标题 -->
     <div class="card">
       <div class="flex items-center gap-3">
-        <h2 class="text-lg font-semibold text-gray-100">通用设置</h2>
+        <h2 class="text-lg font-semibold text-gray-100">{{ t('nav.general') }}</h2>
         <span class="text-xs text-gray-500">证书管理、控制台管理、系统操作日志、运行日志</span>
       </div>
     </div>
+
+    <section class="flex items-center justify-between gap-4 border-b border-dark-border px-4 py-3">
+      <span class="text-sm text-gray-300">{{ t('common.language') }}</span>
+      <LanguageSelect />
+    </section>
 
     <!-- Tab 栏 -->
     <div class="card !p-0">

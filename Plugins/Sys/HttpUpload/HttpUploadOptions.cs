@@ -10,12 +10,13 @@ public sealed class HttpUploadOptions
     public string Path { get; set; } = "/_upload";
     public List<string> Hosts { get; set; } = ["*"];
     public bool RequireHttps { get; set; } = true;
-    [PluginConfiguration(Sensitive = true)]
+    [PluginConfiguration(Sensitive = true, DescriptionKey = "plugins.http-upload.Key.description")]
     public string Key { get; set; } = "";
     [Range(1, 3600)]
     public int SignatureWindowSeconds { get; set; } = 300;
     [PluginConfiguration(RequiresRestart = true)]
     public string NonceDirectory { get; set; } = "plugin_data/http-upload/nonces";
+    [PluginConfiguration(LabelKey = "plugins.http-upload.Directory.label", DescriptionKey = "plugins.http-upload.Directory.description")]
     public string Directory { get; set; } = "";
     public bool AllowZip { get; set; }
     [Range(typeof(long), "1", "1099511627776")]

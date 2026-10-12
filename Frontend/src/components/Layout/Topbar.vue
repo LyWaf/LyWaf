@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
+import { t, translateText } from '@/i18n'
+import LanguageSelect from '@/components/common/LanguageSelect.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -41,30 +43,31 @@ const handleLogout = () => {
           v-if="index === breadcrumbs.length - 1"
           class="text-gray-100 font-medium"
         >
-          {{ item.name }}
+          {{ translateText(item.name) }}
         </span>
         <a
           v-else
           @click="goTo(item.path)"
           class="text-gray-400 hover:text-primary-500 cursor-pointer transition-colors"
         >
-          {{ item.name }}
+          {{ translateText(item.name) }}
         </a>
       </template>
     </nav>
 
     <!-- 右侧状态 -->
     <div class="flex items-center gap-2 md:gap-4 shrink-0">
+      <LanguageSelect />
       <span v-if="username" class="hidden md:inline text-sm text-gray-400">{{ username }}</span>
       <button
         @click="handleLogout"
         class="text-xs text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded hover:bg-white/5"
       >
-        退出登录
+        {{ t('common.logout') }}
       </button>
       <div class="hidden md:flex items-center gap-2 text-sm border-l border-dark-border pl-4">
         <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse-dot"></span>
-        <span class="text-gray-300">运行中</span>
+        <span class="text-gray-300">{{ t('common.running') }}</span>
       </div>
     </div>
   </header>

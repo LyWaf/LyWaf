@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { fieldLabel, fieldDescription, t } from '@/i18n'
 import { refreshPluginMenus } from '@/composables/usePluginMenus'
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { pluginApi } from '@/api'
@@ -900,7 +901,7 @@ onMounted(loadPlugins)
         <!-- 标题 -->
         <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
           <div>
-            <h2 class="text-lg font-semibold text-gray-100">编辑插件配置</h2>
+            <h2 class="text-lg font-semibold text-gray-100">{{ t('plugins.editConfig') }}</h2>
             <p class="text-xs text-gray-500 mt-0.5">{{ editConfigPlugin?.name }} ({{ editConfigPlugin?.id }})</p>
           </div>
           <button @click="editConfigVisible = false" class="text-gray-400 hover:text-gray-200 transition-colors">
@@ -918,16 +919,17 @@ onMounted(loadPlugins)
           </div>
 
           <div v-else-if="editConfigItems.length === 0" class="text-center py-12">
-            <p class="text-gray-500">该插件暂无可编辑的配置项</p>
+            <p class="text-gray-500">{{ t('plugins.noConfig') }}</p>
           </div>
 
           <template v-else v-for="item in editConfigItems" :key="item.key">
             <!-- ====== 简单值 ====== -->
-            <div v-if="item.type === 'simple'" class="flex items-center gap-3">
-              <label class="w-2/5 text-sm text-gray-300 truncate flex-shrink-0" :class="{ 'font-mono': !editConfigLabels[item.key] }" :title="item.key">
-                {{ editConfigLabels[item.key] || item.key }}
+            <div v-if="item.type === 'simple'" class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+              <label class="w-full sm:w-2/5 text-sm text-gray-300 whitespace-normal break-words flex-shrink-0" :title="item.key">
+                {{ fieldLabel(item.key, editConfigLabels[item.key], editConfigPlugin?.id, editConfigSchema[item.key]?.labelKey) }}
+                <span v-if="editConfigSchema[item.key]?.descriptionKey" class="block text-xs text-gray-500 whitespace-normal mt-1">{{ fieldDescription(editConfigSchema[item.key]?.descriptionKey) }}</span>
               </label>
-              <div class="flex-1 flex items-center gap-2">
+              <div class="w-full sm:w-auto min-w-0 flex-1 flex items-center gap-2">
                 <button v-if="isBoolValue((item as SimpleItem).defaultValue || (item as SimpleItem).value)"
                   @click="(item as SimpleItem).value = (item as SimpleItem).value === 'true' ? 'false' : 'true'"
                   :class="[
@@ -949,10 +951,10 @@ onMounted(loadPlugins)
                     'w-full bg-dark-sidebar border rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500',
                     isSimpleModified(item as SimpleItem) ? 'border-yellow-500/40' : 'border-dark-border'
                   ]"
-                  :placeholder="editConfigSchema[item.key]?.sensitive ? '留空保留当前值' : (item as SimpleItem).defaultValue || ''" />
+                  :placeholder="editConfigSchema[item.key]?.sensitive ? t('plugins.keepSecret') : (item as SimpleItem).defaultValue || ''" />
                 <button v-if="isSimpleModified(item as SimpleItem)" @click="resetSimple(item as SimpleItem)"
                   class="flex-shrink-0 text-gray-500 hover:text-yellow-400 transition-colors p-1"
-                  :title="`重置为默认值: ${(item as SimpleItem).defaultValue}`">
+                  :title="t('common.resetValue', { value: (item as SimpleItem).defaultValue })">
                   <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                       d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -965,19 +967,19 @@ onMounted(loadPlugins)
             <div v-else-if="item.type === 'array'"
               class="border border-dark-border/60 rounded-lg p-3 space-y-2">
               <div class="flex items-center justify-between">
-                <span class="text-sm text-gray-300" :class="{ 'font-mono': !editConfigLabels[item.key] }">{{ editConfigLabels[item.key] || item.key }}
-                  <span class="text-xs text-gray-600 ml-1">Array[{{ (item as ArrayItem).items.length }}]</span>
+                <span class="text-sm text-gray-300" :class="{ 'font-mono': !editConfigLabels[item.key] }">{{ fieldLabel(item.key, editConfigLabels[item.key], editConfigPlugin?.id) }}
+                  <span class="text-xs text-gray-600 ml-1">{{ t('common.arrayCount', { count: (item as ArrayItem).items.length }) }}</span>
                 </span>
                 <div class="flex items-center gap-2">
                   <button v-if="isArrayModified(item as ArrayItem)" @click="resetArray(item as ArrayItem)"
-                    class="text-gray-500 hover:text-yellow-400 transition-colors p-0.5" title="重置为默认值">
+                    class="text-gray-500 hover:text-yellow-400 transition-colors p-0.5" :title="t('common.reset')">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                     </svg>
                   </button>
                   <button @click="addArrayItem(item as ArrayItem)"
-                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ {{ t('common.add') }}</button>
                 </div>
               </div>
               <div v-for="(_val, idx) in (item as ArrayItem).items" :key="idx"
@@ -992,34 +994,37 @@ onMounted(loadPlugins)
                   </svg>
                 </button>
               </div>
-              <div v-if="(item as ArrayItem).items.length === 0" class="text-xs text-gray-600 text-center py-1">空数组</div>
+              <div v-if="(item as ArrayItem).items.length === 0" class="text-xs text-gray-600 text-center py-1">{{ t('common.emptyArray') }}</div>
             </div>
 
             <!-- ====== 字典 ====== -->
             <div v-else-if="item.type === 'dict'"
               class="border border-dark-border/60 rounded-lg p-3 space-y-2">
               <div class="flex items-center justify-between">
-                <span class="text-sm text-gray-300" :class="{ 'font-mono': !editConfigLabels[item.key] }">{{ editConfigLabels[item.key] || item.key }}
-                  <span class="text-xs text-gray-600 ml-1">Dict[{{ (item as DictItem).entries.length }}]</span>
+                <span class="text-sm text-gray-300" :class="{ 'font-mono': !editConfigLabels[item.key] }">{{ fieldLabel(item.key, editConfigLabels[item.key], editConfigPlugin?.id) }}
+                  <span class="text-xs text-gray-600 ml-1">{{ t('common.dictionaryCount', { count: (item as DictItem).entries.length }) }}</span>
                 </span>
                 <div class="flex items-center gap-2">
                   <button v-if="isDictModified(item as DictItem)" @click="resetDict(item as DictItem)"
-                    class="text-gray-500 hover:text-yellow-400 transition-colors p-0.5" title="重置为默认值">
+                    class="text-gray-500 hover:text-yellow-400 transition-colors p-0.5" :title="t('common.reset')">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                     </svg>
                   </button>
                   <button @click="addDictEntry(item as DictItem)"
-                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ {{ t('common.add') }}</button>
                 </div>
               </div>
               <div v-for="(entry, idx) in (item as DictItem).entries" :key="idx"
                 class="flex items-center gap-2">
-                <input v-model="entry.key" type="text" placeholder="Key"
+                <span v-if="editConfigSchema[`${item.key}:${entry.key}`]" class="w-2/5 text-sm text-gray-300 break-words shrink-0" :title="`${item.key}:${entry.key}`">
+                  {{ fieldLabel(`${item.key}:${entry.key}`, editConfigLabels[`${item.key}:${entry.key}`], editConfigPlugin?.id, editConfigSchema[`${item.key}:${entry.key}`]?.labelKey) }}
+                </span>
+                <input v-else v-model="entry.key" type="text" :placeholder="t('common.key')"
                   class="w-2/5 bg-dark-sidebar border border-dark-border rounded-lg px-3 py-1 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500 font-mono" />
-                <input v-model="entry.value" type="text" placeholder="Value"
-                  class="flex-1 bg-dark-sidebar border border-dark-border rounded-lg px-3 py-1 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500" />
+                <input v-model="entry.value" :type="editConfigSchema[`${item.key}:${entry.key}`]?.sensitive ? 'password' : 'text'" :placeholder="t('common.value')"
+                  class="flex-1 min-w-0 bg-dark-sidebar border border-dark-border rounded-lg px-3 py-1 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500" />
                 <button @click="removeDictEntry(item as DictItem, idx)"
                   class="text-gray-600 hover:text-red-400 transition-colors p-0.5 flex-shrink-0">
                   <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1027,19 +1032,19 @@ onMounted(loadPlugins)
                   </svg>
                 </button>
               </div>
-              <div v-if="(item as DictItem).entries.length === 0" class="text-xs text-gray-600 text-center py-1">空字典</div>
+              <div v-if="(item as DictItem).entries.length === 0" class="text-xs text-gray-600 text-center py-1">{{ t('common.emptyDictionary') }}</div>
             </div>
 
             <!-- ====== 对象数组 ====== -->
             <div v-else-if="item.type === 'object-array'"
               class="border border-dark-border/60 rounded-lg p-3 space-y-3">
               <div class="flex items-center justify-between">
-                <span class="text-sm text-gray-300" :class="{ 'font-mono': !editConfigLabels[item.key] }">{{ editConfigLabels[item.key] || item.key }}
+                <span class="text-sm text-gray-300" :class="{ 'font-mono': !editConfigLabels[item.key] }">{{ fieldLabel(item.key, editConfigLabels[item.key], editConfigPlugin?.id) }}
                   <span class="text-xs text-gray-600 ml-1">[{{ (item as ObjArrayItem).items.length }}]</span>
                 </span>
                 <div class="flex items-center gap-2">
                   <button v-if="isObjArrayModified(item as ObjArrayItem)" @click="resetObjArray(item as ObjArrayItem)"
-                    class="text-gray-500 hover:text-yellow-400 transition-colors p-0.5" title="重置为默认值">
+                    class="text-gray-500 hover:text-yellow-400 transition-colors p-0.5" :title="t('common.reset')">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -1082,7 +1087,7 @@ onMounted(loadPlugins)
                 <div v-for="field in (item as ObjArrayItem).fields" :key="field"
                   class="flex items-center gap-2">
                   <label class="w-1/4 text-xs text-gray-400 truncate flex-shrink-0" :title="field">
-                    {{ editConfigLabels[`${item.key}:${field}`] || field }}
+                    {{ fieldLabel(`${item.key}:${field}`, editConfigLabels[`${item.key}:${field}`], editConfigPlugin?.id) }}
                   </label>
                   <button v-if="isBoolValue((item as ObjArrayItem).fieldDefaultValues[field] ?? '')"
                     @click="obj[field] = obj[field] === 'true' ? 'false' : 'true'"
@@ -1096,7 +1101,7 @@ onMounted(loadPlugins)
                     ]" />
                   </button>
                   <input v-else v-model="obj[field]" type="text"
-                    :placeholder="editConfigLabels[`${item.key}:${field}`] || field"
+                    :placeholder="fieldLabel(`${item.key}:${field}`, editConfigLabels[`${item.key}:${field}`], editConfigPlugin?.id)"
                     class="flex-1 bg-dark-sidebar border border-dark-border rounded-lg px-2.5 py-1 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500" />
                 </div>
               </div>
@@ -1126,15 +1131,15 @@ onMounted(loadPlugins)
           <p v-for="(messages, field) in editConfigErrors" :key="field">{{ field }}: {{ messages.join('；') }}</p>
         </div>
         <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-border">
-          <button @click="editConfigVisible = false" class="btn btn-sm btn-secondary">取消</button>
+          <button @click="editConfigVisible = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
           <button @click="validateConfig" :disabled="editConfigSaving || editConfigValidating || editConfigLoading" class="btn btn-sm btn-secondary">
-            {{ editConfigValidating ? '校验中...' : '校验配置' }}
+            {{ editConfigValidating ? t('common.loading') : t('plugins.validateConfig') }}
           </button>
           <button @click="saveConfig"
             :disabled="editConfigSaving || !hasConfigChanges"
             :class="['btn btn-sm', hasConfigChanges ? 'btn-primary' : 'btn-secondary opacity-50 cursor-not-allowed']">
             <span v-if="editConfigSaving" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-1.5"></span>
-            {{ editConfigSaving ? '保存中...' : '保存配置' }}
+            {{ editConfigSaving ? t('common.loading') : t('plugins.saveConfig') }}
           </button>
         </div>
       </div>

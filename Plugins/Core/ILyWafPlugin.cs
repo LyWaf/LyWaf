@@ -9,6 +9,8 @@ namespace LyWaf.Plugins.Core;
 public sealed class PluginConfigurationAttribute : Attribute
 {
     public bool Sensitive { get; set; }
+    public string? LabelKey { get; set; }
+    public string? DescriptionKey { get; set; }
     public bool RequiresRestart { get; set; }
     public PluginConfigurationScope Scopes { get; set; } = PluginConfigurationScope.All;
 }

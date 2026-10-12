@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { locale } from '@/i18n'
 import type {
   ApiResponse,
   TrafficStats,
@@ -19,6 +20,7 @@ const http = axios.create({
 
 // 请求拦截器 - 注入 JWT Token
 http.interceptors.request.use((config) => {
+  config.headers['Accept-Language'] = locale.value
   if (config.method && ['post', 'put', 'patch', 'delete'].includes(config.method.toLowerCase()) && !config.headers['Idempotency-Key']) {
     config.headers['Idempotency-Key'] = Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, '0')).join('')
   }
@@ -1051,6 +1053,7 @@ export interface PluginConfigResponse {
 }
 
 export interface PluginConfigurationField {
+  labelKey?: string; descriptionKey?: string
   path: string; type: string; label: string; required: boolean
   minimum?: string; maximum?: string; sensitive: boolean; requiresRestart: boolean
 }

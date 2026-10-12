@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useToast } from '@/composables/useToast'
+import { translateText } from '@/i18n'
 
 const { toasts, remove } = useToast()
 
@@ -31,7 +32,7 @@ const colorMap = {
           ]"
         >
           <span class="text-lg leading-5 shrink-0">{{ iconMap[toast.type] }}</span>
-          <span class="flex-1 text-sm whitespace-pre-line break-words min-w-0">{{ toast.message }}</span>
+          <span class="flex-1 text-sm whitespace-pre-line break-words min-w-0">{{ translateText(toast.message) }}</span>
           <button 
             @click="remove(toast.id)"
             class="text-current opacity-60 hover:opacity-100 transition-opacity shrink-0 leading-5"
