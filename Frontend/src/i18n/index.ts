@@ -24,6 +24,7 @@ export function setLocale(value: string) {
 // Legacy display labels only; never apply this to configuration keys or user data.
 const displayKeys = new Map(Object.entries(zh).filter(([, value]) => !value.includes('{')).map(([key, value]) => [value, key]))
 export const translateText = (text: string) => displayKeys.has(text) ? t(displayKeys.get(text)!) : text
+export const translateTitle = (title: unknown) => typeof title === 'function' ? title() as string : translateText(String(title || 'LyWaf'))
 const pluginResources = ref<Record<string, Record<string, Record<string, string>>>>({})
 export function registerPluginMessages(pluginId: string, resources: Record<string, Record<string, string>> = {}) {
   // Replace instead of merging so removed keys do not survive a plugin update.
@@ -37,6 +38,7 @@ function pluginText(pluginId: string | undefined, key: string) {
   }
   return undefined
 }
+export const pluginMessage = (pluginId: string | undefined, key: string, fallback = '') => pluginText(pluginId, key) ?? fallback
 export function fieldLabel(path: string, fallback?: string, pluginId?: string, labelKey?: string) {
   const name = path.split(':').slice(-1)[0]
   const pluginLabel = (labelKey ? pluginText(pluginId, labelKey) : undefined)

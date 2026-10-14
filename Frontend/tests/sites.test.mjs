@@ -6,6 +6,7 @@ import ts from 'typescript'
 import { parse } from '@vue/compiler-sfc'
 
 const source = await readFile(new URL('../src/views/Sites.vue', import.meta.url), 'utf8')
+const messages = JSON.parse(await readFile(new URL('../../Localization/zh-CN.json', import.meta.url), 'utf8'))
 const { descriptor } = parse(source)
 const compiled = ts.transpileModule(descriptor.scriptSetup.content + '\nexport { rules, error, rows, healthLabel };', {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -18,6 +19,7 @@ async function mountSites(pages) {
   vm.runInNewContext(compiled, {
     module, exports: module.exports,
     require(name) {
+      if (name === '@/i18n') return { locale: { value: 'zh-CN' }, t: key => messages[key] ?? key }
       if (name === 'vue') return { ref: value => ({ value }), onMounted: callback => { mounted = callback } }
       if (name === '@/api') return {
         siteApi: { list: async () => ({ success: true, data: [{ site: { id: 'site' } }], clusters: [], listeners: [], total: 1 }) },

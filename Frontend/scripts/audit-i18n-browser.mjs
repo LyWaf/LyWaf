@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import assert from 'node:assert/strict'
 
 const require = createRequire(import.meta.url)
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright')
@@ -25,6 +26,7 @@ try {
     }, { login: routeInfo.path === '/login' })
     const page = await context.newPage(), errors = [], requests = []
     page.on('pageerror', error => errors.push(error.message))
+    page.on('console', entry => { if (entry.type() === 'error' && /intlify|message compilation/i.test(entry.text())) errors.push(entry.text()) })
     // Fully isolated from the actual management API. No configuration is written.
     await page.route('**/api/**', async route => {
       const path = new URL(route.request().url()).pathname
@@ -74,3 +76,4 @@ writeFileSync(output, JSON.stringify({ generatedAt: new Date().toISOString(),
   scope: 'English initial and failed/empty-data states, with isolated API fixtures. Not a production end-to-end test. Hidden dialogs and populated states require separate coverage; static inventory includes their source.',
   results }, null, 2) + '\n')
 console.log(`Report: ${output}`)
+assert.ok(results.every(result => result.hasMainContent && !result.navigationError && !result.errors.length && !result.untranslatedText.length && !result.attributes.length && !/\p{Script=Han}/u.test(result.title)), 'Some routes still have localization or runtime failures; inspect the report')

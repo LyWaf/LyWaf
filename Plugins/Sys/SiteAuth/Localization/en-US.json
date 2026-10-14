@@ -1,4 +1,6 @@
 {
+  "metadata.name": "Protected site authentication",
+  "metadata.description": "Form, Basic and OAuth2 authentication by host and path",
   "fields.SessionSecret": "Session signing secret",
   "fields.CookieName": "Cookie name",
   "fields.SessionMinutes": "Session lifetime (minutes)",

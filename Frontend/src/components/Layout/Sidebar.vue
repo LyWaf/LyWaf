@@ -4,7 +4,7 @@ import { pluginMenus, refreshPluginMenus } from '@/composables/usePluginMenus'
 import { useRoute, useRouter } from 'vue-router'
 import { pcapApi } from '@/api'
 import { useAuth } from '@/composables/useAuth'
-import { translateText, t } from '@/i18n'
+import { translateText, translateTitle, t } from '@/i18n'
 
 interface MenuItem {
   path?: string
@@ -80,7 +80,7 @@ const menuItems = computed<MenuItem[]>(() => [
   {
     name: '插件', icon: '▦', children: [
       { path: '/plugin-management', name: '插件管理' },
-      ...pluginMenus.value.map(menu => ({ name: menu.name, path: menu.path })),
+      ...pluginMenus.value.map(menu => ({ name: translateTitle(router.resolve(menu.path).meta.title || menu.name), path: menu.path })),
     ]
   },
 ])

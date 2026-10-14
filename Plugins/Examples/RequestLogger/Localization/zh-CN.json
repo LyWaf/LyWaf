@@ -1,0 +1,5 @@
+{
+  "metadata.name": "请求日志记录器",
+  "metadata.description": "记录 HTTP 请求详细信息，支持域名/URL 过滤、请求体/响应体记录、独立日志文件",
+  "actions.view-logs.name": "查看日志"
+}

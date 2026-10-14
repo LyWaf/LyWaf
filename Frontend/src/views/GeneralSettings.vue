@@ -695,7 +695,7 @@ onMounted(() => {
                   <td class="py-3 text-gray-200">{{ log.username }}</td>
                   <td class="py-3 text-gray-300">{{ log.action }}</td>
                   <td class="py-3 text-gray-400 font-mono text-xs">{{ log.ip || '-' }}</td>
-                  <td class="py-3 text-gray-400 text-xs">{{ new Date(log.timestamp).toLocaleString() }}</td>
+                  <td class="py-3 text-gray-400 text-xs">{{ new Date(log.timestamp).toLocaleString(locale) }}</td>
                 </tr>
               </tbody>
             </table>

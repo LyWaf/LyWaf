@@ -1,0 +1,5 @@
+{
+  "metadata.name": "Web tamper protection",
+  "metadata.description": "Maintain approved baselines by site and path, detect changes and serve approved content",
+  "actions.manage.name": "Manage web tamper protection"
+}

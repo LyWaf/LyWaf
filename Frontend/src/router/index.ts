@@ -149,7 +149,6 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to, _from, next) => {
-  document.title = `${to.meta.title || 'LyWaf'} - LyWaf 控制面板`
 
   const token = localStorage.getItem('lywaf_token')
 

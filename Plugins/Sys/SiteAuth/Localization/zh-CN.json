@@ -1,4 +1,6 @@
 {
+  "metadata.name": "受保护站点认证",
+  "metadata.description": "按域名和路径提供 Form、Basic 与 OAuth2 认证",
   "fields.SessionSecret": "会话密钥",
   "fields.CookieName": "Cookie 名称",
   "fields.SessionMinutes": "会话有效期（分钟）",

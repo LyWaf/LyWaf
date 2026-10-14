@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/plugins/analysis/i18n'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { statisticApi, advancedCcApi } from '@/plugins/analysis/api'
 import CcRuleEditor from '@/components/cc/CcRuleEditor.vue'
@@ -38,44 +39,44 @@ const rulesByType = computed(() => {
   return grouped
 })
 
-const ruleTypeLabels: Record<CcRuleType, string> = {
-  FrequentAccess: '高频访问限制',
-  FrequentAttack: '高频攻击限制',
-  FrequentError: '高频错误限制',
-}
+const ruleTypeLabels = computed<Record<CcRuleType, string>>(() => ({
+  FrequentAccess: t('page.38d9f66567c0'),
+  FrequentAttack: t('page.b955b87d932c'),
+  FrequentError: t('page.1eb791fb8b9d'),
+}))
 
-const actionLabels: Record<string, string> = {
-  Captcha: '人机验证', Block: '封禁', Reject: '拒绝',
-  RateLimit: '限速', LogOnly: '仅记录',
-}
+const actionLabels = computed<Record<string, string>>(() => ({
+  Captcha: t('page.36fbc1da5545'), Block: t('page.6f93ba4c79f8'), Reject: t('page.136de7a8c46f'),
+  RateLimit: t('page.106a487eeea5'), LogOnly: t('page.c4ba4276172a'),
+}))
 
-const targetLabels: Record<string, string> = {
-  UrlPath: '路径', FullUrl: 'URL', Method: '请求方法',
+const targetLabels = computed<Record<string, string>>(() => ({
+  UrlPath: t('page.77e1ea5c5688'), FullUrl: 'URL', Method: t('page.cf206666a6a5'),
   ContentType: 'Content-Type', UserAgent: 'User-Agent',
-  Referer: 'Referer', Header: '请求头', QueryParam: '查询参数',
-  Cookie: 'Cookie', ClientIp: '客户端 IP', StatusCode: '状态码',
-}
+  Referer: 'Referer', Header: t('page.cea1aafe9416'), QueryParam: t('page.1904a09fab00'),
+  Cookie: 'Cookie', ClientIp: t('page.2d1cb6792f12'), StatusCode: t('page.06f7d7341212'),
+}))
 
-const operatorLabels: Record<string, string> = {
-  Equal: '等于', NotEqual: '不等于', Contains: '包含',
-  NotContains: '不包含', StartsWith: '前缀为', EndsWith: '后缀为',
-  Regex: '匹配正则', Exists: '存在', NotExists: '不存在',
-}
+const operatorLabels = computed<Record<string, string>>(() => ({
+  Equal: t('page.4bc69a0562ff'), NotEqual: t('page.9678e3a7cb3c'), Contains: t('page.107319b8b39d'),
+  NotContains: t('page.5f60ffcf600a'), StartsWith: t('page.b35e50b3873d'), EndsWith: t('page.637f4e5ba011'),
+  Regex: t('page.ad550e963af3'), Exists: t('page.4a558371f938'), NotExists: t('page.4e51b67dd32c'),
+}))
 
 const formatConditions = (rule: AdvancedCcRule): string => {
   if (!rule.conditions || rule.conditions.length === 0) return ''
   return rule.conditions.map(c => {
-    const target = targetLabels[c.target] || c.target
-    const op = operatorLabels[c.operator] || c.operator
+    const target = targetLabels.value[c.target] || c.target
+    const op = operatorLabels.value[c.operator] || c.operator
     const vals = c.values.join(', ')
     return `${target}${op} [${vals}]`
   }).join('; ')
 }
 
 const formatRuleDesc = (rule: AdvancedCcRule): string => {
-  const actionLabel = actionLabels[rule.action] || rule.action
+  const actionLabel = actionLabels.value[rule.action] || rule.action
   const condText = formatConditions(rule)
-  const base = `${rule.period}s/${rule.threshold}次 -> ${actionLabel} ${rule.actionSeconds}s`
+  const base = t('page.7596206d2fd6', { p0: rule.period, p1: rule.threshold, p2: actionLabel, p3: rule.actionSeconds })
   return condText ? `${condText} | ${base}` : base
 }
 
@@ -88,7 +89,7 @@ const loadConfig = async () => {
       pathStas.value = res.pathStas || []
     }
   } catch (e) {
-    console.error('加载统计配置失败:', e)
+    console.error(t('page.612d58d1a266'), e)
   }
 }
 
@@ -100,7 +101,7 @@ const loadCcRules = async () => {
       ccRules.value = res.rules
     }
   } catch (e) {
-    console.error('加载 CC 规则失败:', e)
+    console.error(t('page.66f7906c05b4'), e)
   } finally {
     ccLoading.value = false
   }
@@ -116,12 +117,12 @@ const addWhitePath = async () => {
     if (res.success) {
       newWhitePath.value = ''
       await loadConfig()
-      showSuccess('白名单路径已添加')
+      showSuccess(t('page.919791c13c68'))
     } else {
-      showError(res.message || '添加失败')
+      showError(res.message || t('page.2ca15f1e2bb7'))
     }
   } catch (e) {
-    showError('添加失败')
+    showError(t('page.2ca15f1e2bb7'))
   } finally {
     whitePathLoading.value = false
   }
@@ -132,12 +133,12 @@ const removeWhitePath = async (path: string) => {
     const res = await statisticApi.removeWhitePath(path)
     if (res.success) {
       await loadConfig()
-      showSuccess('已移除')
+      showSuccess(t('page.174688c755b9'))
     } else {
-      showError(res.message || '移除失败')
+      showError(res.message || t('page.4757fc1d4709'))
     }
   } catch (e) {
-    showError('移除失败')
+    showError(t('page.4757fc1d4709'))
   }
 }
 
@@ -151,12 +152,12 @@ const addPathSta = async () => {
     if (res.success) {
       newPathSta.value = ''
       await loadConfig()
-      showSuccess('路径统计规则已添加')
+      showSuccess(t('page.0a114f5f3bbc'))
     } else {
-      showError(res.message || '添加失败')
+      showError(res.message || t('page.2ca15f1e2bb7'))
     }
   } catch (e) {
-    showError('添加失败')
+    showError(t('page.2ca15f1e2bb7'))
   } finally {
     pathStaLoading.value = false
   }
@@ -167,12 +168,12 @@ const removePathSta = async (path: string) => {
     const res = await statisticApi.removePathSta(path)
     if (res.success) {
       await loadConfig()
-      showSuccess('已移除')
+      showSuccess(t('page.174688c755b9'))
     } else {
-      showError(res.message || '移除失败')
+      showError(res.message || t('page.4757fc1d4709'))
     }
   } catch (e) {
-    showError('移除失败')
+    showError(t('page.4757fc1d4709'))
   }
 }
 
@@ -194,7 +195,7 @@ const closeEditor = () => {
 
 const handleCcSaved = () => {
   loadCcRules()
-  showSuccess('规则已保存')
+  showSuccess(t('page.c9105d640ece'))
 }
 
 const toggleCcRule = async (rule: AdvancedCcRule) => {
@@ -202,23 +203,23 @@ const toggleCcRule = async (rule: AdvancedCcRule) => {
     const res = await advancedCcApi.toggleRule(rule.id)
     if (res.success) {
       rule.enabled = res.enabled
-      showSuccess(res.enabled ? '已启用' : '已禁用')
+      showSuccess(res.enabled ? t('page.dfb802238b38') : t('page.bc5a87a757a5'))
     }
   } catch (e) {
-    showError('操作失败')
+    showError(t('page.0c3b4cf7aa25'))
   }
 }
 
 const deleteCcRule = async (rule: AdvancedCcRule) => {
-  if (!confirm(`确定要删除规则"${rule.name}"吗?`)) return
+  if (!confirm(t('page.9c812be7aa18', { p0: rule.name }))) return
   try {
     const res = await advancedCcApi.removeRule(rule.id)
     if (res.success) {
       loadCcRules()
-      showSuccess('已删除')
+      showSuccess(t('page.077a6d37719a'))
     }
   } catch (e) {
-    showError('删除失败')
+    showError(t('page.c228558cf257'))
   }
 }
 
@@ -246,8 +247,8 @@ onUnmounted(() => {
     <div class="card">
       <div class="flex items-center justify-between mb-3">
         <div>
-          <h2 class="text-lg font-medium text-gray-100">白名单路径</h2>
-          <p class="text-sm text-gray-500 mt-1">白名单路径将跳过 WAF 和 CC 检测</p>
+          <h2 class="text-lg font-medium text-gray-100">{{ t('page.e15c3f4cac20') }}</h2>
+          <p class="text-sm text-gray-500 mt-1">{{ t('page.604a94afc8dd') }}</p>
         </div>
       </div>
 
@@ -262,7 +263,7 @@ onUnmounted(() => {
           <button
             @click="removeWhitePath(path)"
             class="ml-0.5 text-primary-400/60 hover:text-red-400 transition-colors"
-            title="移除"
+            :title="t('page.6135d4159e89')"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -270,7 +271,7 @@ onUnmounted(() => {
           </button>
         </span>
       </div>
-      <div v-else class="text-gray-500 text-sm mb-4">暂无白名单路径</div>
+      <div v-else class="text-gray-500 text-sm mb-4">{{ t('page.4dfca1441dcc') }}</div>
 
       <!-- 添加输入 -->
       <div class="flex gap-2">
@@ -278,7 +279,7 @@ onUnmounted(() => {
           v-model="newWhitePath"
           @keyup.enter="addWhitePath"
           type="text"
-          placeholder="输入路径，例如 /health"
+          :placeholder="t('page.d836ba330759')"
           class="flex-1 bg-dark-card-hover border border-dark-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-primary-500"
         />
         <button
@@ -286,7 +287,7 @@ onUnmounted(() => {
           :disabled="!newWhitePath.trim() || whitePathLoading"
           class="btn btn-sm btn-primary"
         >
-          添加
+          {{ t('page.7a8a11ead507') }}
         </button>
       </div>
     </div>
@@ -295,8 +296,8 @@ onUnmounted(() => {
     <div class="card">
       <div class="flex items-center justify-between mb-3">
         <div>
-          <h2 class="text-lg font-medium text-gray-100">路径统计规则</h2>
-          <p class="text-sm text-gray-500 mt-1">用于流量分析的路径匹配规则，支持 {'{**match}'} 通配符</p>
+          <h2 class="text-lg font-medium text-gray-100">{{ t('page.cae86dc7ee54') }}</h2>
+          <p class="text-sm text-gray-500 mt-1">{{ t('page.ab5d8fff96d4') }}</p>
         </div>
       </div>
 
@@ -311,7 +312,7 @@ onUnmounted(() => {
           <button
             @click="removePathSta(path)"
             class="ml-0.5 text-blue-400/60 hover:text-red-400 transition-colors"
-            title="移除"
+            :title="t('page.6135d4159e89')"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -319,7 +320,7 @@ onUnmounted(() => {
           </button>
         </span>
       </div>
-      <div v-else class="text-gray-500 text-sm mb-4">暂无路径统计规则</div>
+      <div v-else class="text-gray-500 text-sm mb-4">{{ t('page.9aad63a0ab8d') }}</div>
 
       <!-- 添加输入 -->
       <div class="flex gap-2">
@@ -327,7 +328,7 @@ onUnmounted(() => {
           v-model="newPathSta"
           @keyup.enter="addPathSta"
           type="text"
-          placeholder="输入路径，例如 /api/{**match}"
+          :placeholder="t('page.8138ac06bd82')"
           class="flex-1 bg-dark-card-hover border border-dark-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-primary-500"
         />
         <button
@@ -335,7 +336,7 @@ onUnmounted(() => {
           :disabled="!newPathSta.trim() || pathStaLoading"
           class="btn btn-sm btn-primary"
         >
-          添加
+          {{ t('page.7a8a11ead507') }}
         </button>
       </div>
     </div>
@@ -344,11 +345,11 @@ onUnmounted(() => {
     <div class="card">
       <div class="flex items-center justify-between mb-4">
         <div>
-          <h2 class="text-lg font-medium text-gray-100">CC 防护规则</h2>
-          <p class="text-sm text-gray-500 mt-1">基于频率检测的自动防护规则</p>
+          <h2 class="text-lg font-medium text-gray-100">{{ t('page.54ad621bd04c') }}</h2>
+          <p class="text-sm text-gray-500 mt-1">{{ t('page.d8b97e5f470e') }}</p>
         </div>
         <button @click="openAddCcRule" class="btn btn-sm btn-secondary flex items-center gap-1">
-          添加规则
+          {{ t('page.c9f9e18b0623') }}
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
           </svg>
@@ -396,10 +397,10 @@ onUnmounted(() => {
 
                 <div class="flex items-center gap-2 flex-shrink-0">
                   <button @click="openEditCcRule(rule)" class="text-xs text-primary-400 hover:text-primary-300">
-                    编辑
+                    {{ t('page.051836569928') }}
                   </button>
                   <button @click="deleteCcRule(rule)" class="text-xs text-red-400 hover:text-red-300">
-                    删除
+                    {{ t('page.2f9daa828907') }}
                   </button>
                 </div>
               </div>
@@ -411,7 +412,7 @@ onUnmounted(() => {
           v-if="ccRules.length === 0 && !ccLoading"
           class="text-center py-8 text-gray-500"
         >
-          暂无 CC 防护规则
+          {{ t('page.a3d955c29e10') }}
         </div>
       </div>
     </div>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { locale } from '@/i18n'
+import { t } from '@/i18n'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import ListToolbar from '@/components/common/ListToolbar.vue'
 import { lbApi } from '@/api'
@@ -43,13 +45,13 @@ const createCluster = async () => {
   clusterError.value = ''
   try {
     const res = await lbApi.createCluster(clusterForm.value)
-    if (!res.success) { clusterError.value = res.message || '创建失败'; return }
+    if (!res.success) { clusterError.value = res.message || t('page.7e6a71efbf63'); return }
     selectedClusterId.value = clusterForm.value.id
     page.value = 1; search.value = ''
     showClusterDialog.value = false
     await loadData()
-    showSuccess('集群已创建')
-  } catch (e) { clusterError.value = getErrorMessage(e, '创建集群失败') }
+    showSuccess(t('page.5c74562600ca'))
+  } catch (e) { clusterError.value = getErrorMessage(e, t('page.e0334457c59f')) }
   finally { saving.value = false }
 }
 
@@ -78,9 +80,9 @@ const getOutlier = (destinationId: string) => outliers.value.find(
 )
 
 const outlierReason = (reason?: string) => ({
-  consecutive_connection_failures: '连续连接失败',
-  consecutive_5xx: '连续 5xx',
-  error_rate: '错误率过高',
+  consecutive_connection_failures: t('page.e13640f4294e'),
+  consecutive_5xx: t('page.add8103b8ab2'),
+  error_rate: t('page.97d53d32adcd'),
 }[reason || ''] || reason || '')
 
 // 当前集群是否存在补丁数据
@@ -109,7 +111,7 @@ const loadDestinations = async () => {
       await loadDestinations()
     }
   } catch {
-    if (request === destinationRequest) showError('加载目标服务器失败')
+    if (request === destinationRequest) showError(t('page.8deed7a292f9'))
   } finally {
     if (request === destinationRequest) loading.value = false
   }
@@ -133,7 +135,7 @@ const loadData = async () => {
     }
     await loadDestinations()
   } catch (error) {
-    if (request === configRequest) showError('加载集群配置失败')
+    if (request === configRequest) showError(t('page.96bba618faea'))
   } finally {
     if (request === configRequest) loading.value = false
   }
@@ -154,13 +156,13 @@ const updatePolicy = async (policy: string) => {
   try {
     const res = await lbApi.updatePolicy(selectedClusterId.value, policy)
     if (res.success) {
-      showSuccess('集群策略已更新')
+      showSuccess(t('page.587067f62127'))
       await loadData()
     } else {
-      showError(res.message || '更新策略失败')
+      showError(res.message || t('page.db7ac79f328a'))
     }
   } catch (error) {
-    showError(getErrorMessage(error, '更新策略失败'))
+    showError(getErrorMessage(error, t('page.db7ac79f328a')))
   }
 }
 
@@ -202,7 +204,7 @@ const openEditDialog = (dest: LbDestination) => {
 const handleSave = async () => {
   if (!selectedClusterId.value) return
   if (!form.value.destinationId || !form.value.ip) {
-    showError('名字和 IP 不能为空')
+    showError(t('page.69e10235488a'))
     return
   }
 
@@ -233,71 +235,71 @@ const handleSave = async () => {
     }
 
     if (res.success) {
-      showSuccess(dialogMode.value === 'add' ? '目标已添加' : '目标已更新')
+      showSuccess(dialogMode.value === 'add' ? t('page.9e497f1f547f') : t('page.eca0b0f53752'))
       showDialog.value = false
       await loadData()
     } else {
-      showError(res.message || '操作失败')
+      showError(res.message || t('settings.operation.failed'))
     }
   } catch (error) {
-    showError(getErrorMessage(error, '操作失败'))
+    showError(getErrorMessage(error, t('settings.operation.failed')))
   }
 }
 
 // 删除单个目标
 const removeDest = async (dest: LbDestination) => {
-  if (!confirm(`确定要删除目标 "${dest.id}" 吗？`)) return
+  if (!confirm(t('page.8d41b00b60e7', { p0: dest.id }))) return
   try {
     const res = await lbApi.removeDestination(selectedClusterId.value, dest.id)
     if (res.success) {
-      showSuccess('目标已删除')
+      showSuccess(t('page.e9e677e13451'))
       await loadData()
     } else {
-      showError(res.message || '删除失败')
+      showError(res.message || t('settings.deletion.failed'))
     }
   } catch (error) {
-    showError(getErrorMessage(error, '删除失败'))
+    showError(getErrorMessage(error, t('settings.deletion.failed')))
   }
 }
 
 // 批量删除
 const batchRemove = async () => {
   if (selectedDestIds.value.size === 0) {
-    showError('请先选择要删除的目标')
+    showError(t('page.68ec570a51e7'))
     return
   }
-  if (!confirm(`确定要删除选中的 ${selectedDestIds.value.size} 个目标吗？`)) return
+  if (!confirm(t('page.befe8f5dcf61', { p0: selectedDestIds.value.size }))) return
   try {
     const res = await lbApi.batchRemoveDestinations(
       selectedClusterId.value,
       Array.from(selectedDestIds.value)
     )
     if (res.success) {
-      if (res.allSucceeded) showSuccess(`已删除 ${res.succeeded} 个目标`)
-      else showError(`已删除 ${res.succeeded} 个，失败 ${res.failed} 个：${res.results.filter(item => !item.success).map(item => `${item.id}: ${item.message}`).join('；')}`)
+      if (res.allSucceeded) showSuccess(t('page.2a4ac31cfbde', { p0: res.succeeded }))
+      else showError(t('page.4223b9212792', { p0: res.succeeded, p1: res.failed, p2: res.results.filter(item => !item.success).map(item => `${item.id}: ${item.message}`).join('；') }))
       await loadData()
     } else {
-      showError(res.message || '批量删除失败')
+      showError(res.message || t('page.27b8c99cf572'))
     }
   } catch (error) {
-    showError(getErrorMessage(error, '批量删除失败'))
+    showError(getErrorMessage(error, t('page.27b8c99cf572')))
   }
 }
 
 // 删除集群补丁
 const removeClusterPatch = async () => {
   if (!selectedClusterId.value) return
-  if (!confirm(`确定要删除集群 "${selectedClusterId.value}" 的所有补丁数据吗？这将恢复为原始配置。`)) return
+  if (!confirm(t('page.1648ca1aaaa7', { p0: selectedClusterId.value }))) return
   try {
     const res = await lbApi.removeClusterPatch(selectedClusterId.value)
     if (res.success) {
-      showSuccess('补丁已删除，已恢复原始配置')
+      showSuccess(t('page.0622d73af96d'))
       await loadData()
     } else {
-      showError(res.message || '删除补丁失败')
+      showError(res.message || t('page.2f476ccaec39'))
     }
   } catch (error) {
-    showError(getErrorMessage(error, '删除补丁失败'))
+    showError(getErrorMessage(error, t('page.2f476ccaec39')))
   }
 }
 
@@ -325,47 +327,47 @@ onMounted(loadData)
 <template>
   <div class="space-y-6">
     <div v-if="showClusterDialog" class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-      <form role="dialog" aria-modal="true" aria-label="添加集群" class="bg-dark-card border border-dark-border rounded-lg p-5 w-full max-w-lg space-y-4" @submit.prevent="createCluster">
-        <h2 class="font-medium">添加集群</h2>
+      <form role="dialog" aria-modal="true" :aria-label="t('page.adac2b426b5b')" class="bg-dark-card border border-dark-border rounded-lg p-5 w-full max-w-lg space-y-4" @submit.prevent="createCluster">
+        <h2 class="font-medium">{{ t('page.adac2b426b5b') }}</h2>
         <p v-if="clusterError" role="alert" class="text-red-400 break-all">{{ clusterError }}</p>
-        <label class="block">集群 ID<input v-model="clusterForm.id" required pattern="[a-zA-Z0-9_-]{1,100}" maxlength="100" class="input w-full mt-1" /></label>
-        <label class="block">负载均衡策略<select v-model="clusterForm.policy" class="input w-full mt-1"><option value="RoundRobin">RoundRobin</option><option v-for="p in policies.filter(p => p.name !== 'RoundRobin')" :key="p.name" :value="p.name">{{ p.name }}</option></select></label>
-        <label class="block">首个上游地址<input v-model="clusterForm.address" type="text" required maxlength="2048" placeholder="127.0.0.1:8080" class="input w-full mt-1" /></label>
-        <div class="flex justify-end gap-3"><button type="button" :disabled="saving" @click="showClusterDialog = false">取消</button><button :disabled="saving" class="btn btn-primary">{{ saving ? '创建中...' : '创建' }}</button></div>
+        <label class="block">{{ t('page.b53c01010381') }}<input v-model="clusterForm.id" required pattern="[a-zA-Z0-9_-]{1,100}" maxlength="100" class="input w-full mt-1" /></label>
+        <label class="block">{{ t('page.61df9d00ded4') }}<select v-model="clusterForm.policy" class="input w-full mt-1"><option value="RoundRobin">RoundRobin</option><option v-for="p in policies.filter(p => p.name !== 'RoundRobin')" :key="p.name" :value="p.name">{{ p.name }}</option></select></label>
+        <label class="block">{{ t('page.217aa1ddb160') }}<input v-model="clusterForm.address" type="text" required maxlength="2048" placeholder="127.0.0.1:8080" class="input w-full mt-1" /></label>
+        <div class="flex justify-end gap-3"><button type="button" :disabled="saving" @click="showClusterDialog = false">{{ t('common.cancel') }}</button><button :disabled="saving" class="btn btn-primary">{{ saving ? t('page.687d8f3ba99e') : t('page.cde2cd071d25') }}</button></div>
       </form>
     </div>
     <!-- 集群选择 & 策略配置 -->
     <div class="card">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-medium text-gray-100">配置集群</h2>
-        <button class="btn btn-primary" @click="clusterForm = { id: '', policy: 'RoundRobin', address: '' }; clusterError = ''; showClusterDialog = true">添加集群</button>
+        <h2 class="text-lg font-medium text-gray-100">{{ t('nav.clusters') }}</h2>
+        <button class="btn btn-primary" @click="clusterForm = { id: '', policy: 'RoundRobin', address: '' }; clusterError = ''; showClusterDialog = true">{{ t('page.adac2b426b5b') }}</button>
       </div>
 
       <div class="flex flex-wrap items-center gap-4">
         <!-- 集群选择 -->
         <div class="flex items-center gap-2">
-          <span class="text-sm text-gray-400">集群:</span>
+          <span class="text-sm text-gray-400">{{ t('page.8c6115b59cf6') }}</span>
           <select
             v-model="selectedClusterId"
             @change="switchCluster(selectedClusterId)"
             class="bg-dark-card border border-dark-border rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-primary-500"
           >
             <option v-for="c in clusters" :key="c.id" :value="c.id">
-              {{ c.id }} ({{ c.destinationCount }} 个目标)
+              {{ c.id }} ({{ c.destinationCount }} {{ t('page.31763e60fa1c') }}
             </option>
           </select>
         </div>
 
         <!-- 策略选择 -->
         <div class="flex flex-wrap sm:flex-nowrap items-center gap-2 min-w-0 max-w-full" v-if="currentCluster">
-          <span class="text-sm text-gray-400 shrink-0">负载均衡策略:</span>
+          <span class="text-sm text-gray-400 shrink-0">{{ t('page.e3cad51c3f6a') }}</span>
           <select
             :value="currentCluster.loadBalancingPolicy"
             @change="updatePolicy(($event.target as HTMLSelectElement).value)"
             class="bg-dark-card border border-dark-border rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-primary-500 min-w-0 max-w-full"
           >
             <option v-for="p in policies" :key="p.name" :value="p.name">
-              {{ p.label }} ({{ p.name }})
+              {{ t(`lb.policy.${p.name}`) === `lb.policy.${p.name}` ? p.label : t(`lb.policy.${p.name}`) }} ({{ p.name }})
             </option>
           </select>
         </div>
@@ -376,7 +378,7 @@ onMounted(loadData)
     <div class="card" v-if="currentCluster">
       <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
         <h2 class="text-lg font-medium text-gray-100">
-          目标服务器
+          {{ t('page.9d39d0195c94') }}
           <span class="text-sm text-gray-500 ml-2">({{ total }})</span>
         </h2>
         <div class="flex flex-wrap items-center gap-2">
@@ -386,13 +388,13 @@ onMounted(loadData)
             class="btn btn-sm btn-warning flex items-center gap-1"
             :class="{ 'opacity-50 cursor-not-allowed': !hasPatch }"
           >
-            删除补丁
+            {{ t('page.c9fee9110ba0') }}
           </button>
           <button @click="openAddDialog" class="btn btn-sm btn-primary flex items-center gap-1">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
             </svg>
-            新增
+            {{ t('page.0006d696d8e1') }}
           </button>
           <button
             @click="batchRemove"
@@ -403,7 +405,7 @@ onMounted(loadData)
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
             </svg>
-            批量删除
+            {{ t('page.ddae7a0fc554') }}
           </button>
         </div>
       </div>
@@ -422,13 +424,13 @@ onMounted(loadData)
                   class="rounded border-gray-500"
                 />
               </th>
-              <th class="py-3 px-3 text-left">名字</th>
-              <th class="py-3 px-3 text-left">来源</th>
+              <th class="py-3 px-3 text-left">{{ t('page.6773310492a9') }}</th>
+              <th class="py-3 px-3 text-left">{{ t('settings.source') }}</th>
               <th class="py-3 px-3 text-left">IP</th>
-              <th class="py-3 px-3 text-left">端口</th>
-              <th class="py-3 px-3 text-left">权重</th>
-              <th class="py-3 px-3 text-left">运行状态</th>
-              <th class="py-3 px-3 text-left">操作</th>
+              <th class="py-3 px-3 text-left">{{ t('fields.Port') }}</th>
+              <th class="py-3 px-3 text-left">{{ t('page.db18831a0457') }}</th>
+              <th class="py-3 px-3 text-left">{{ t('page.e46b0272bd64') }}</th>
+              <th class="py-3 px-3 text-left">{{ t('settings.actions') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -450,22 +452,22 @@ onMounted(loadData)
                 <span
                   v-if="dest.source === 'patch'"
                   class="inline-block px-1.5 py-0.5 text-xs bg-yellow-500/20 text-yellow-400 rounded"
-                >补丁</span>
+                >{{ t('page.70f565337ffd') }}</span>
                 <span
                   v-else
                   class="inline-block px-1.5 py-0.5 text-xs bg-gray-500/20 text-gray-400 rounded"
-                >默认</span>
+                >{{ t('page.844b8cc8dff7') }}</span>
               </td>
               <td class="py-3 px-3 text-gray-300 font-mono">{{ dest.host }}</td>
               <td class="py-3 px-3 text-gray-300">{{ dest.port }}</td>
               <td class="py-3 px-3 text-gray-300">{{ dest.metadata?.Weight || '1' }}</td>
               <td class="py-3 px-3">
                 <div v-if="getOutlier(dest.id)?.state === 'ejected'" class="space-y-1">
-                  <span class="inline-block px-1.5 py-0.5 text-xs bg-red-500/20 text-red-400 rounded">已驱逐</span>
+                  <span class="inline-block px-1.5 py-0.5 text-xs bg-red-500/20 text-red-400 rounded">{{ t('page.b3467ac04553') }}</span>
                   <div class="text-xs text-gray-500">{{ outlierReason(getOutlier(dest.id)?.reason) }}</div>
-                  <div class="text-xs text-gray-500">恢复于 {{ new Date(getOutlier(dest.id)!.ejectedUntil!).toLocaleString() }}</div>
+                  <div class="text-xs text-gray-500">{{ t('page.1319e8efdddc') }} {{ new Date(getOutlier(dest.id)!.ejectedUntil!).toLocaleString(locale) }}</div>
                 </div>
-                <span v-else class="inline-block px-1.5 py-0.5 text-xs bg-green-500/20 text-green-400 rounded">可用</span>
+                <span v-else class="inline-block px-1.5 py-0.5 text-xs bg-green-500/20 text-green-400 rounded">{{ t('page.4d99c976beb8') }}</span>
               </td>
               <td class="py-3 px-3">
                 <div class="flex items-center gap-2">
@@ -473,13 +475,13 @@ onMounted(loadData)
                     @click="openEditDialog(dest)"
                     class="px-3 py-1 text-xs border border-primary-500 text-primary-400 rounded hover:bg-primary-500/10 transition-colors"
                   >
-                    编辑
+                    {{ t('common.edit') }}
                   </button>
                   <button
                     @click="removeDest(dest)"
                     class="px-3 py-1 text-xs border border-red-500 text-red-400 rounded hover:bg-red-500/10 transition-colors"
                   >
-                    删除
+                    {{ t('common.delete') }}
                   </button>
                 </div>
               </td>
@@ -489,19 +491,19 @@ onMounted(loadData)
 
         <!-- 空状态 -->
         <div v-if="destinations.length === 0" class="text-center py-12 text-gray-500">
-          暂无目标服务器
+          {{ t('page.b8935f01ff85') }}
         </div>
       </div>
     </div>
 
     <!-- 加载中 -->
     <div v-if="loading" class="text-center py-12 text-gray-500">
-      加载中...
+      {{ t('common.loading') }}
     </div>
 
     <!-- 无集群 -->
     <div v-if="!loading && clusters.length === 0" class="card text-center py-12 text-gray-500">
-      暂无集群配置
+      {{ t('page.c2ac8686b5fd') }}
     </div>
 
     <!-- 新增/编辑对话框 -->
@@ -513,18 +515,18 @@ onMounted(loadData)
         <!-- 对话框 -->
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
           <h3 class="text-lg font-medium text-gray-100 mb-4">
-            {{ dialogMode === 'add' ? '新增目标服务器' : '编辑目标服务器' }}
+            {{ dialogMode === 'add' ? t('page.377f3f87fa28') : t('page.b892f5ddb3fb') }}
           </h3>
 
           <div class="space-y-4">
             <!-- 名字 -->
             <div>
-              <label class="block text-sm text-gray-400 mb-1">名字 (ID)</label>
+              <label class="block text-sm text-gray-400 mb-1">{{ t('page.90975a437c0e') }}</label>
               <input
                 v-model="form.destinationId"
                 type="text"
                 :disabled="dialogMode === 'edit'"
-                placeholder="如: web后台1"
+                :placeholder="t('page.83a0c3da9488')"
                 class="w-full bg-dark-sidebar border border-dark-border rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-primary-500 disabled:opacity-50"
               />
             </div>
@@ -532,7 +534,7 @@ onMounted(loadData)
             <!-- 协议 + IP + 端口 -->
             <div class="flex gap-3">
               <div class="w-28">
-                <label class="block text-sm text-gray-400 mb-1">协议</label>
+                <label class="block text-sm text-gray-400 mb-1">{{ t('page.ab2f31f30acf') }}</label>
                 <select
                   v-model="form.scheme"
                   class="w-full bg-dark-sidebar border border-dark-border rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-primary-500"
@@ -542,16 +544,16 @@ onMounted(loadData)
                 </select>
               </div>
               <div class="flex-1">
-                <label class="block text-sm text-gray-400 mb-1">IP 地址</label>
+                <label class="block text-sm text-gray-400 mb-1">{{ t('settings.ip.address') }}</label>
                 <input
                   v-model="form.ip"
                   type="text"
-                  placeholder="如: 172.30.53.74"
+                  :placeholder="t('page.3cfd948ececa')"
                   class="w-full bg-dark-sidebar border border-dark-border rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-primary-500"
                 />
               </div>
               <div class="w-24">
-                <label class="block text-sm text-gray-400 mb-1">端口</label>
+                <label class="block text-sm text-gray-400 mb-1">{{ t('fields.Port') }}</label>
                 <input
                   v-model.number="form.port"
                   type="number"
@@ -564,7 +566,7 @@ onMounted(loadData)
 
             <!-- 权重 -->
             <div class="w-32">
-              <label class="block text-sm text-gray-400 mb-1">权重</label>
+              <label class="block text-sm text-gray-400 mb-1">{{ t('page.db18831a0457') }}</label>
               <input
                 v-model="form.weight"
                 type="text"
@@ -580,14 +582,14 @@ onMounted(loadData)
               @click="showDialog = false"
               class="px-4 py-2 text-sm text-gray-400 border border-dark-border rounded-lg hover:bg-white/5 transition-colors"
             >
-              取消
+              {{ t('common.cancel') }}
             </button>
             <button
               @click="handleSave"
               :disabled="saving"
               class="px-4 py-2 text-sm bg-primary-500 text-gray-900 rounded-lg hover:bg-primary-400 transition-colors disabled:opacity-50"
             >
-              {{ saving ? '保存中...' : '确定' }}
+              {{ saving ? t('page.917b1c1f18d0') : t('common.confirm') }}
             </button>
           </div>
         </div>

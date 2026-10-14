@@ -84,7 +84,8 @@ public static partial class ControlApi
     private sealed record PluginActionView(string Id, string Name, string Type, string? Description);
     private sealed record PluginActionsResponse(bool Success, string PluginId, PluginActionView[] Actions);
     private sealed record PluginListItem(string Id, string Name, string Version, string? Description, string? Author,
-        string Priority, string State, bool IsEnabled, bool IsSystem, bool EnabledByDefault, bool HasOptions, List<PluginAction> Actions);
+        string Priority, string State, bool IsEnabled, bool IsSystem, bool EnabledByDefault, bool HasOptions, List<PluginAction> Actions,
+        Dictionary<string, Dictionary<string, string>> Localization);
     private static void MapPluginEndpoints(WebApplication app, int controlPort)
     {
         app.MapGet("/api/plugins/{pluginId}/config/effective", (string pluginId, string? host, string? path,
@@ -139,7 +140,7 @@ public static partial class ControlApi
                 var state = pluginManager.GetPluginState(pluginId);
                 return new PluginListItem(pluginId, meta.Name, meta.Version, meta.Description, meta.Author,
                     meta.Priority.ToString(), state.ToString(), state is PluginState.Running or PluginState.Initialized,
-                    pluginManager.IsSystemPlugin(pluginId), meta.EnabledByDefault, meta.DefaultOptions != null, p.GetActions().ToList());
+                    pluginManager.IsSystemPlugin(pluginId), meta.EnabledByDefault, meta.DefaultOptions != null, p.GetActions().ToList(), PluginLocalization.Load(p));
             }).OrderBy(p => p.IsSystem ? 0 : 1).ThenBy(p => p.Name).ToList();
 
             return Results.Ok(ManagementLists.From(plugins).Sort("name", item => item.Name).Sort("id", item => item.Id)

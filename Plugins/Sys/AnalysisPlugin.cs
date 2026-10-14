@@ -32,6 +32,7 @@ public class AnalysisPlugin : LyWafPluginBase, IPluginApiHandler, IPluginProxySt
     public override PluginMetadata Metadata => new()
     {
         Id = "analysis",
+        LocalizationResourcePrefix = "LyWaf.Plugins.Sys.Analysis.Localization",
         Name = "流量分析器",
         Version = "1.0.0",
         Description = "后台分析访问流量，检测 CC 攻击等异常行为",

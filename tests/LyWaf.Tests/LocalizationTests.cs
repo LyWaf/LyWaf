@@ -13,6 +13,27 @@ namespace LyWaf.Tests;
 public sealed class LocalizationTests
 {
     [Fact]
+    public void BuiltInPluginMetadataHasPluginOwnedBilingualResources()
+    {
+        ILyWafPlugin[] plugins = [
+            new HttpUploadPlugin(), new LyWaf.Plugins.Sys.SiteAuth.SiteAuthPlugin(),
+            new LyWaf.Plugins.Sys.AnalysisPlugin(), new LyWaf.Plugins.Sys.ImageProcessPlugin(),
+            new LyWaf.Plugins.Sys.WebTamper.WebTamperPlugin(),
+            new LyWaf.Plugins.Examples.CustomHeaderPlugin(), new LyWaf.Plugins.Examples.RequestLoggerPlugin()
+        ];
+        foreach (var plugin in plugins)
+        {
+            var resources = PluginLocalization.Load(plugin);
+            Assert.Equal(plugin.Metadata.Name, resources["zh-CN"]["metadata.name"]);
+            Assert.NotEqual(plugin.Metadata.Name, resources["en-US"]["metadata.name"]);
+            Assert.False(string.IsNullOrWhiteSpace(resources["en-US"]["metadata.description"]));
+            foreach (var action in plugin.GetActions())
+                Assert.False(string.IsNullOrWhiteSpace(resources["en-US"][$"actions.{action.Id}.name"]));
+        }
+        Assert.False(TextLocalizer.HasKey("metadata.name"));
+    }
+
+    [Fact]
     public void PluginResourcesAreLoadedFromTheirAssemblyAndNotTheHostCatalog()
     {
         var upload = PluginLocalization.Load(new HttpUploadPlugin());

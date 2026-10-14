@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
-import { t, translateText } from '@/i18n'
+import { t, translateText, translateTitle } from '@/i18n'
 import LanguageSelect from '@/components/common/LanguageSelect.vue'
 
 const route = useRoute()
@@ -15,7 +15,7 @@ const breadcrumbs = computed(() => {
   const items = [{ name: 'LyWaf', path: '/' }]
   if (route.meta.title) {
     items.push({
-      name: route.meta.title as string,
+      name: translateTitle(route.meta.title),
       path: route.path
     })
   }

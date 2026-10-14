@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { locale } from '@/i18n'
+import { t } from '@/plugins/analysis/i18n'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { refreshPluginMenus } from '@/composables/usePluginMenus'
 import { pluginApi, pluginProxyApi } from '@/api'
 import { advancedCcApi, statisticApi } from './api'
@@ -18,7 +20,7 @@ const loadBanLogs = async () => {
   try {
     const result = await pluginProxyApi('analysis').get<{ success: boolean; logs: typeof banLogs.value }>('ban-logs')
     if (result.success) { banLogs.value = result.logs; logError.value = '' }
-  } catch { logError.value = '封禁日志加载失败' }
+  } catch { logError.value = t('page.9dc24b0e828f') }
   finally { logsLoading.value = false }
 }
 let logTimer: ReturnType<typeof setInterval> | undefined
@@ -46,10 +48,10 @@ const toggleAnalysis = async () => {
     if (res.success) {
       analysisEnabled.value = res.isEnabled
       await refreshPluginMenus()
-      showSuccess(res.isEnabled ? '已开启 CC 分析' : '已关闭 CC 分析')
+      showSuccess(res.isEnabled ? t('page.5847b4547e31') : t('page.f95ccc399797'))
     }
   } catch {
-    showError('操作失败')
+    showError(t('page.0c3b4cf7aa25'))
   } finally {
     analysisToggling.value = false
   }
@@ -73,7 +75,7 @@ const loadStatsConfig = async () => {
       pathStas.value = res.pathStas || []
     }
   } catch (e) {
-    console.error('加载统计配置失败:', e)
+    console.error(t('page.612d58d1a266'), e)
   }
 }
 
@@ -87,12 +89,12 @@ const addWhitePath = async () => {
     if (res.success) {
       newWhitePath.value = ''
       await loadStatsConfig()
-      showSuccess('白名单路径已添加')
+      showSuccess(t('page.919791c13c68'))
     } else {
-      showError(res.message || '添加失败')
+      showError(res.message || t('page.2ca15f1e2bb7'))
     }
   } catch (e) {
-    showError('添加失败')
+    showError(t('page.2ca15f1e2bb7'))
   } finally {
     whitePathLoading.value = false
   }
@@ -103,12 +105,12 @@ const removeWhitePath = async (path: string) => {
     const res = await statisticApi.removeWhitePath(path)
     if (res.success) {
       await loadStatsConfig()
-      showSuccess('已移除')
+      showSuccess(t('page.174688c755b9'))
     } else {
-      showError(res.message || '移除失败')
+      showError(res.message || t('page.4757fc1d4709'))
     }
   } catch (e) {
-    showError('移除失败')
+    showError(t('page.4757fc1d4709'))
   }
 }
 
@@ -122,12 +124,12 @@ const addPathSta = async () => {
     if (res.success) {
       newPathSta.value = ''
       await loadStatsConfig()
-      showSuccess('路径统计规则已添加')
+      showSuccess(t('page.0a114f5f3bbc'))
     } else {
-      showError(res.message || '添加失败')
+      showError(res.message || t('page.2ca15f1e2bb7'))
     }
   } catch (e) {
-    showError('添加失败')
+    showError(t('page.2ca15f1e2bb7'))
   } finally {
     pathStaLoading.value = false
   }
@@ -138,21 +140,21 @@ const removePathSta = async (path: string) => {
     const res = await statisticApi.removePathSta(path)
     if (res.success) {
       await loadStatsConfig()
-      showSuccess('已移除')
+      showSuccess(t('page.174688c755b9'))
     } else {
-      showError(res.message || '移除失败')
+      showError(res.message || t('page.4757fc1d4709'))
     }
   } catch (e) {
-    showError('移除失败')
+    showError(t('page.4757fc1d4709'))
   }
 }
 
 // 枚举翻译
-const ruleTypeLabels: Record<CcRuleType, string> = {
-  FrequentAccess: '高频访问限制',
-  FrequentAttack: '高频攻击限制',
-  FrequentError: '高频错误限制',
-}
+const ruleTypeLabels = computed<Record<CcRuleType, string>>(() => ({
+  FrequentAccess: t('page.38d9f66567c0'),
+  FrequentAttack: t('page.b955b87d932c'),
+  FrequentError: t('page.1eb791fb8b9d'),
+}))
 
 // 数据
 const loading = ref(false)
@@ -184,7 +186,7 @@ const loadData = async () => {
       total.value = response.total
     }
   } catch (error) {
-    if (request === listRequest) showError('加载数据失败')
+    if (request === listRequest) showError(t('page.d1abfa54a4ac'))
   } finally {
     if (request === listRequest) loading.value = false
   }
@@ -211,7 +213,7 @@ const closeEditor = () => {
 // 保存规则成功
 const handleSaved = () => {
   loadData()
-  showSuccess('规则已保存')
+  showSuccess(t('page.c9105d640ece'))
 }
 
 // 切换规则启用状态
@@ -220,58 +222,58 @@ const toggleRule = async (rule: AdvancedCcRule) => {
     const response = await advancedCcApi.toggleRule(rule.id)
     if (response.success) {
       rule.enabled = response.enabled
-      showSuccess(response.enabled ? '已启用规则' : '已禁用规则')
+      showSuccess(response.enabled ? t('page.0497be5a2ca1') : t('page.045e0be12313'))
     }
   } catch (error) {
-    showError('操作失败')
+    showError(t('page.0c3b4cf7aa25'))
   }
 }
 
 // 删除规则
 const deleteRule = async (rule: AdvancedCcRule) => {
-  if (!confirm(`确定要删除规则"${rule.name}"吗？`)) return
+  if (!confirm(t('page.e0dd7146864b', { p0: rule.name }))) return
 
   try {
     const response = await advancedCcApi.removeRule(rule.id)
     if (response.success) {
       loadData()
-      showSuccess('规则已删除')
+      showSuccess(t('page.04e366e33981'))
     }
   } catch (error) {
-    showError('删除失败')
+    showError(t('page.c228558cf257'))
   }
 }
 
 // 匹配目标翻译
-const targetLabels: Record<string, string> = {
-  UrlPath: '路径', FullUrl: 'URL', Method: '请求方法',
+const targetLabels = computed<Record<string, string>>(() => ({
+  UrlPath: t('page.77e1ea5c5688'), FullUrl: 'URL', Method: t('page.cf206666a6a5'),
   ContentType: 'Content-Type', UserAgent: 'User-Agent',
-  Referer: 'Referer', Header: '请求头', QueryParam: '查询参数',
-  Cookie: 'Cookie', ClientIp: '客户端 IP', StatusCode: '状态码',
-}
+  Referer: 'Referer', Header: t('page.cea1aafe9416'), QueryParam: t('page.1904a09fab00'),
+  Cookie: 'Cookie', ClientIp: t('page.2d1cb6792f12'), StatusCode: t('page.06f7d7341212'),
+}))
 
 // 匹配操作翻译
-const operatorLabels: Record<string, string> = {
-  Equal: '等于', NotEqual: '不等于', Contains: '包含',
-  NotContains: '不包含', StartsWith: '前缀为', EndsWith: '后缀为',
-  Regex: '匹配正则', Exists: '存在', NotExists: '不存在',
-}
+const operatorLabels = computed<Record<string, string>>(() => ({
+  Equal: t('page.4bc69a0562ff'), NotEqual: t('page.9678e3a7cb3c'), Contains: t('page.107319b8b39d'),
+  NotContains: t('page.5f60ffcf600a'), StartsWith: t('page.b35e50b3873d'), EndsWith: t('page.637f4e5ba011'),
+  Regex: t('page.ad550e963af3'), Exists: t('page.4a558371f938'), NotExists: t('page.4e51b67dd32c'),
+}))
 
 // 动作翻译
-const actionLabels: Record<string, string> = {
-  Captcha: '人机验证', Block: '封禁', Reject: '拒绝',
-  RateLimit: '限速', LogOnly: '仅记录',
-}
+const actionLabels = computed<Record<string, string>>(() => ({
+  Captcha: t('page.36fbc1da5545'), Block: t('page.6f93ba4c79f8'), Reject: t('page.136de7a8c46f'),
+  RateLimit: t('page.106a487eeea5'), LogOnly: t('page.c4ba4276172a'),
+}))
 
 // 格式化条件文本
 const formatConditions = (rule: AdvancedCcRule): string => {
   if (rule.conditionGroups?.length) return rule.conditionGroups.map(g => '(' + g.conditions.map(c =>
-    `${targetLabels[c.target] || c.target}${operatorLabels[c.operator] || c.operator} [${c.values.join(', ')}]`
-  ).join(g.operator === 'And' ? ' 且 ' : ' 或 ') + ')').join(rule.groupOperator === 'And' ? ' 且 ' : ' 或 ')
+    `${targetLabels.value[c.target] || c.target}${operatorLabels.value[c.operator] || c.operator} [${c.values.join(', ')}]`
+  ).join(g.operator === 'And' ? t('page.a22bdbe928cd') : t('page.60ab743988bb')) + ')').join(rule.groupOperator === 'And' ? t('page.a22bdbe928cd') : t('page.60ab743988bb'))
   if (!rule.conditions || rule.conditions.length === 0) return ''
   return rule.conditions.map(c => {
-    const target = targetLabels[c.target] || c.target
-    const op = operatorLabels[c.operator] || c.operator
+    const target = targetLabels.value[c.target] || c.target
+    const op = operatorLabels.value[c.operator] || c.operator
     const vals = c.values.join(', ')
     return `${target}${op} [${vals}]`
   }).join('；')
@@ -279,11 +281,11 @@ const formatConditions = (rule: AdvancedCcRule): string => {
 
 // 格式化规则描述
 const formatRuleDescription = (rule: AdvancedCcRule): string => {
-  const actionLabel = actionLabels[rule.action] || rule.action
+  const actionLabel = actionLabels.value[rule.action] || rule.action
   const condText = formatConditions(rule)
-  const base = `某 IP 在 ${rule.period} 秒内请求达到 ${rule.threshold} 次，${rule.actionSeconds} 秒内执行「${actionLabel}」`
+  const base = t('page.f51ec17aa469', { p0: rule.period, p1: rule.threshold, p2: rule.actionSeconds, p3: actionLabel })
   if (condText) {
-    return `匹配条件：${condText}。${base}`
+    return t('page.1022baaeca1a', { p0: condText, p1: base })
   }
   return base
 }
@@ -312,8 +314,8 @@ onUnmounted(() => {
     <div class="card">
       <div class="flex items-center justify-between">
         <div>
-          <h2 class="text-lg font-medium text-gray-100">CC 流量分析</h2>
-          <p class="text-sm text-gray-500 mt-1">开启后将在后台持续分析流量，自动检测 CC 攻击行为</p>
+          <h2 class="text-lg font-medium text-gray-100">{{ t('page.4aedc48c69ca') }}</h2>
+          <p class="text-sm text-gray-500 mt-1">{{ t('page.dc38fecbb50d') }}</p>
         </div>
         <button
           @click="toggleAnalysis"
@@ -336,12 +338,12 @@ onUnmounted(() => {
     <!-- CC 防护规则 -->
     <div class="card">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-medium text-gray-100">CC 防护规则</h2>
+        <h2 class="text-lg font-medium text-gray-100">{{ t('page.54ad621bd04c') }}</h2>
         <button @click="openAddDialog" class="btn btn-sm btn-primary flex items-center gap-1.5">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
           </svg>
-          添加规则
+          {{ t('page.c9f9e18b0623') }}
         </button>
       </div>
 
@@ -386,13 +388,13 @@ onUnmounted(() => {
               @click="openEditDialog(rule)"
               class="text-sm text-primary-400 hover:text-primary-300"
             >
-              编辑
+              {{ t('page.051836569928') }}
             </button>
             <button
               @click="deleteRule(rule)"
               class="text-sm text-red-400 hover:text-red-300"
             >
-              删除
+              {{ t('page.2f9daa828907') }}
             </button>
           </div>
         </div>
@@ -402,7 +404,7 @@ onUnmounted(() => {
           v-if="rules.length === 0"
           class="text-center py-8 text-gray-500"
         >
-          暂无 CC 防护规则
+          {{ t('page.a3d955c29e10') }}
         </div>
       </div>
     </div>
@@ -411,8 +413,8 @@ onUnmounted(() => {
     <div class="card">
       <div class="flex items-center justify-between mb-3">
         <div>
-          <h2 class="text-lg font-medium text-gray-100">白名单路径</h2>
-          <p class="text-sm text-gray-500 mt-1">白名单路径将跳过 WAF 和 CC 检测</p>
+          <h2 class="text-lg font-medium text-gray-100">{{ t('page.e15c3f4cac20') }}</h2>
+          <p class="text-sm text-gray-500 mt-1">{{ t('page.604a94afc8dd') }}</p>
         </div>
       </div>
 
@@ -426,7 +428,7 @@ onUnmounted(() => {
           <button
             @click="removeWhitePath(path)"
             class="ml-0.5 text-primary-400/60 hover:text-red-400 transition-colors"
-            title="移除"
+            :title="t('page.6135d4159e89')"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -434,14 +436,14 @@ onUnmounted(() => {
           </button>
         </span>
       </div>
-      <div v-else class="text-gray-500 text-sm mb-4">暂无白名单路径</div>
+      <div v-else class="text-gray-500 text-sm mb-4">{{ t('page.4dfca1441dcc') }}</div>
 
       <div class="flex gap-2">
         <input
           v-model="newWhitePath"
           @keyup.enter="addWhitePath"
           type="text"
-          placeholder="输入路径，例如 /health"
+          :placeholder="t('page.d836ba330759')"
           class="flex-1 bg-dark-card-hover border border-dark-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-primary-500"
         />
         <button
@@ -449,7 +451,7 @@ onUnmounted(() => {
           :disabled="!newWhitePath.trim() || whitePathLoading"
           class="btn btn-sm btn-primary"
         >
-          添加
+          {{ t('page.7a8a11ead507') }}
         </button>
       </div>
     </div>
@@ -458,8 +460,8 @@ onUnmounted(() => {
     <div class="card">
       <div class="flex items-center justify-between mb-3">
         <div>
-          <h2 class="text-lg font-medium text-gray-100">路径统计规则</h2>
-          <p class="text-sm text-gray-500 mt-1">用于流量分析的路径匹配规则，支持 {'{**match}'} 通配符</p>
+          <h2 class="text-lg font-medium text-gray-100">{{ t('page.cae86dc7ee54') }}</h2>
+          <p class="text-sm text-gray-500 mt-1">{{ t('page.ab5d8fff96d4') }}</p>
         </div>
       </div>
 
@@ -473,7 +475,7 @@ onUnmounted(() => {
           <button
             @click="removePathSta(path)"
             class="ml-0.5 text-blue-400/60 hover:text-red-400 transition-colors"
-            title="移除"
+            :title="t('page.6135d4159e89')"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -481,14 +483,14 @@ onUnmounted(() => {
           </button>
         </span>
       </div>
-      <div v-else class="text-gray-500 text-sm mb-4">暂无路径统计规则</div>
+      <div v-else class="text-gray-500 text-sm mb-4">{{ t('page.9aad63a0ab8d') }}</div>
 
       <div class="flex gap-2">
         <input
           v-model="newPathSta"
           @keyup.enter="addPathSta"
           type="text"
-          placeholder="输入路径，例如 /api/{**match}"
+          :placeholder="t('page.8138ac06bd82')"
           class="flex-1 bg-dark-card-hover border border-dark-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-primary-500"
         />
         <button
@@ -496,7 +498,7 @@ onUnmounted(() => {
           :disabled="!newPathSta.trim() || pathStaLoading"
           class="btn btn-sm btn-primary"
         >
-          添加
+          {{ t('page.7a8a11ead507') }}
         </button>
       </div>
     </div>
@@ -504,20 +506,20 @@ onUnmounted(() => {
     <!-- 规则编辑器 -->
     <section class="border-t border-dark-border pt-6">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold text-gray-100">CC 封禁日志 ({{ banLogs.length }}/1000)</h2>
-        <button class="btn btn-sm btn-secondary" :disabled="logsLoading" @click="loadBanLogs">刷新</button>
+        <h2 class="text-lg font-semibold text-gray-100">{{ t('page.973461c40252') }}{{ banLogs.length }}/1000)</h2>
+        <button class="btn btn-sm btn-secondary" :disabled="logsLoading" @click="loadBanLogs">{{ t('page.aee887434131') }}</button>
       </div>
       <p v-if="logError" role="alert" class="text-red-400 mb-3">{{ logError }}</p>
-      <div class="max-h-96 overflow-auto border border-dark-border rounded-md" tabindex="0" aria-label="CC 封禁日志">
+      <div class="max-h-96 overflow-auto border border-dark-border rounded-md" tabindex="0" :aria-label="t('page.ba88b90f2f6a')">
         <table class="w-full text-sm text-left">
           <thead class="sticky top-0 bg-dark-card text-gray-400"><tr>
-            <th class="p-3 whitespace-nowrap">时间</th><th class="p-3">IP</th><th class="p-3">封禁原因</th><th class="p-3 whitespace-nowrap">时长（秒）</th>
+            <th class="p-3 whitespace-nowrap">{{ t('page.8b6ff498515b') }}</th><th class="p-3">IP</th><th class="p-3">{{ t('page.39a7481a7d30') }}</th><th class="p-3 whitespace-nowrap">{{ t('page.efaa6864377d') }}</th>
           </tr></thead>
           <tbody><tr v-for="log in banLogs" :key="log.id" class="border-t border-dark-border">
-            <td class="p-3 whitespace-nowrap">{{ new Date(log.time).toLocaleString() }}</td>
+            <td class="p-3 whitespace-nowrap">{{ new Date(log.time).toLocaleString(locale) }}</td>
             <td class="p-3 font-mono">{{ log.ip }}</td>
             <td class="p-3 break-all min-w-48">{{ log.reason }}</td><td class="p-3">{{ log.durationSeconds }}</td>
-          </tr><tr v-if="!banLogs.length"><td colspan="4" class="p-8 text-center text-gray-500">暂无 CC 封禁日志</td></tr></tbody>
+          </tr><tr v-if="!banLogs.length"><td colspan="4" class="p-8 text-center text-gray-500">{{ t('page.93ede994e535') }}</td></tr></tbody>
         </table>
       </div>
     </section>

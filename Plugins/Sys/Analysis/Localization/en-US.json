@@ -1,0 +1,5 @@
+{
+  "metadata.name": "Traffic analyzer",
+  "metadata.description": "Analyze traffic in the background to detect CC attacks and anomalies",
+  "actions.cc.name": "CC protection"
+}

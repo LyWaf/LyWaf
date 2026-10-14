@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { interceptEventApi, interceptLogApi } from '@/api'
 import type { InterceptEvent, InterceptLogFile, InterceptLogEntry } from '@/api'
@@ -43,7 +44,7 @@ const loadEvents = async () => {
       eventTotal.value = res.total
     }
   } catch {
-    if (request === eventRequest) showError('加载检测事件失败')
+    if (request === eventRequest) showError(t('page.9106b1fe09e7'))
   } finally {
     if (request === eventRequest) loading.value = false
   }
@@ -58,10 +59,10 @@ const clearEvents = async () => {
       eventTotal.value = 0
       eventPage.value = 1
       loading.value = false
-      showSuccess('检测事件已清除')
+      showSuccess(t('page.b7c9cb449449'))
     }
   } catch {
-    showError('清除失败')
+    showError(t('page.2952f4853185'))
   }
 }
 
@@ -100,7 +101,7 @@ const loadLogFiles = async () => {
       }
     }
   } catch {
-    showError('加载日志文件列表失败')
+    showError(t('page.52962f65e2de'))
   }
 }
 
@@ -121,7 +122,7 @@ const loadLogEntries = async () => {
       logTotal.value = res.total || 0
     }
   } catch {
-    showError('加载日志条目失败')
+    showError(t('page.fca096011043'))
   } finally {
     logLoading.value = false
   }
@@ -154,13 +155,13 @@ const exportCsv = async () => {
       endTime: logEndTime.value || undefined,
     }) as any
     if (!res?.success || !res.entries?.length) {
-      showError('没有可导出的数据')
+      showError(t('page.c36054f11514'))
       return
     }
     const entries: InterceptLogEntry[] = res.entries
-    const header = ['动作', '方法', '请求地址', '拦截原因', '源IP', '状态码', '耗时', '时间']
+    const header = [t('page.be37d84119d6'), t('ui.method'), t('page.65a1f5468eed'), t('page.da9ce48551a3'), t('page.5739e092cb63'), t('page.06f7d7341212'), t('page.e77e3d58b0dc'), t('settings.time')]
     const rows = entries.map(e => [
-      e.statusCode === 403 ? '已拦截' : '观察',
+      e.statusCode === 403 ? t('page.61781abf9905') : t('page.f262badacb76'),
       e.method || '',
       `${(e.scheme || 'http')}://${e.host || ''}${e.url || ''}`,
       e.reason || '',
@@ -177,10 +178,10 @@ const exportCsv = async () => {
     a.download = `intercept_${selectedFile.value.replace('.log', '')}.csv`
     a.click()
     URL.revokeObjectURL(url)
-    showSuccess(`已导出 ${entries.length} 条记录`)
+    showSuccess(t('page.bfcba93e3f02', { p0: entries.length }))
     exportModalOpen.value = false
   } catch {
-    showError('导出失败')
+    showError(t('page.6e4445df6957'))
   } finally {
     exporting.value = false
   }
@@ -201,9 +202,9 @@ const closeDetail = () => {
 }
 
 const getActionLabel = (entry: InterceptLogEntry) => {
-  if (entry.statusCode === 403) return '已拦截'
+  if (entry.statusCode === 403) return t('page.61781abf9905')
   if (entry.statusCode && entry.statusCode >= 400) return `${entry.statusCode}`
-  return '观察'
+  return t('page.f262badacb76')
 }
 
 const getActionClass = (entry: InterceptLogEntry) => {
@@ -226,7 +227,7 @@ const getRequestContent = (entry: InterceptLogEntry): string => {
 
 const getResponseContent = (entry: InterceptLogEntry): string => {
   if (entry.responseBody) return entry.responseBody
-  return '(无响应体数据)'
+  return t('page.b647ecb27e1f')
 }
 
 type CurlFormat = 'bash' | 'cmd' | 'powershell'
@@ -273,9 +274,9 @@ const copyCurl = async (entry: InterceptLogEntry, format: CurlFormat) => {
   const curl = buildCurl(entry, format)
   try {
     await navigator.clipboard.writeText(curl)
-    showSuccess(`已复制 cURL（${format === 'bash' ? 'Bash' : format === 'cmd' ? 'CMD' : 'PowerShell'}）`)
+    showSuccess(t('page.f57d3587f369', { p0: format === 'bash' ? 'Bash' : format === 'cmd' ? 'CMD' : 'PowerShell' }))
   } catch {
-    showError('复制失败')
+    showError(t('dashboard.copy.failed'))
   }
   curlMenuOpen.value = false
 }
@@ -330,15 +331,15 @@ const formatDateTime = (dateStr: string): string => {
 }
 
 const formatDuration = (minutes: number): string => {
-  if (minutes < 1) return '0 分钟'
-  if (minutes < 60) return `${minutes} 分钟`
+  if (minutes < 1) return t('page.a030cc8d2891')
+  if (minutes < 60) return t('page.c36f6e281671', { p0: minutes })
   const h = Math.floor(minutes / 60)
   const m = minutes % 60
-  return m > 0 ? `${h} 小时 ${m} 分钟` : `${h} 小时`
+  return m > 0 ? t('page.d3cf0bf2210c', { p0: h, p1: m }) : t('page.f34c8f0bb40c', { p0: h })
 }
 
 const formatNum = (n: number): string => {
-  if (n >= 10000) return (n / 10000).toFixed(1) + '万'
+  if (n >= 10000) return (n / 10000).toFixed(1) + t('page.fc227df4fc94')
   return n.toString()
 }
 </script>
@@ -356,7 +357,7 @@ const formatNum = (n: number): string => {
               ? 'text-gray-100 border-primary-500'
               : 'text-gray-500 border-transparent hover:text-gray-300'
           ]"
-        >拦截事件</button>
+        >{{ t('nav.intercepts') }}</button>
         <button
           @click="activeTab = 'details'"
           :class="[
@@ -365,7 +366,7 @@ const formatNum = (n: number): string => {
               ? 'text-gray-100 border-primary-500'
               : 'text-gray-500 border-transparent hover:text-gray-300'
           ]"
-        >拦截明细</button>
+        >{{ t('page.ecbdbbf1cc12') }}</button>
       </div>
     </div>
 
@@ -375,19 +376,19 @@ const formatNum = (n: number): string => {
       <!-- 过滤栏 -->
       <div class="card !py-3">
         <div class="flex items-center gap-3">
-          <input v-model="filterIp" type="text" class="input w-40 text-sm" placeholder="源 IP" />
-          <input v-model="filterDomain" type="text" class="input w-48 text-sm" placeholder="域名" />
-          <DateTimePicker v-model="filterStartTime" placeholder="开始时间" />
-          <DateTimePicker v-model="filterEndTime" placeholder="结束时间" />
+          <input v-model="filterIp" type="text" class="input w-40 text-sm" :placeholder="t('page.4e7d9a92f877')" />
+          <input v-model="filterDomain" type="text" class="input w-48 text-sm" :placeholder="t('settings.domain')" />
+          <DateTimePicker v-model="filterStartTime" :placeholder="t('ui.start.time')" />
+          <DateTimePicker v-model="filterEndTime" :placeholder="t('ui.end.time')" />
           <div class="flex items-center gap-2 ml-auto">
             <button v-if="events.length > 0" @click="clearEvents" class="btn btn-sm btn-secondary text-xs">
-              清除事件
+              {{ t('page.d3858f83e2c2') }}
             </button>
             <button @click="loadEvents" class="btn btn-sm btn-primary flex items-center gap-1.5">
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              刷新
+              {{ t('common.refresh') }}
             </button>
           </div>
         </div>
@@ -401,8 +402,8 @@ const formatNum = (n: number): string => {
       <!-- 检测事件表格 -->
       <template v-else>
         <div v-if="events.length === 0" class="card text-center py-12 text-gray-500">
-          <p class="text-lg mb-2">暂无检测事件</p>
-          <p class="text-sm">拦截事件将在此处显示</p>
+          <p class="text-lg mb-2">{{ t('page.367417db64ee') }}</p>
+          <p class="text-sm">{{ t('page.15d62098d636') }}</p>
         </div>
 
         <div v-else class="card !p-0 overflow-hidden">
@@ -410,11 +411,11 @@ const formatNum = (n: number): string => {
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-dark-border text-left text-xs text-gray-500">
-                  <th class="px-4 py-3">源 IP</th>
-                  <th class="px-4 py-3">应用</th>
-                  <th class="px-4 py-3 w-28 text-center">命中次数</th>
-                  <th class="px-4 py-3 w-28">持续时间</th>
-                  <th class="px-4 py-3 w-40">开始时间</th>
+                  <th class="px-4 py-3">{{ t('page.4e7d9a92f877') }}</th>
+                  <th class="px-4 py-3">{{ t('page.63c73c4730f4') }}</th>
+                  <th class="px-4 py-3 w-28 text-center">{{ t('page.c133427ba6d0') }}</th>
+                  <th class="px-4 py-3 w-28">{{ t('page.cc758c333732') }}</th>
+                  <th class="px-4 py-3 w-40">{{ t('ui.start.time') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -459,7 +460,7 @@ const formatNum = (n: number): string => {
       <div class="card !py-3">
         <div class="flex items-center gap-3">
           <select v-model="selectedFile" @change="onFileChange" class="input w-56 text-sm">
-            <option value="" disabled>选择日志文件</option>
+            <option value="" disabled>{{ t('page.7d1521995f82') }}</option>
             <option v-for="f in logFiles" :key="f.name" :value="f.name">
               {{ f.name }} ({{ formatFileSize(f.size) }})
             </option>
@@ -468,31 +469,31 @@ const formatNum = (n: number): string => {
             v-model="logSearch"
             type="text"
             class="input w-56 text-sm"
-            placeholder="搜索关键字..."
+            :placeholder="t('page.7455dcc01fe4')"
             @keydown.enter="onSearchEnter"
           />
-          <DateTimePicker v-model="logStartTime" placeholder="开始时间" />
-          <DateTimePicker v-model="logEndTime" placeholder="结束时间" />
+          <DateTimePicker v-model="logStartTime" :placeholder="t('ui.start.time')" />
+          <DateTimePicker v-model="logEndTime" :placeholder="t('ui.end.time')" />
           <button @click="onSearchEnter" class="btn btn-sm btn-primary flex items-center gap-1.5">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
-            搜索
+            {{ t('common.search') }}
           </button>
           <button @click="loadLogFiles" class="btn btn-sm btn-secondary flex items-center gap-1.5">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            刷新
+            {{ t('common.refresh') }}
           </button>
           <button @click="exportModalOpen = true" class="btn btn-sm btn-secondary flex items-center gap-1.5" :disabled="logTotal === 0">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-            导出
+            {{ t('page.76420433f22d') }}
           </button>
           <div class="ml-auto text-xs text-gray-500" v-if="logTotal > 0">
-            共 {{ logTotal }} 条记录
+            {{ t('page.76e547a8fa54') }} {{ logTotal }} {{ t('page.6016bf63b0ff') }}
           </div>
         </div>
       </div>
@@ -505,13 +506,13 @@ const formatNum = (n: number): string => {
       <template v-else>
         <!-- 空状态 -->
         <div v-if="logFiles.length === 0" class="card text-center py-12 text-gray-500">
-          <p class="text-lg mb-2">暂无拦截日志</p>
-          <p class="text-sm">WAF 主动拦截的请求明细将记录在此</p>
+          <p class="text-lg mb-2">{{ t('page.8754181fef83') }}</p>
+          <p class="text-sm">{{ t('page.4ee98919b39c') }}</p>
         </div>
 
         <div v-else-if="logEntries.length === 0 && selectedFile" class="card text-center py-12 text-gray-500">
-          <p class="text-lg mb-2">该文件暂无匹配记录</p>
-          <p class="text-sm">{{ logSearch ? '尝试更换搜索关键字' : '选择其他日志文件' }}</p>
+          <p class="text-lg mb-2">{{ t('page.cc0adfa62aa4') }}</p>
+          <p class="text-sm">{{ logSearch ? t('page.c864a4683021') : t('page.49d4d99cfb53') }}</p>
         </div>
 
         <!-- 拦截日志表格 -->
@@ -520,12 +521,12 @@ const formatNum = (n: number): string => {
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-dark-border text-left text-xs text-gray-500">
-                  <th class="px-4 py-3 w-20">动作</th>
-                  <th class="px-4 py-3">请求地址</th>
-                  <th class="px-4 py-3 w-36">拦截原因</th>
-                  <th class="px-4 py-3 w-36">源 IP</th>
-                  <th class="px-4 py-3 w-44">时间</th>
-                  <th class="px-4 py-3 w-16 text-center">详情</th>
+                  <th class="px-4 py-3 w-20">{{ t('page.be37d84119d6') }}</th>
+                  <th class="px-4 py-3">{{ t('page.65a1f5468eed') }}</th>
+                  <th class="px-4 py-3 w-36">{{ t('page.da9ce48551a3') }}</th>
+                  <th class="px-4 py-3 w-36">{{ t('page.4e7d9a92f877') }}</th>
+                  <th class="px-4 py-3 w-44">{{ t('settings.time') }}</th>
+                  <th class="px-4 py-3 w-16 text-center">{{ t('page.979a332955c8') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -568,7 +569,7 @@ const formatNum = (n: number): string => {
                   </td>
                   <td class="px-4 py-3 text-center">
                     <button @click="openDetail(entry)" class="text-primary-400 hover:text-primary-300 text-xs transition-colors">
-                      详情
+                      {{ t('page.979a332955c8') }}
                     </button>
                   </td>
                 </tr>
@@ -583,21 +584,21 @@ const formatNum = (n: number): string => {
             @click="goPage(currentPage() - 1)"
             :disabled="currentPage() <= 1"
             class="btn btn-sm btn-secondary text-xs"
-          >上一页</button>
+          >{{ t('common.previous') }}</button>
           <span class="text-xs text-gray-400">{{ currentPage() }} / {{ totalPages() }}</span>
           <button
             @click="goPage(currentPage() + 1)"
             :disabled="currentPage() >= totalPages()"
             class="btn btn-sm btn-secondary text-xs"
-          >下一页</button>
+          >{{ t('common.next') }}</button>
           <input
             v-model="jumpPageInput"
             @keyup.enter="handleJumpPage"
             type="text" inputmode="numeric"
-            placeholder="页码"
+            :placeholder="t('page.0c0c4dcb33a3')"
             class="w-16 text-center text-xs bg-dark-card-hover border border-dark-border rounded px-1.5 py-1 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-primary-500"
           />
-          <button @click="handleJumpPage" class="btn btn-sm btn-secondary text-xs">跳转</button>
+          <button @click="handleJumpPage" class="btn btn-sm btn-secondary text-xs">{{ t('page.afd0b9482dfa') }}</button>
         </div>
       </template>
     </template>
@@ -622,21 +623,21 @@ const formatNum = (n: number): string => {
             </div>
             <!-- 信息网格 -->
             <div class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
-              <span class="text-gray-500">源 IP</span>
+              <span class="text-gray-500">{{ t('page.4e7d9a92f877') }}</span>
               <span class="text-gray-200 font-mono">{{ detailEntry.clientIp || '-' }}</span>
 
-              <span class="text-gray-500">拦截原因</span>
+              <span class="text-gray-500">{{ t('page.da9ce48551a3') }}</span>
               <span class="text-gray-200 font-semibold">{{ detailEntry.reason || '-' }}</span>
 
-              <span class="text-gray-500">时间</span>
+              <span class="text-gray-500">{{ t('settings.time') }}</span>
               <span class="text-gray-200 font-mono">{{ detailEntry.time }}</span>
 
               <template v-if="detailEntry.duration">
-                <span class="text-gray-500">耗时</span>
+                <span class="text-gray-500">{{ t('page.e77e3d58b0dc') }}</span>
                 <span class="text-gray-200 font-mono">{{ detailEntry.duration }}</span>
               </template>
 
-              <span class="text-gray-500">状态码</span>
+              <span class="text-gray-500">{{ t('page.06f7d7341212') }}</span>
               <span class="text-gray-200 font-mono">{{ detailEntry.statusCode || '-' }}</span>
             </div>
           </div>
@@ -651,7 +652,7 @@ const formatNum = (n: number): string => {
                   ? 'bg-primary-500/20 text-primary-400 border border-primary-500/40'
                   : 'text-gray-400 hover:text-gray-200'
               ]"
-            >请求报文</button>
+            >{{ t('page.81e4e1d3bc7a') }}</button>
             <button
               @click="detailTab = 'response'"
               :class="[
@@ -660,11 +661,11 @@ const formatNum = (n: number): string => {
                   ? 'bg-primary-500/20 text-primary-400 border border-primary-500/40'
                   : 'text-gray-400 hover:text-gray-200'
               ]"
-            >响应报文</button>
+            >{{ t('page.6f6c7fb96ae0') }}</button>
             <div class="flex-1"></div>
             <div class="relative">
               <button @click.stop="curlMenuOpen = !curlMenuOpen" class="text-xs text-gray-400 hover:text-gray-200 transition-colors flex items-center gap-1">
-                复制 cURL
+                {{ t('page.d9780e8e4e0c') }}
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
               </button>
               <div v-if="curlMenuOpen" class="absolute right-0 top-full mt-1 w-48 bg-dark-card border border-dark-border rounded-lg shadow-xl overflow-hidden z-10">
@@ -700,7 +701,7 @@ const formatNum = (n: number): string => {
 
           <!-- 底部 -->
           <div class="flex items-center justify-end px-6 py-3 border-t border-dark-border">
-            <button @click="closeDetail" class="btn btn-sm btn-secondary">关闭</button>
+            <button @click="closeDetail" class="btn btn-sm btn-secondary">{{ t('common.close') }}</button>
           </div>
         </div>
       </div>
@@ -712,7 +713,7 @@ const formatNum = (n: number): string => {
         <div class="bg-dark-card border border-dark-border rounded-lg shadow-2xl w-[420px] p-6">
           <div class="flex items-center justify-between mb-4">
             <h3 class="text-base font-bold text-gray-100 flex items-center gap-2">
-              导出日志
+              {{ t('page.b8f32d284848') }}
               <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
@@ -721,12 +722,12 @@ const formatNum = (n: number): string => {
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
-          <p class="text-sm text-gray-400 mb-6">将当前筛选结果的前 10000 条日志内容导出为 .csv 文件</p>
+          <p class="text-sm text-gray-400 mb-6">{{ t('page.27a7ce623c09') }}</p>
           <div class="flex items-center justify-end gap-3">
-            <button @click="exportModalOpen = false" class="btn btn-sm btn-secondary">取消</button>
+            <button @click="exportModalOpen = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
             <button @click="exportCsv" class="btn btn-sm btn-primary flex items-center gap-1.5" :disabled="exporting">
               <span v-if="exporting" class="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-              {{ exporting ? '导出中...' : '确认导出' }}
+              {{ exporting ? t('page.dc3af0929a89') : t('page.98df8b41d103') }}
             </button>
           </div>
         </div>

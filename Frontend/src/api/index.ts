@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { locale } from '@/i18n'
+import { locale, t } from '@/i18n'
 import type {
   ApiResponse,
   TrafficStats,
@@ -67,12 +67,12 @@ export async function getAllManagementPages<T>(url: string, client: Pick<Unwrapp
   const items: T[] = []
   for (let page = 1; page <= 100; page++) {
     const result = await client.get<ManagementPage<T>>(url, { params: { page, pageSize: 100 } })
-    if (!result.success) throw new Error('读取列表失败')
+    if (!result.success) throw new Error(t('api.listFailed'))
     items.push(...result.data)
     if (items.length >= result.total) return items
-    if (!result.data.length) throw new Error('列表发生变化，请刷新')
+    if (!result.data.length) throw new Error(t('api.listChanged'))
   }
-  throw new Error('列表超过加载上限')
+  throw new Error(t('api.listLimit'))
 }
 
 export interface ManagementJob {
@@ -1007,6 +1007,7 @@ export const distributionApi = {
 }
 
 export interface PluginItem {
+  localization?: Record<string, Record<string, string>>
   id: string
   name: string
   version: string
@@ -1331,7 +1332,7 @@ export const pcapApi = {
     const res = await fetch('/api/pcap/ca-cert', {
       headers: { Authorization: `Bearer ${token}` },
     })
-    if (!res.ok) throw new Error('下载失败')
+    if (!res.ok) throw new Error(t('ui.download.failed'))
     const blob = await res.blob()
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')

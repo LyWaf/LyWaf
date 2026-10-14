@@ -1,10 +1,11 @@
 import { pluginProxyApi, getAllManagementPages, type ManagementPage } from '@/api'
 import type { ApiResponse } from '@/types'
+import { t } from './i18n'
 
 const api = pluginProxyApi('analysis')
 
 function duration(seconds: number): string {
-  if (!Number.isInteger(seconds) || seconds <= 0 || seconds > 2147483647) throw new Error('封禁时间必须为有效的正整数秒数')
+  if (!Number.isInteger(seconds) || seconds <= 0 || seconds > 2147483647) throw new Error(t('invalidDuration'))
   const days = Math.floor(seconds / 86400)
   const time = [Math.floor(seconds / 3600) % 24, Math.floor(seconds / 60) % 60, seconds % 60]
     .map(value => String(value).padStart(2, '0')).join(':')

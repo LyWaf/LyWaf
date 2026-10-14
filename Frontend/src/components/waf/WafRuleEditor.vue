@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, computed, watch } from 'vue'
 import { wafRuleApi } from '@/api'
 import type { WafCustomRule, WafCondition, WafConditionGroup, WafLogicalOperator, WafMatchField, WafMatchOperator, WafRuleAction } from '@/types'
@@ -15,51 +16,51 @@ const emit = defineEmits<{
 }>()
 
 // 枚举翻译
-const fieldLabels: Record<WafMatchField, string> = {
-  UriPath: 'URL 路径',
-  FullUrl: '完整 URL',
-  QueryString: '查询字符串',
-  Method: 'HTTP 方法',
-  ClientIp: '客户端 IP',
+const fieldLabels = computed<Record<WafMatchField, string>>(() => ({
+  UriPath: t('page.f3ff6f41a826'),
+  FullUrl: t('page.369a6f068cd9'),
+  QueryString: t('page.9b0340697a07'),
+  Method: t('page.af1029a24f14'),
+  ClientIp: t('page.2d1cb6792f12'),
   XForwardedFor: 'X-Forwarded-For',
   UserAgent: 'User-Agent',
   Referer: 'Referer',
   ContentType: 'Content-Type',
   ContentLength: 'Content-Length',
   Cookie: 'Cookie',
-  Header: '请求头',
-  QueryParam: '查询参数',
-  Body: '请求体',
-  ServerPort: '服务端口',
-}
+  Header: t('fields.Headers'),
+  QueryParam: t('page.1904a09fab00'),
+  Body: t('dashboard.request.body'),
+  ServerPort: t('page.ff673195f05f'),
+}))
 
-const operatorLabels: Record<WafMatchOperator, string> = {
-  Equal: '等于',
-  NotEqual: '不等于',
-  Contains: '包含',
-  NotContains: '不包含',
-  StartsWith: '前缀匹配',
-  EndsWith: '后缀匹配',
-  Regex: '正则匹配',
-  Exists: '存在',
-  NotExists: '不存在',
-  LengthGreaterThan: '长度大于',
-  LengthLessThan: '长度小于',
-}
+const operatorLabels = computed<Record<WafMatchOperator, string>>(() => ({
+  Equal: t('page.4bc69a0562ff'),
+  NotEqual: t('page.9678e3a7cb3c'),
+  Contains: t('page.107319b8b39d'),
+  NotContains: t('page.5f60ffcf600a'),
+  StartsWith: t('page.6fd076957136'),
+  EndsWith: t('page.152a880d3fd0'),
+  Regex: t('page.7b1e7037f86f'),
+  Exists: t('page.4a558371f938'),
+  NotExists: t('page.4e51b67dd32c'),
+  LengthGreaterThan: t('page.2b04b1142ee9'),
+  LengthLessThan: t('page.1dee359f9f21'),
+}))
 
-const actionLabels: Record<WafRuleAction, string> = {
-  Observe: '观察（仅记录）',
-  Block: '封禁 IP',
-  Reject: '拦截（返回错误码）',
-  Captcha: '人机验证',
-}
+const actionLabels = computed<Record<WafRuleAction, string>>(() => ({
+  Observe: t('page.62a409a6dc1c'),
+  Block: t('dashboard.blocked.ips'),
+  Reject: t('page.48417544e3c1'),
+  Captcha: t('page.36fbc1da5545'),
+}))
 
-const actionDescriptions: Record<WafRuleAction, string> = {
-  Observe: '仅记录日志，不拦截请求',
-  Block: '将客户端 IP 封禁指定时间',
-  Reject: '立即返回指定 HTTP 状态码',
-  Captcha: '要求客户端完成人机验证',
-}
+const actionDescriptions = computed<Record<WafRuleAction, string>>(() => ({
+  Observe: t('page.a34f838758cc'),
+  Block: t('page.3cacb5f7e8fc'),
+  Reject: t('page.f8961afe26b3'),
+  Captcha: t('page.309ba1bfec75'),
+}))
 
 // 需要 fieldName 的字段
 const needsFieldName = (field: WafMatchField) =>
@@ -69,9 +70,9 @@ const needsFieldName = (field: WafMatchField) =>
 const noValueOperators: WafMatchOperator[] = ['Exists', 'NotExists']
 
 // 枚举键列表
-const matchFields = Object.keys(fieldLabels) as WafMatchField[]
-const matchOperators = Object.keys(operatorLabels) as WafMatchOperator[]
-const ruleActions = Object.keys(actionLabels) as WafRuleAction[]
+const matchFields = Object.keys(fieldLabels.value) as WafMatchField[]
+const matchOperators = Object.keys(operatorLabels.value) as WafMatchOperator[]
+const ruleActions = Object.keys(actionLabels.value) as WafRuleAction[]
 
 // 占位提示
 const getFieldPlaceholder = (field: WafMatchField): string => {
@@ -101,7 +102,7 @@ const getFieldNamePlaceholder = (field: WafMatchField): string => {
     Header: 'X-Forwarded-For',
     QueryParam: 'id',
   }
-  return map[field] || '字段名'
+  return map[field] || t('page.2b018f9b1038')
 }
 
 const form = ref({
@@ -123,8 +124,8 @@ const readOnly = computed(() =>
   props.editRule?.source != null && props.editRule.source !== 'User'
 )
 const dialogTitle = computed(() => {
-  if (readOnly.value) return '查看规则'
-  return isEditMode.value ? '编辑规则' : '添加规则'
+  if (readOnly.value) return t('page.bbae4fac4b87')
+  return isEditMode.value ? t('page.efe0feab9fd4') : t('plugins.addRule')
 })
 
 // 创建默认条件
@@ -205,25 +206,25 @@ const saveError = ref('')
 
 const handleSubmit = async () => {
   if (!form.value.name.trim()) {
-    saveError.value = '请输入规则名称'
+    saveError.value = t('page.e2df945bb61d')
     return
   }
   if (form.value.conditionGroups.length === 0) {
-    saveError.value = '请至少添加一个条件组'
+    saveError.value = t('page.0567911eff2e')
     return
   }
   for (const group of form.value.conditionGroups) {
     if (group.conditions.length === 0) {
-      saveError.value = '条件组不能为空'
+      saveError.value = t('page.d5341864bb94')
       return
     }
     for (const c of group.conditions) {
       if (!noValueOperators.includes(c.operator) && !c.value.trim()) {
-        saveError.value = '请填写所有条件的匹配值'
+        saveError.value = t('page.f4c0db941d0f')
         return
       }
       if (needsFieldName(c.field) && !c.fieldName?.trim()) {
-        saveError.value = '请填写指定字段的名称'
+        saveError.value = t('page.929d755a594b')
         return
       }
     }
@@ -254,7 +255,7 @@ const handleSubmit = async () => {
     emit('saved')
     emit('close')
   } catch (error: any) {
-    saveError.value = error.message || '保存失败'
+    saveError.value = error.message || t('ui.save.failed')
   } finally {
     saving.value = false
   }
@@ -285,24 +286,24 @@ const handleClose = () => {
           <!-- 基本信息 -->
           <div class="grid grid-cols-2 gap-4">
             <div class="col-span-2 sm:col-span-1">
-              <label class="block text-sm text-gray-400 mb-1">规则名称 <span v-if="!readOnly" class="text-red-400">*</span></label>
-              <input v-model="form.name" type="text" class="input w-full" placeholder="如：拦截恶意爬虫" :disabled="readOnly" />
+              <label class="block text-sm text-gray-400 mb-1">{{ t('dashboard.rule.name') }} <span v-if="!readOnly" class="text-red-400">*</span></label>
+              <input v-model="form.name" type="text" class="input w-full" :placeholder="t('page.c6c9d649111d')" :disabled="readOnly" />
             </div>
             <div class="col-span-2 sm:col-span-1">
-              <label class="block text-sm text-gray-400 mb-1">优先级</label>
+              <label class="block text-sm text-gray-400 mb-1">{{ t('fields.Priority') }}</label>
               <input v-model.number="form.priority" type="number" min="1" max="9999" class="input w-full" :disabled="readOnly" />
-              <p class="text-xs text-gray-600 mt-1">数值越小优先级越高</p>
+              <p class="text-xs text-gray-600 mt-1">{{ t('page.1247450bebef') }}</p>
             </div>
             <div class="col-span-2">
-              <label class="block text-sm text-gray-400 mb-1">描述</label>
-              <input v-model="form.description" type="text" class="input w-full" placeholder="可选，描述规则用途" :disabled="readOnly" />
+              <label class="block text-sm text-gray-400 mb-1">{{ t('page.dc2ba467fc7a') }}</label>
+              <input v-model="form.description" type="text" class="input w-full" :placeholder="t('page.564b681911d7')" :disabled="readOnly" />
             </div>
           </div>
 
           <!-- 分组匹配条件 -->
           <div>
             <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
-              <h3 class="text-sm font-medium text-gray-300">匹配条件</h3>
+              <h3 class="text-sm font-medium text-gray-300">{{ t('page.cbdfb8401c2e') }}</h3>
               <div class="flex items-center gap-2 text-xs text-gray-500">
                 <button type="button"
                   class="inline-flex h-9 min-w-14 items-center justify-center rounded-md border px-4 text-sm font-medium shadow-sm transition-colors active:translate-y-px disabled:cursor-default disabled:opacity-60"
@@ -310,9 +311,9 @@ const handleClose = () => {
                     ? 'border-blue-400/50 bg-blue-500 text-white hover:bg-blue-400'
                     : 'border-amber-400/50 bg-amber-500 text-gray-950 hover:bg-amber-400'"
                   :disabled="readOnly" @click="form.groupOperator = form.groupOperator === 'And' ? 'Or' : 'And'">
-                  {{ form.groupOperator === 'And' ? '且' : '或' }}
+                  {{ form.groupOperator === 'And' ? t('page.9f00f6770f8c') : t('page.a2123d69506f') }}
                 </button>
-                <span>条件组之间的关系（点击切换）</span>
+                <span>{{ t('page.4dfe980d0e70') }}</span>
               </div>
             </div>
 
@@ -320,9 +321,9 @@ const handleClose = () => {
               <section v-for="(conditionGroup, groupIndex) in form.conditionGroups" :key="groupIndex"
                 class="border border-dark-border bg-dark-card-hover overflow-hidden">
                 <header class="flex items-center justify-between border-b border-dark-border px-4 py-3">
-                  <strong class="text-sm text-gray-200">条件组 {{ groupIndex + 1 }}</strong>
+                  <strong class="text-sm text-gray-200">{{ t('page.95ec5352a597') }} {{ groupIndex + 1 }}</strong>
                   <button v-if="!readOnly && form.conditionGroups.length > 1" type="button"
-                    class="text-xs text-red-400 hover:text-red-300" @click="removeGroup(groupIndex)">删除条件组</button>
+                    class="text-xs text-red-400 hover:text-red-300" @click="removeGroup(groupIndex)">{{ t('page.7181350804ed') }}</button>
                 </header>
 
                 <div class="p-4 space-y-3">
@@ -334,7 +335,7 @@ const handleClose = () => {
                           ? 'border-blue-400/50 bg-blue-500 text-white hover:bg-blue-400'
                           : 'border-amber-400/50 bg-amber-500 text-gray-950 hover:bg-amber-400'" :disabled="readOnly"
                         @click="conditionGroup.operator = conditionGroup.operator === 'And' ? 'Or' : 'And'">
-                        {{ conditionGroup.operator === 'And' ? '且' : '或' }}
+                        {{ conditionGroup.operator === 'And' ? t('page.9f00f6770f8c') : t('page.a2123d69506f') }}
                       </button>
                       <span class="h-px flex-1 bg-dark-border"></span>
                     </div>
@@ -342,7 +343,7 @@ const handleClose = () => {
                     <div class="grid grid-cols-1 md:grid-cols-[28px_130px_110px_minmax(180px,1fr)_auto] gap-2 items-center">
                       <button v-if="!readOnly" type="button"
                         class="w-7 h-7 flex items-center justify-center rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/20"
-                        title="删除此条件" @click="removeCondition(conditionGroup, conditionIndex)">−</button>
+                        :title="t('page.3312fb0423e1')" @click="removeCondition(conditionGroup, conditionIndex)">−</button>
                       <span v-else></span>
                       <select v-model="condition.field" class="input w-full text-sm" :disabled="readOnly">
                         <option v-for="field in matchFields" :key="field" :value="field">{{ fieldLabels[field] }}</option>
@@ -355,25 +356,25 @@ const handleClose = () => {
                           :placeholder="getFieldNamePlaceholder(condition.field)" :disabled="readOnly" />
                         <input v-if="!noValueOperators.includes(condition.operator)" v-model="condition.value"
                           class="input min-w-0 flex-1 text-sm" :placeholder="getFieldPlaceholder(condition.field)" :disabled="readOnly" />
-                        <span v-else class="text-xs text-gray-500 self-center">无需匹配值</span>
+                        <span v-else class="text-xs text-gray-500 self-center">{{ t('page.f0f654116fcb') }}</span>
                       </div>
                       <label class="flex items-center gap-1.5 text-xs text-gray-500 whitespace-nowrap">
-                        <input v-model="condition.ignoreCase" type="checkbox" :disabled="readOnly" />忽略大小写
+                        <input v-model="condition.ignoreCase" type="checkbox" :disabled="readOnly" />{{ t('page.4c8f72724877') }}
                       </label>
                     </div>
                   </div>
 
-                  <div v-if="conditionGroup.conditions.length === 0" class="py-4 text-center text-sm text-red-400">条件组不能为空</div>
+                  <div v-if="conditionGroup.conditions.length === 0" class="py-4 text-center text-sm text-red-400">{{ t('page.d5341864bb94') }}</div>
                   <button v-if="!readOnly" type="button" class="text-sm text-primary-400 hover:text-primary-300 disabled:text-gray-600"
-                    :disabled="conditionCount >= 20" @click="addCondition(conditionGroup)">+ 添加条件</button>
+                    :disabled="conditionCount >= 20" @click="addCondition(conditionGroup)">{{ t('page.1dbd0bf0fae8') }}</button>
                 </div>
               </section>
 
-              <div v-if="form.conditionGroups.length === 0" class="border border-dark-border py-8 text-center text-sm text-gray-500">暂无条件组</div>
+              <div v-if="form.conditionGroups.length === 0" class="border border-dark-border py-8 text-center text-sm text-gray-500">{{ t('page.a2ed6cad6545') }}</div>
               <div v-if="!readOnly" class="flex items-center gap-3">
                 <button type="button" class="btn btn-secondary" :disabled="form.conditionGroups.length >= 5 || conditionCount >= 20"
-                  @click="addGroup">+ 添加条件组</button>
-                <span class="text-xs text-gray-500">最多 5 组，共 20 个条件（当前 {{ conditionCount }} 个）</span>
+                  @click="addGroup">{{ t('page.9f00002b6002') }}</button>
+                <span class="text-xs text-gray-500">{{ t('page.2bd5d5fda21e') }} {{ conditionCount }} {{ t('page.22ba276c22bf') }}</span>
               </div>
             </div>
           </div>
@@ -381,10 +382,10 @@ const handleClose = () => {
 
           <!-- 执行动作 -->
           <div>
-            <h3 class="text-sm font-medium text-gray-300 mb-3">执行动作</h3>
+            <h3 class="text-sm font-medium text-gray-300 mb-3">{{ t('fields.Action') }}</h3>
             <div class="grid grid-cols-2 gap-4">
               <div>
-                <label class="block text-sm text-gray-400 mb-1">动作类型</label>
+                <label class="block text-sm text-gray-400 mb-1">{{ t('page.301c53dd5e30') }}</label>
                 <select v-model="form.action" class="input w-full" :disabled="readOnly">
                   <option v-for="a in ruleActions" :key="a" :value="a">{{ actionLabels[a] }}</option>
                 </select>
@@ -393,16 +394,16 @@ const handleClose = () => {
 
               <!-- Block / Captcha 持续时间 -->
               <div v-if="form.action === 'Block' || form.action === 'Captcha'">
-                <label class="block text-sm text-gray-400 mb-1">持续时间</label>
+                <label class="block text-sm text-gray-400 mb-1">{{ t('page.cc758c333732') }}</label>
                 <div class="flex items-center gap-2">
                   <input v-model.number="form.actionSeconds" type="number" min="1" class="input flex-1" :disabled="readOnly" />
-                  <span class="text-sm text-gray-500">秒</span>
+                  <span class="text-sm text-gray-500">{{ t('page.9dcdc2b289b9') }}</span>
                 </div>
               </div>
 
               <!-- Reject 响应码 -->
               <div v-if="form.action === 'Reject'">
-                <label class="block text-sm text-gray-400 mb-1">响应状态码</label>
+                <label class="block text-sm text-gray-400 mb-1">{{ t('page.327607f80ee2') }}</label>
                 <select v-model.number="form.responseCode" class="input w-full" :disabled="readOnly">
                   <option :value="403">403 Forbidden</option>
                   <option :value="404">404 Not Found</option>
@@ -424,12 +425,12 @@ const handleClose = () => {
         <!-- 底部 -->
         <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-border">
           <button @click="handleClose" class="btn btn-sm btn-secondary">
-            {{ readOnly ? '关闭' : '取消' }}
+            {{ readOnly ? t('common.close') : t('common.cancel') }}
           </button>
           <button v-if="!readOnly" @click="handleSubmit" :disabled="saving"
             class="btn btn-sm btn-primary flex items-center gap-1.5">
             <span v-if="saving" class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
-            <span>{{ saving ? '保存中...' : '保存' }}</span>
+            <span>{{ saving ? t('page.917b1c1f18d0') : t('common.save') }}</span>
           </button>
         </div>
       </div>

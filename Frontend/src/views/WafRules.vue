@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { locale } from '@/i18n'
+import { t } from '@/i18n'
+import { computed, ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { wafRuleApi } from '@/api'
 import WafRuleEditor from '@/components/waf/WafRuleEditor.vue'
@@ -10,11 +12,11 @@ const { showSuccess, showError } = useToast()
 const route = useRoute()
 
 // 来源标签
-const sourceLabels: Record<string, string> = {
-  User: '用户',
-  Config: '配置',
-  System: '系统',
-}
+const sourceLabels = computed<Record<string, string>>(() => ({
+  User: t('settings.user'),
+  Config: t('ui.configuration'),
+  System: t('plugins.system'),
+}))
 
 const sourceColors: Record<string, string> = {
   User: 'bg-green-500/15 text-green-400',
@@ -26,27 +28,27 @@ const sourceColors: Record<string, string> = {
 const isEditable = (rule: WafCustomRule) => !rule.source || rule.source === 'User'
 
 // 翻译
-const fieldLabels: Record<string, string> = {
-  UriPath: 'URL 路径', FullUrl: '完整 URL', QueryString: '查询字符串',
-  Method: 'HTTP 方法', ClientIp: '客户端 IP', XForwardedFor: 'X-Forwarded-For',
+const fieldLabels = computed<Record<string, string>>(() => ({
+  UriPath: t('page.f3ff6f41a826'), FullUrl: t('page.369a6f068cd9'), QueryString: t('page.9b0340697a07'),
+  Method: t('page.af1029a24f14'), ClientIp: t('page.2d1cb6792f12'), XForwardedFor: 'X-Forwarded-For',
   UserAgent: 'User-Agent', Referer: 'Referer', ContentType: 'Content-Type',
-  ContentLength: 'Content-Length', Cookie: 'Cookie', Header: '请求头',
-  QueryParam: '查询参数', Body: '请求体', ServerPort: '服务端口',
-}
+  ContentLength: 'Content-Length', Cookie: 'Cookie', Header: t('fields.Headers'),
+  QueryParam: t('page.1904a09fab00'), Body: t('dashboard.request.body'), ServerPort: t('page.ff673195f05f'),
+}))
 
-const operatorLabels: Record<string, string> = {
-  Equal: '等于', NotEqual: '不等于', Contains: '包含', NotContains: '不包含',
-  StartsWith: '前缀', EndsWith: '后缀', Regex: '正则',
-  Exists: '存在', NotExists: '不存在',
-  LengthGreaterThan: '长度>', LengthLessThan: '长度<',
-}
+const operatorLabels = computed<Record<string, string>>(() => ({
+  Equal: t('page.4bc69a0562ff'), NotEqual: t('page.9678e3a7cb3c'), Contains: t('page.107319b8b39d'), NotContains: t('page.5f60ffcf600a'),
+  StartsWith: t('page.461920e1ba6e'), EndsWith: t('page.006d3ffb11d2'), Regex: t('page.75b304aa9420'),
+  Exists: t('page.4a558371f938'), NotExists: t('page.4e51b67dd32c'),
+  LengthGreaterThan: t('page.1b2a948ae150'), LengthLessThan: t('page.10525f421818'),
+}))
 
-const actionLabels: Record<WafRuleAction, string> = {
-  Observe: '观察',
-  Block: '封禁',
-  Reject: '拦截',
-  Captcha: '验证码',
-}
+const actionLabels = computed<Record<WafRuleAction, string>>(() => ({
+  Observe: t('page.f262badacb76'),
+  Block: t('dashboard.blocked'),
+  Reject: t('page.bf33347e3c85'),
+  Captcha: t('dashboard.captcha'),
+}))
 
 const actionColors: Record<WafRuleAction, string> = {
   Observe: 'bg-blue-500/15 text-blue-400',
@@ -84,7 +86,7 @@ const loadRules = async () => {
       total.value = res.total
     }
   } catch {
-    if (request === listRequest) showError('加载规则列表失败')
+    if (request === listRequest) showError(t('page.da6ec6643a86'))
   } finally {
     if (request === listRequest) loading.value = false
   }
@@ -111,7 +113,7 @@ const closeEditor = () => {
 // 保存成功
 const handleSaved = () => {
   loadRules()
-  showSuccess('规则已保存')
+  showSuccess(t('page.c9105d640ece'))
 }
 
 // 切换启用
@@ -120,10 +122,10 @@ const toggleRule = async (rule: WafCustomRule) => {
     const res = await wafRuleApi.toggle(rule.id) as unknown as { success: boolean; enabled: boolean }
     if (res?.success) {
       rule.enabled = res.enabled
-      showSuccess(res.enabled ? '已启用规则' : '已禁用规则')
+      showSuccess(res.enabled ? t('page.0497be5a2ca1') : t('page.045e0be12313'))
     }
   } catch {
-    showError('操作失败')
+    showError(t('settings.operation.failed'))
   }
 }
 
@@ -142,10 +144,10 @@ const executeDelete = async () => {
       showDeleteConfirm.value = false
       deletingRule.value = null
       loadRules()
-      showSuccess('规则已删除')
+      showSuccess(t('page.04e366e33981'))
     }
   } catch {
-    showError('删除失败')
+    showError(t('settings.deletion.failed'))
   } finally {
     deleting.value = false
   }
@@ -153,9 +155,9 @@ const executeDelete = async () => {
 
 // 格式化单个条件
 const formatSingleCondition = (c: { field: string; fieldName?: string; operator: string; value: string }): string => {
-  const field = fieldLabels[c.field] || c.field
+  const field = fieldLabels.value[c.field] || c.field
   const fieldName = c.fieldName ? `[${c.fieldName}]` : ''
-  const op = operatorLabels[c.operator] || c.operator
+  const op = operatorLabels.value[c.operator] || c.operator
   const noValue = ['Exists', 'NotExists'].includes(c.operator)
   const val = noValue ? '' : ` "${c.value}"`
   return `${field}${fieldName} ${op}${val}`
@@ -163,12 +165,12 @@ const formatSingleCondition = (c: { field: string; fieldName?: string; operator:
 
 // 格式化条件摘要
 const formatConditions = (rule: WafCustomRule): string => {
-  if (!rule.conditionGroups?.length) return '无条件'
+  if (!rule.conditionGroups?.length) return t('page.318b70d7fc34')
   const groups = rule.conditionGroups.map(group => {
-    const separator = group.operator === 'And' ? ' 且 ' : ' 或 '
+    const separator = group.operator === 'And' ? t('page.a22bdbe928cd') : t('page.60ab743988bb')
     return group.conditions.map(formatSingleCondition).join(separator)
   })
-  const separator = rule.groupOperator === 'And' ? ' 且 ' : ' 或 '
+  const separator = rule.groupOperator === 'And' ? t('page.a22bdbe928cd') : t('page.60ab743988bb')
   return groups.map(group => groups.length > 1 ? `(${group})` : group).join(separator)
 }
 
@@ -176,7 +178,7 @@ const formatConditions = (rule: WafCustomRule): string => {
 const formatTime = (iso: string): string => {
   if (!iso) return ''
   const d = new Date(iso)
-  return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString(locale.value, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 onMounted(async () => {
@@ -185,7 +187,7 @@ onMounted(async () => {
     try {
       const response: any = await wafRuleApi.get(route.query.edit)
       if (response.success) openEdit(response.rule)
-    } catch { showError('指定规则不存在或无法读取') }
+    } catch { showError(t('page.b6a7f187a169')) }
   }
 })
 </script>
@@ -196,31 +198,31 @@ onMounted(async () => {
     <div class="card">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
-          <h2 class="text-lg font-semibold text-gray-100">WAF 规则</h2>
-          <span class="text-xs text-gray-500">包含用户规则、配置规则和系统内置规则</span>
+          <h2 class="text-lg font-semibold text-gray-100">{{ t('nav.waf') }}</h2>
+          <span class="text-xs text-gray-500">{{ t('page.9b548d2d81f9') }}</span>
         </div>
         <button @click="openAdd" class="btn btn-sm btn-primary flex items-center gap-1.5">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
           </svg>
-          添加规则
+          {{ t('plugins.addRule') }}
         </button>
       </div>
     </div>
 
     <form class="flex flex-wrap gap-3 items-center" @submit.prevent="page = 1; loadRules()">
-      <input v-model="search" maxlength="200" aria-label="搜索规则" placeholder="搜索规则名称或说明" class="input min-w-0" />
-      <select v-model="source" aria-label="规则来源" class="input" @change="page = 1; loadRules()"><option value="">全部来源</option><option value="User">用户</option><option value="Config">配置</option><option value="System">系统</option></select>
-      <button class="btn btn-secondary" :disabled="loading">搜索</button>
-      <button type="button" class="btn btn-secondary" :disabled="loading || page <= 1" @click="page--; loadRules()">上一页</button>
-      <span class="text-sm text-gray-400">{{ page }} / {{ Math.max(1, Math.ceil(total / 20)) }} · 共 {{ total }} 条</span>
-      <button type="button" class="btn btn-secondary" :disabled="loading || page * 20 >= total" @click="page++; loadRules()">下一页</button>
+      <input v-model="search" maxlength="200" :aria-label="t('page.ff1804ddae6d')" :placeholder="t('page.897bd34b813d')" class="input min-w-0" />
+      <select v-model="source" :aria-label="t('page.21acc7496bef')" class="input" @change="page = 1; loadRules()"><option value="">{{ t('page.9f357adb6100') }}</option><option value="User">{{ t('settings.user') }}</option><option value="Config">{{ t('ui.configuration') }}</option><option value="System">{{ t('plugins.system') }}</option></select>
+      <button class="btn btn-secondary" :disabled="loading">{{ t('common.search') }}</button>
+      <button type="button" class="btn btn-secondary" :disabled="loading || page <= 1" @click="page--; loadRules()">{{ t('common.previous') }}</button>
+      <span class="text-sm text-gray-400">{{ page }} / {{ Math.max(1, Math.ceil(total / 20)) }} {{ t('page.c8b281787653') }} {{ total }} {{ t('page.f004f1d84cf9') }}</span>
+      <button type="button" class="btn btn-secondary" :disabled="loading || page * 20 >= total" @click="page++; loadRules()">{{ t('common.next') }}</button>
     </form>
 
     <!-- 提示 -->
     <div class="px-4 py-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-sm text-blue-300">
-      <span class="font-medium">提示：</span>
-      规则按优先级分层执行：用户规则 > 配置规则 > 系统规则。支持多条件组合：组内 AND，组间 OR。配置和系统规则仅支持开关操作。
+      <span class="font-medium">{{ t('page.be8e4dd716fb') }}</span>
+      {{ t('page.e5c44a18bdb0') }}
     </div>
 
     <!-- 加载中 -->
@@ -231,8 +233,8 @@ onMounted(async () => {
     <!-- 规则列表 -->
     <template v-else>
       <div v-if="rules.length === 0" class="card text-center py-12 text-gray-500">
-        <p class="text-lg mb-2">暂无 WAF 规则</p>
-        <p class="text-sm">点击「添加规则」创建第一条用户规则</p>
+        <p class="text-lg mb-2">{{ t('page.3d99d7e4c4b9') }}</p>
+        <p class="text-sm">{{ t('page.7b8844057036') }}</p>
       </div>
 
       <div v-else class="space-y-3">
@@ -271,16 +273,16 @@ onMounted(async () => {
                 <span :class="['px-2 py-0.5 text-[11px] font-medium rounded-full', actionColors[rule.action]]">
                   {{ actionLabels[rule.action] }}
                 </span>
-                <span class="text-xs text-gray-600">优先级 {{ rule.priority }}</span>
+                <span class="text-xs text-gray-600">{{ t('fields.Priority') }} {{ rule.priority }}</span>
               </div>
               <p v-if="rule.description" class="text-xs text-gray-500 mb-1.5">{{ rule.description }}</p>
               <p class="text-xs text-gray-500 font-mono leading-5">{{ formatConditions(rule) }}</p>
               <div class="flex items-center gap-4 mt-2 text-[11px] text-gray-600">
-                <span v-if="rule.action === 'Block'">封禁 {{ rule.actionSeconds }}s</span>
-                <span v-if="rule.action === 'Reject'">返回 {{ rule.responseCode }}</span>
-                <span v-if="rule.action === 'Captcha'">验证 {{ rule.actionSeconds }}s</span>
-                <span>创建于 {{ formatTime(rule.createdAt) }}</span>
-                <span v-if="rule.updatedAt">更新于 {{ formatTime(rule.updatedAt) }}</span>
+                <span v-if="rule.action === 'Block'">{{ t('dashboard.blocked') }} {{ rule.actionSeconds }}s</span>
+                <span v-if="rule.action === 'Reject'">{{ t('page.572cf45ba436') }} {{ rule.responseCode }}</span>
+                <span v-if="rule.action === 'Captcha'">{{ t('page.154723a1aa0a') }} {{ rule.actionSeconds }}s</span>
+                <span>{{ t('page.dc4d662d071e') }} {{ formatTime(rule.createdAt) }}</span>
+                <span v-if="rule.updatedAt">{{ t('page.7153f0918a93') }} {{ formatTime(rule.updatedAt) }}</span>
               </div>
             </div>
 
@@ -288,11 +290,11 @@ onMounted(async () => {
             <div class="flex items-center gap-2 flex-shrink-0">
               <button @click="openEdit(rule)"
                 class="text-xs text-primary-400 hover:text-primary-300 px-2 py-1 rounded hover:bg-primary-500/10 transition-colors">
-                {{ isEditable(rule) ? '编辑' : '查看' }}
+                {{ isEditable(rule) ? t('common.edit') : t('page.db8db0530432') }}
               </button>
               <button v-if="isEditable(rule)" @click="confirmDelete(rule)"
                 class="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded hover:bg-red-500/10 transition-colors">
-                删除
+                {{ t('common.delete') }}
               </button>
             </div>
           </div>
@@ -313,17 +315,17 @@ onMounted(async () => {
       <div v-if="showDeleteConfirm" class="fixed inset-0 z-50 flex items-center justify-center">
         <div class="absolute inset-0 bg-black/60" @click="showDeleteConfirm = false"></div>
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
-          <h3 class="text-lg font-semibold text-gray-100 mb-2">删除规则</h3>
+          <h3 class="text-lg font-semibold text-gray-100 mb-2">{{ t('page.c02fdcf208b3') }}</h3>
           <p class="text-sm text-gray-400 mb-4">
-            确定要删除规则「<span class="text-gray-200">{{ deletingRule?.name }}</span>」吗？
+            {{ t('page.9bf833933e5e') }}<span class="text-gray-200">{{ deletingRule?.name }}</span>{{ t('page.342822e51a1b') }}
           </p>
-          <p class="text-sm text-red-400 mb-5">此操作不可撤销。</p>
+          <p class="text-sm text-red-400 mb-5">{{ t('page.438b9267f6b2') }}</p>
           <div class="flex justify-end gap-3">
-            <button @click="showDeleteConfirm = false" class="btn btn-sm btn-secondary">取消</button>
+            <button @click="showDeleteConfirm = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
             <button @click="executeDelete" :disabled="deleting"
               class="btn btn-sm bg-red-600 hover:bg-red-500 text-white flex items-center gap-1.5">
               <span v-if="deleting" class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
-              <span>{{ deleting ? '删除中...' : '确认删除' }}</span>
+              <span>{{ deleting ? t('settings.deleting') : t('settings.confirm.deletion') }}</span>
             </button>
           </div>
         </div>

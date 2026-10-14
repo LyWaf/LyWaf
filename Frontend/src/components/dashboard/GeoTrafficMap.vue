@@ -223,7 +223,7 @@ onUnmounted(() => {
       <div class="flex items-center gap-3">
         <h2 class="text-base font-semibold text-gray-100"> {{ t('dashboard.traffic.by.location') }} </h2>
         <span class="text-xs text-gray-500">
-          {{ dataMode === 'visits' ? t('dashboard.total.visits') : t('dashboard.total.blocks') }}: {{ totalCount.toLocaleString() }}
+          {{ dataMode === 'visits' ? t('dashboard.total.visits') : t('dashboard.total.blocks') }}: {{ totalCount.toLocaleString(locale) }}
         </span>
       </div>
       <div class="flex items-center gap-2">
@@ -289,7 +289,7 @@ onUnmounted(() => {
               ]"
             >{{ index + 1 }}</span>
             <span class="flex-1 text-gray-300 truncate text-xs">{{ geoLabel(item.name) }}</span>
-            <span class="text-gray-500 font-mono text-xs shrink-0">{{ item.value.toLocaleString() }}</span>
+            <span class="text-gray-500 font-mono text-xs shrink-0">{{ item.value.toLocaleString(locale) }}</span>
           </div>
           <div v-if="currentData.length === 0" class="text-gray-500 text-xs text-center py-10"> {{ t('dashboard.no.data') }} </div>
         </div>

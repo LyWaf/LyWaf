@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { locale } from '@/i18n'
+import { t } from '@/i18n'
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import Section from '@/components/common/Section.vue'
 import ListToolbar from '@/components/common/ListToolbar.vue'
@@ -18,7 +20,7 @@ const accessRevision = ref(0)
 let generation = 0
 onBeforeUnmount(() => { generation++ })
 
-const formatTime = (value: string) => new Intl.DateTimeFormat('zh-CN', {
+const formatTime = (value: string) => new Intl.DateTimeFormat(locale.value, {
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
 }).format(new Date(value))
 
@@ -39,7 +41,7 @@ const loadData = async () => {
       await loadData()
     }
   } catch {
-    if (current === generation) showError('读取 IP 访问控制失败，请刷新重试')
+    if (current === generation) showError(t('page.f93c6b2d56f7'))
   } finally {
     if (current === generation) listLoading.value = false
   }
@@ -68,7 +70,7 @@ const parseEntries = (value: string) => value
 
 const saveGroup = async () => {
   if (!groupForm.value.name.trim()) {
-    showError('请输入 IP 组名称')
+    showError(t('page.faaad037d9e4'))
     return
   }
   groupLoading.value = true
@@ -82,7 +84,7 @@ const saveGroup = async () => {
       ? await ipApi.updateGroup(editingGroupId.value, payload)
       : await ipApi.createGroup(payload)
     if (!res.success || !res.group) {
-      showError(res.message || '保存失败')
+      showError(res.message || t('ui.save.failed'))
       return
     }
     const index = groups.value.findIndex(group => group.id === res.group!.id)
@@ -90,9 +92,9 @@ const saveGroup = async () => {
     else groups.value.unshift(res.group)
     showGroupDialog.value = false
     await loadData()
-    showSuccess(editingGroupId.value ? 'IP 组已更新' : 'IP 组已创建')
+    showSuccess(editingGroupId.value ? t('page.df4875f080ca') : t('page.3ce3ca373868'))
   } catch {
-    showError('保存 IP 组失败')
+    showError(t('page.91759daa44ea'))
   } finally {
     groupLoading.value = false
   }
@@ -104,15 +106,15 @@ const deleteGroup = async () => {
   try {
     const res = await ipApi.deleteGroup(pendingDeleteGroup.value.id)
     if (!res.success) {
-      showError(res.message || '删除失败')
+      showError(res.message || t('settings.deletion.failed'))
       return
     }
     groups.value = groups.value.filter(group => group.id !== pendingDeleteGroup.value?.id)
-    showSuccess('IP 组已删除')
+    showSuccess(t('page.2ad3819387e1'))
     pendingDeleteGroup.value = null
     await loadData()
   } catch {
-    showError('删除 IP 组失败')
+    showError(t('page.dfccbe2583ca'))
   }
 }
 
@@ -122,15 +124,15 @@ const setGroupUsage = async (group: IpGroup, target: 'white' | 'black') => {
   try {
     const res = await ipApi.setGroupUsage(group.id, whitelistEnabled, blacklistEnabled)
     if (!res.success || !res.group) {
-      showError(res.message || '更新名单绑定失败')
+      showError(res.message || t('page.e4ecfb26982c'))
       return
     }
     const index = groups.value.findIndex(item => item.id === group.id)
     if (index >= 0) groups.value[index] = res.group
     await loadData()
-    showSuccess(whitelistEnabled ? 'IP 组已加入白名单' : blacklistEnabled ? 'IP 组已加入黑名单' : 'IP 组已从名单移除')
+    showSuccess(whitelistEnabled ? t('page.824ca37bdd94') : blacklistEnabled ? t('page.e0c468c0c218') : t('page.c48b1bcb4adf'))
   } catch {
-    showError('更新名单绑定失败')
+    showError(t('page.e4ecfb26982c'))
   }
 }
 
@@ -149,7 +151,7 @@ const openAddDialog = (target: 'white' | 'black') => {
 const submitAdd = async () => {
   const ip = dialogIp.value.trim()
   if (!ip) {
-    showError('请输入 IP 或 CIDR')
+    showError(t('page.3d0f1a2926a9'))
     return
   }
 
@@ -159,23 +161,23 @@ const submitAdd = async () => {
       const res = await ipApi.addWhitelist(ip)
       if (res.success) {
         accessRevision.value++
-        showSuccess(`已添加到白名单: ${ip}`)
+        showSuccess(t('page.044758b1a391', { p0: ip }))
         showDialog.value = false
       } else {
-        showError(res.message || '添加失败')
+        showError(res.message || t('dashboard.failed.to.add'))
       }
     } else {
       const res = await ipApi.addBlacklist(ip)
       if (res.success) {
         accessRevision.value++
-        showSuccess(`已添加到黑名单: ${ip}`)
+        showSuccess(t('page.04bb99d59d8a', { p0: ip }))
         showDialog.value = false
       } else {
-        showError(res.message || '添加失败')
+        showError(res.message || t('dashboard.failed.to.add'))
       }
     }
   } catch {
-    showError('添加失败')
+    showError(t('dashboard.failed.to.add'))
   } finally {
     dialogLoading.value = false
   }
@@ -198,21 +200,21 @@ const doRemove = async () => {
       const res = await ipApi.removeWhitelist(ip)
       if (res.success) {
         accessRevision.value++
-        showSuccess(`已从白名单移除: ${ip}`)
+        showSuccess(t('page.e75468d35495', { p0: ip }))
       } else {
-        showError(res.message || '移除失败')
+        showError(res.message || t('page.4757fc1d4709'))
       }
     } else {
       const res = await ipApi.removeBlacklist(ip)
       if (res.success) {
         accessRevision.value++
-        showSuccess(`已从黑名单移除: ${ip}`)
+        showSuccess(t('page.a75e86dc7b8e', { p0: ip }))
       } else {
-        showError(res.message || '移除失败')
+        showError(res.message || t('page.4757fc1d4709'))
       }
     }
   } catch {
-    showError('移除失败')
+    showError(t('page.4757fc1d4709'))
   } finally {
     showDeleteConfirm.value = false
     deleteInfo.value = null
@@ -221,9 +223,9 @@ const doRemove = async () => {
 </script>
 
 <template>
-  <Section id="ip-groups" title="IP 组">
+  <Section id="ip-groups" :title="t('page.24c8624a21fa')">
     <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
-      <button class="btn btn-primary shrink-0" @click="openGroupDialog()">添加 IP 组</button>
+      <button class="btn btn-primary shrink-0" @click="openGroupDialog()">{{ t('page.5d29048c1efa') }}</button>
     </div>
     <ListToolbar v-model:page="groupPage" v-model:search="groupSearch" :total="groupTotal" :busy="listLoading" @refresh="loadData" />
 
@@ -231,11 +233,11 @@ const doRemove = async () => {
       <table class="w-full min-w-[760px] text-sm">
         <thead class="bg-dark-card-hover text-gray-400">
           <tr>
-            <th class="text-left font-medium px-4 py-3">名称</th>
-            <th class="text-left font-medium px-4 py-3">内容</th>
-            <th class="text-left font-medium px-4 py-3 w-32">更新时间</th>
-            <th class="text-left font-medium px-4 py-3 w-52">名单用途</th>
-            <th class="text-right font-medium px-4 py-3 w-32">操作</th>
+            <th class="text-left font-medium px-4 py-3">{{ t('fields.Name') }}</th>
+            <th class="text-left font-medium px-4 py-3">{{ t('page.7a688306423b') }}</th>
+            <th class="text-left font-medium px-4 py-3 w-32">{{ t('page.0a5f9a892960') }}</th>
+            <th class="text-left font-medium px-4 py-3 w-52">{{ t('page.05047cd9b13e') }}</th>
+            <th class="text-right font-medium px-4 py-3 w-32">{{ t('settings.actions') }}</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-dark-border">
@@ -246,10 +248,10 @@ const doRemove = async () => {
             </td>
             <td class="px-4 py-4 align-top">
               <div v-if="group.entries.length" class="text-gray-300 font-mono text-xs">
-                {{ entryPreview(group) }}<span v-if="group.entries.length > 3"> 等</span>
+                {{ entryPreview(group) }}<span v-if="group.entries.length > 3"> {{ t('page.385a845b6094') }}</span>
               </div>
-              <div v-else class="text-gray-500">暂无条目</div>
-              <div class="text-xs text-gray-500 mt-1">共 {{ group.entries.length }} 条</div>
+              <div v-else class="text-gray-500">{{ t('page.590fdddd01bd') }}</div>
+              <div class="text-xs text-gray-500 mt-1">{{ t('page.76e547a8fa54') }} {{ group.entries.length }} {{ t('page.f004f1d84cf9') }}</div>
             </td>
             <td class="px-4 py-4 text-gray-400 align-top whitespace-nowrap">{{ formatTime(group.updatedAt) }}</td>
             <td class="px-4 py-4 align-top">
@@ -258,22 +260,22 @@ const doRemove = async () => {
                   class="btn btn-sm"
                   :class="group.whitelistEnabled ? 'bg-emerald-700 text-white' : 'btn-secondary'"
                   @click="setGroupUsage(group, 'white')"
-                >白名单</button>
+                >{{ t('page.27e2d9e2d924') }}</button>
                 <button
                   class="btn btn-sm"
                   :class="group.blacklistEnabled ? 'bg-red-800 text-white' : 'btn-secondary'"
                   @click="setGroupUsage(group, 'black')"
-                >黑名单</button>
+                >{{ t('page.174ec5a4ab6a') }}</button>
               </div>
             </td>
             <td class="px-4 py-4 text-right align-top whitespace-nowrap">
-              <button class="text-primary-400 hover:text-primary-300 mr-5" @click="openGroupDialog(group)">编辑</button>
-              <button class="text-red-400 hover:text-red-300" @click="pendingDeleteGroup = group">删除</button>
+              <button class="text-primary-400 hover:text-primary-300 mr-5" @click="openGroupDialog(group)">{{ t('common.edit') }}</button>
+              <button class="text-red-400 hover:text-red-300" @click="pendingDeleteGroup = group">{{ t('common.delete') }}</button>
             </td>
           </tr>
           <tr v-if="groups.length === 0">
             <td colspan="5" class="px-4 py-12 text-center text-gray-500">
-              {{ groupSearch ? '没有匹配的 IP 组' : '暂无 IP 组' }}
+              {{ groupSearch ? t('page.65ecedae49e3') : t('page.da656161fa1a') }}
             </td>
           </tr>
         </tbody>
@@ -281,7 +283,7 @@ const doRemove = async () => {
     </div>
   </Section>
 
-  <Section id="ip-control" title="IP 访问控制">
+  <Section id="ip-control" :title="t('page.2316186c99ee')">
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <IpAccessList target="white" :revision="accessRevision" @add="openAddDialog('white')" @remove="confirmRemove($event, 'white')" @usage="setGroupUsage($event, 'white')" />
       <IpAccessList target="black" :revision="accessRevision" @add="openAddDialog('black')" @remove="confirmRemove($event, 'black')" @usage="setGroupUsage($event, 'black')" />
@@ -294,24 +296,24 @@ const doRemove = async () => {
       <div class="absolute inset-0 bg-black/60" @click="showDialog = false"></div>
       <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-[420px] max-w-[90vw]">
         <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
-          <h3 class="text-lg font-semibold text-gray-100">添加 IP 到{{ dialogTarget === 'white' ? '白' : '黑' }}名单</h3>
+          <h3 class="text-lg font-semibold text-gray-100">{{ t('page.f403125c7d85') }}{{ dialogTarget === 'white' ? t('page.3366645622a7') : t('page.59650f41f74b') }}{{ t('page.af488f5f257b') }}</h3>
           <button @click="showDialog = false" class="text-gray-400 hover:text-gray-200 text-xl leading-none">&times;</button>
         </div>
         <div class="px-6 py-5">
-          <label class="block text-sm text-gray-400 mb-1">IP 地址或 CIDR <span class="text-red-400">*</span></label>
+          <label class="block text-sm text-gray-400 mb-1">{{ t('page.f204a2f406a9') }} <span class="text-red-400">*</span></label>
           <input
             v-model="dialogIp"
             type="text"
             class="input"
-            placeholder="例如 192.168.1.100 或 10.0.0.0/24"
+            :placeholder="t('page.dd7f26cd1563')"
             @keydown.enter="submitAdd"
           />
-          <p class="text-xs text-gray-500 mt-2">支持单个 IP 或 CIDR 网段格式</p>
+          <p class="text-xs text-gray-500 mt-2">{{ t('page.02829c9a1dfa') }}</p>
         </div>
         <div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border">
-          <button @click="showDialog = false" class="btn btn-secondary">取消</button>
+          <button @click="showDialog = false" class="btn btn-secondary">{{ t('common.cancel') }}</button>
           <button @click="submitAdd" :disabled="dialogLoading" class="btn btn-primary">
-            {{ dialogLoading ? '提交中...' : '确定添加' }}
+            {{ dialogLoading ? t('settings.submitting') : t('page.1945909fd7f7') }}
           </button>
         </div>
       </div>
@@ -323,27 +325,27 @@ const doRemove = async () => {
       <div class="absolute inset-0 bg-black/60" @click="showGroupDialog = false"></div>
       <div class="relative bg-dark-card border border-dark-border rounded-lg shadow-2xl w-[560px] max-w-full">
         <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
-          <h3 class="text-lg font-semibold text-gray-100">{{ editingGroupId ? '编辑 IP 组' : '添加 IP 组' }}</h3>
-          <button class="text-gray-400 hover:text-gray-200 text-xl" title="关闭" @click="showGroupDialog = false">×</button>
+          <h3 class="text-lg font-semibold text-gray-100">{{ editingGroupId ? t('page.8188b47e940c') : t('page.5d29048c1efa') }}</h3>
+          <button class="text-gray-400 hover:text-gray-200 text-xl" :title="t('common.close')" @click="showGroupDialog = false">×</button>
         </div>
         <div class="px-6 py-5 space-y-4">
           <div>
-            <label class="block text-sm text-gray-400 mb-1">组名称 <span class="text-red-400">*</span></label>
-            <input v-model="groupForm.name" class="input" maxlength="64" placeholder="例如：办公网出口 IP" />
+            <label class="block text-sm text-gray-400 mb-1">{{ t('page.3baad48a4c94') }} <span class="text-red-400">*</span></label>
+            <input v-model="groupForm.name" class="input" maxlength="64" :placeholder="t('page.507b72bc92f9')" />
           </div>
           <div>
-            <label class="block text-sm text-gray-400 mb-1">说明</label>
-            <input v-model="groupForm.description" class="input" placeholder="该 IP 组的用途" />
+            <label class="block text-sm text-gray-400 mb-1">{{ t('fields.Description') }}</label>
+            <input v-model="groupForm.description" class="input" :placeholder="t('page.7440b9d7180a')" />
           </div>
           <div>
             <label class="block text-sm text-gray-400 mb-1">IP / CIDR</label>
             <textarea v-model="groupForm.entriesText" class="input min-h-48 font-mono text-sm resize-y" placeholder="192.168.1.10&#10;10.0.0.0/24&#10;2001:db8::/32"></textarea>
-            <p class="text-xs text-gray-500 mt-2">每行一个，支持 IPv4、IPv6 和 CIDR；重复项会自动去除。</p>
+            <p class="text-xs text-gray-500 mt-2">{{ t('page.e7750f439ea7') }}</p>
           </div>
         </div>
         <div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border">
-          <button class="btn btn-secondary" @click="showGroupDialog = false">取消</button>
-          <button class="btn btn-primary" :disabled="groupLoading" @click="saveGroup">{{ groupLoading ? '保存中...' : '保存' }}</button>
+          <button class="btn btn-secondary" @click="showGroupDialog = false">{{ t('common.cancel') }}</button>
+          <button class="btn btn-primary" :disabled="groupLoading" @click="saveGroup">{{ groupLoading ? t('page.917b1c1f18d0') : t('common.save') }}</button>
         </div>
       </div>
     </div>
@@ -354,12 +356,12 @@ const doRemove = async () => {
       <div class="absolute inset-0 bg-black/60" @click="pendingDeleteGroup = null"></div>
       <div class="relative bg-dark-card border border-dark-border rounded-lg shadow-2xl w-[420px] max-w-full">
         <div class="px-6 py-5">
-          <h3 class="text-lg font-semibold text-gray-100 mb-2">删除 IP 组</h3>
-          <p class="text-gray-400">确定删除“<span class="text-gray-200">{{ pendingDeleteGroup.name }}</span>”吗？组内 IP 不会加入黑白名单。</p>
+          <h3 class="text-lg font-semibold text-gray-100 mb-2">{{ t('page.c984dcea396f') }}</h3>
+          <p class="text-gray-400">{{ t('page.6ec00e356283') }}<span class="text-gray-200">{{ pendingDeleteGroup.name }}</span>{{ t('page.6dc425f0b2a4') }}</p>
         </div>
         <div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border">
-          <button class="btn btn-secondary" @click="pendingDeleteGroup = null">取消</button>
-          <button class="btn btn-danger" @click="deleteGroup">删除</button>
+          <button class="btn btn-secondary" @click="pendingDeleteGroup = null">{{ t('common.cancel') }}</button>
+          <button class="btn btn-danger" @click="deleteGroup">{{ t('common.delete') }}</button>
         </div>
       </div>
     </div>
@@ -371,15 +373,15 @@ const doRemove = async () => {
       <div class="absolute inset-0 bg-black/60" @click="showDeleteConfirm = false"></div>
       <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-[400px] max-w-[90vw]">
         <div class="px-6 py-5">
-          <h3 class="text-lg font-semibold text-gray-100 mb-2">确认移除</h3>
+          <h3 class="text-lg font-semibold text-gray-100 mb-2">{{ t('page.ee7dea070d88') }}</h3>
           <p class="text-gray-400">
-            确定要从{{ deleteInfo?.target === 'white' ? '白' : '黑' }}名单移除
-            <code class="text-red-400">{{ deleteInfo?.ip }}</code> 吗？
+            {{ t('page.929ab136ec59') }}{{ deleteInfo?.target === 'white' ? t('page.3366645622a7') : t('page.59650f41f74b') }}{{ t('page.4384a5b85e11') }}
+            <code class="text-red-400">{{ deleteInfo?.ip }}</code> {{ t('page.9d45d8943988') }}
           </p>
         </div>
         <div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border">
-          <button @click="showDeleteConfirm = false" class="btn btn-secondary">取消</button>
-          <button @click="doRemove" class="btn btn-danger">确定移除</button>
+          <button @click="showDeleteConfirm = false" class="btn btn-secondary">{{ t('common.cancel') }}</button>
+          <button @click="doRemove" class="btn btn-danger">{{ t('page.4948800ce892') }}</button>
         </div>
       </div>
     </div>

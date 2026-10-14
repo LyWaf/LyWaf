@@ -1,0 +1,5 @@
+{
+  "metadata.name": "流量分析器",
+  "metadata.description": "后台分析访问流量，检测 CC 攻击等异常行为",
+  "actions.cc.name": "CC 防护"
+}

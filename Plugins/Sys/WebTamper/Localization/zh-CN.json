@@ -1,0 +1,5 @@
+{
+  "metadata.name": "网页防篡改",
+  "metadata.description": "按网站与路径维护安全基线，检测变更并向访客返回已确认内容",
+  "actions.manage.name": "管理网页防篡改"
+}

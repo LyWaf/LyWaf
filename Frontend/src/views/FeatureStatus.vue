@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, onMounted } from 'vue'
 import AccessControlPanel from '@/components/dashboard/AccessControlPanel.vue'
 import WafRules from '@/components/dashboard/WafRules.vue'
@@ -42,10 +43,10 @@ const toggleFeature = async (feature: keyof FeatureStatus) => {
     const result = await apiMap[feature](newValue) as { success: boolean }
     if (result.success) {
       features.value[feature] = newValue
-      showSuccess(`${getFeatureName(feature)}已${newValue ? '启用' : '禁用'}`)
+      showSuccess(t('page.747f2ff4435a', { p0: getFeatureName(feature), p1: newValue ? t('fields.Enabled') : t('settings.disable') }))
     }
   } catch {
-    showError('操作失败，请重试')
+    showError(t('page.e113c7d13e87'))
   } finally {
     featureLoading.value = null
   }
@@ -53,11 +54,11 @@ const toggleFeature = async (feature: keyof FeatureStatus) => {
 
 const getFeatureName = (feature: keyof FeatureStatus) => {
   const names: Record<keyof FeatureStatus, string> = {
-    ipControl: 'IP 访问控制',
-    geoControl: '地理位置控制',
-    wafArgs: 'WAF Args检测',
-    wafPost: 'WAF Post检测',
-    ccProtection: 'CC 防护',
+    ipControl: t('page.2316186c99ee'),
+    geoControl: t('page.a2932d146782'),
+    wafArgs: t('page.71b5fe524c66'),
+    wafPost: t('page.cc9080cc8a78'),
+    ccProtection: t('nav.cc'),
   }
   return names[feature]
 }

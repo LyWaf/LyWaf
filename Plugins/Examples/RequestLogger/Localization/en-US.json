@@ -1,0 +1,5 @@
+{
+  "metadata.name": "Request logger",
+  "metadata.description": "Record HTTP requests with host and URL filters, request and response bodies, and separate log files",
+  "actions.view-logs.name": "View logs"
+}

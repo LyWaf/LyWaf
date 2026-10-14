@@ -8,6 +8,8 @@ const source = await readFile(new URL('../src/api/index.ts', import.meta.url), '
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
 const analysisSource = await readFile(new URL('../src/plugins/analysis/api.ts', import.meta.url), 'utf8')
 const analysisCompiled = ts.transpileModule(analysisSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
+const messages = JSON.parse(await readFile(new URL('../../Localization/zh-CN.json', import.meta.url), 'utf8'))
+const pluginMessages = JSON.parse(await readFile(new URL('../src/plugins/analysis/locales/zh-CN.json', import.meta.url), 'utf8'))
 
 function clientFixture(response) {
   let rejectResponse
@@ -28,7 +30,7 @@ function clientFixture(response) {
     module, exports: module.exports,
     require(name) {
       if (name === 'axios') return { default: { create: () => client } }
-      if (name === '@/i18n') return { locale: { value: 'en-US' } }
+      if (name === '@/i18n') return { locale: { value: 'en-US' }, t: key => messages[key] ?? key }
       if (name === '@/composables/useStepUp') return { requestStepUp: async () => 'proof' }
       throw new Error(`Unexpected runtime import: ${name}`)
     },
@@ -39,6 +41,7 @@ function clientFixture(response) {
   const plugin = { exports: {} }
   vm.runInNewContext(analysisCompiled, { module: plugin, exports: plugin.exports, require: name => {
     if (name === '@/api') return module.exports
+    if (name === './i18n') return { t: key => pluginMessages[key] ?? key }
     throw new Error(`Unexpected plugin import: ${name}`)
   } })
   return { prepareRequest, reject: error => rejectResponse(error), retry: () => retryConfig, api: module.exports, analysis: plugin.exports, calls }

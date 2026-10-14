@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import StatCard from '@/components/common/StatCard.vue'
 import ListToolbar from '@/components/common/ListToolbar.vue'
@@ -59,7 +60,7 @@ const loadData = async () => {
       return loadData()
     }
   } catch {
-    if (request === listRequest) showError('加载 API 耗时统计失败')
+    if (request === listRequest) showError(t('ui.failed.to.load.api.timing.statistics'))
   } finally {
     if (request === listRequest) loading.value = false
   }
@@ -72,16 +73,16 @@ watch([filterMethod, filterBackend, sortField, sortOrder, filterRequestVal, filt
 
 // 清空统计
 const clearData = async () => {
-  if (!confirm('确定要清空所有 API 耗时统计吗？')) return
+  if (!confirm(t('ui.clear.all.api.timing.statistics'))) return
 
   try {
     await timingApi.clear()
     ++listRequest
     page.value = 1
-    showSuccess('API 耗时统计已清空')
+    showSuccess(t('ui.api.timing.statistics.cleared'))
     loadData()
   } catch {
-    showError('清空失败')
+    showError(t('dashboard.failed.to.clear'))
   }
 }
 
@@ -155,50 +156,50 @@ onUnmounted(() => {
     <!-- 汇总卡片 -->
     <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
       <StatCard
-        label="总请求数"
+        :label="t('ui.total.requests')"
         :value="formatNumber(summary?.totalRequests || 0)"
         icon="📊"
-        tooltip="统计周期内的 API 总请求数"
+        :tooltip="t('ui.total.api.requests.in.the.reporting.period')"
       />
       <StatCard
-        label="平均总耗时"
+        :label="t('ui.average.total.duration')"
         :value="formatTime(summary?.avgTotalTime || 0)"
         icon="⏱️"
         color="blue"
-        tooltip="从接收请求到响应的平均时间"
+        :tooltip="t('ui.average.time.from.request.to.response')"
       />
       <StatCard
-        label="平均后端耗时"
+        :label="t('ui.average.backend.duration')"
         :value="formatTime(summary?.avgBackendTime || 0)"
         icon="🔄"
         color="green"
-        tooltip="后端服务处理的平均时间"
+        :tooltip="t('ui.average.backend.processing.time')"
       />
       <StatCard
-        label="平均网关耗时"
+        :label="t('ui.average.gateway.duration')"
         :value="formatTime(summary?.avgGatewayTime || 0)"
         icon="🚀"
         color="yellow"
-        tooltip="网关处理的平均时间"
+        :tooltip="t('ui.average.gateway.processing.time')"
       />
       <StatCard
-        label="错误率"
+        :label="t('ui.error.rate')"
         :value="((summary?.errorRate || 0) * 100).toFixed(2) + '%'"
         icon="⚠️"
         color="red"
-        tooltip="返回错误状态码的请求占比"
+        :tooltip="t('ui.percentage.of.requests.returning.errors')"
       />
       <StatCard
-        label="API 数量"
+        :label="t('ui.api.count')"
         :value="summary?.apiCount || 0"
         icon="📋"
-        tooltip="已统计的不同 API 数量"
+        :tooltip="t('ui.number.of.distinct.apis.recorded')"
       />
     </div>
 
     <!-- 后端稳定性 -->
     <div class="card" v-if="backends.length > 0">
-      <h3 class="font-medium text-gray-200 mb-4">后端稳定性</h3>
+      <h3 class="font-medium text-gray-200 mb-4"> {{ t('ui.backend.stability') }} </h3>
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <div
           v-for="backendStats in backends"
@@ -215,13 +216,13 @@ onUnmounted(() => {
           </div>
           <div class="grid grid-cols-2 gap-2 text-sm">
             <div>
-              <span class="text-gray-500">平均耗时</span>
+              <span class="text-gray-500"> {{ t('ui.average.duration') }} </span>
               <div class="text-blue-400">
                 {{ formatTime(backendStats.avgBackendTime) }}
               </div>
             </div>
             <div>
-              <span class="text-gray-500">请求数</span>
+              <span class="text-gray-500"> {{ t('ui.request.count') }} </span>
               <div class="text-gray-200">
                 {{ formatNumber(backendStats.totalRequests) }}
               </div>
@@ -235,32 +236,30 @@ onUnmounted(() => {
     <ListToolbar v-model:page="page" v-model:search="searchPath" :total="total" :busy="loading" @refresh="loadData" />
     <div class="flex flex-wrap items-center gap-4">
       <select v-model="filterMethod" class="input w-[120px]">
-        <option value="">全部方法</option>
+        <option value=""> {{ t('ui.all.methods') }} </option>
         <option v-for="method in methods" :key="method" :value="method">{{ method }}</option>
       </select>
       <select v-model="filterBackend" class="input w-[200px]">
-        <option value="">全部后端</option>
+        <option value=""> {{ t('ui.all.backends') }} </option>
         <option v-for="backend in backendList" :key="backend" :value="backend">
           {{ formatBackend(backend) }}
         </option>
       </select>
       <div class="flex items-center gap-1.5">
-        <span class="text-xs text-gray-500 whitespace-nowrap">请求数</span>
+        <span class="text-xs text-gray-500 whitespace-nowrap"> {{ t('ui.request.count') }} </span>
         <button @click="toggleRequestOp" class="btn btn-sm btn-secondary w-8 text-center !px-0 font-mono">{{ filterRequestOp }}</button>
-        <input v-model="filterRequestVal" type="text" inputmode="numeric" class="input w-[72px] text-center" placeholder="数量" />
+        <input v-model="filterRequestVal" type="text" inputmode="numeric" class="input w-[72px] text-center" :placeholder="t('ui.count')" />
       </div>
       <div class="flex items-center gap-1.5">
-        <span class="text-xs text-gray-500 whitespace-nowrap">耗时ms</span>
+        <span class="text-xs text-gray-500 whitespace-nowrap"> {{ t('ui.duration.ms') }} </span>
         <button @click="toggleAvgTimeOp" class="btn btn-sm btn-secondary w-8 text-center !px-0 font-mono">{{ filterAvgTimeOp }}</button>
-        <input v-model="filterAvgTimeVal" type="text" inputmode="numeric" class="input w-[72px] text-center" placeholder="毫秒" />
+        <input v-model="filterAvgTimeVal" type="text" inputmode="numeric" class="input w-[72px] text-center" :placeholder="t('ui.milliseconds')" />
       </div>
       <div class="flex-1"></div>
       <button @click="loadData" class="btn btn-sm btn-secondary" :disabled="loading">
-        {{ loading ? '加载中...' : '刷新' }}
+        {{ loading ? t('common.loading') : t('common.refresh') }}
       </button>
-      <button @click="clearData" class="btn btn-sm btn-danger">
-        清空统计
-      </button>
+      <button @click="clearData" class="btn btn-sm btn-danger"> {{ t('ui.clear.statistics') }} </button>
     </div>
 
     <!-- 数据表格 -->
@@ -269,29 +268,26 @@ onUnmounted(() => {
         <table class="w-full min-w-[900px]">
           <thead>
             <tr class="border-b border-dark-border">
-              <th class="px-4 py-3 text-left text-sm font-medium text-gray-400 whitespace-nowrap">方法</th>
-              <th class="px-4 py-3 text-left text-sm font-medium text-gray-400 whitespace-nowrap">路径</th>
-              <th class="px-4 py-3 text-left text-sm font-medium text-gray-400 whitespace-nowrap">后端</th>
+              <th class="px-4 py-3 text-left text-sm font-medium text-gray-400 whitespace-nowrap"> {{ t('ui.method') }} </th>
+              <th class="px-4 py-3 text-left text-sm font-medium text-gray-400 whitespace-nowrap"> {{ t('ui.path') }} </th>
+              <th class="px-4 py-3 text-left text-sm font-medium text-gray-400 whitespace-nowrap"> {{ t('ui.backend') }} </th>
               <th
                 @click="toggleSort('requestCount')"
                 class="px-4 py-3 text-right text-sm font-medium text-gray-400 whitespace-nowrap cursor-pointer hover:text-primary-500"
-              >
-                请求数 {{ sortField === 'requestCount' ? (sortOrder === 'desc' ? '↓' : '↑') : '' }}
+              > {{ t('ui.request.count') }} {{ sortField === 'requestCount' ? (sortOrder === 'desc' ? '↓' : '↑') : '' }}
               </th>
               <th
                 @click="toggleSort('avgTotalTime')"
                 class="px-4 py-3 text-right text-sm font-medium text-gray-400 whitespace-nowrap cursor-pointer hover:text-primary-500"
-              >
-                平均总耗时 {{ sortField === 'avgTotalTime' ? (sortOrder === 'desc' ? '↓' : '↑') : '' }}
+              > {{ t('ui.average.total.duration') }} {{ sortField === 'avgTotalTime' ? (sortOrder === 'desc' ? '↓' : '↑') : '' }}
               </th>
               <th
                 @click="toggleSort('avgBackendTime')"
                 class="px-4 py-3 text-right text-sm font-medium text-gray-400 whitespace-nowrap cursor-pointer hover:text-primary-500"
-              >
-                后端耗时 {{ sortField === 'avgBackendTime' ? (sortOrder === 'desc' ? '↓' : '↑') : '' }}
+              > {{ t('ui.backend.duration') }} {{ sortField === 'avgBackendTime' ? (sortOrder === 'desc' ? '↓' : '↑') : '' }}
               </th>
-              <th class="px-4 py-3 text-right text-sm font-medium text-gray-400 whitespace-nowrap">最小/最大</th>
-              <th class="px-4 py-3 text-center text-sm font-medium text-gray-400 whitespace-nowrap">状态码分布</th>
+              <th class="px-4 py-3 text-right text-sm font-medium text-gray-400 whitespace-nowrap"> {{ t('ui.min.max') }} </th>
+              <th class="px-4 py-3 text-center text-sm font-medium text-gray-400 whitespace-nowrap"> {{ t('ui.status.code.distribution') }} </th>
             </tr>
           </thead>
           <tbody>
@@ -323,7 +319,7 @@ onUnmounted(() => {
                      target="_blank"
                      rel="noopener noreferrer"
                      class="ml-1.5 flex-shrink-0 inline-flex items-center text-gray-500 hover:text-primary-400 transition-colors"
-                     title="在新窗口中打开原始请求"
+                     :title="t('ui.open.original.request.in.a.new.window')"
                      @click.stop
                    >
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -357,7 +353,7 @@ onUnmounted(() => {
             </tr>
             <tr v-if="filteredItems.length === 0">
               <td colspan="8" class="px-4 py-8 text-center text-gray-500">
-                {{ loading ? '加载中...' : '暂无数据' }}
+                {{ loading ? t('common.loading') : t('common.noData') }}
               </td>
             </tr>
           </tbody>

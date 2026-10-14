@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { overviewApi, routeApi, simpleResApi, fileServerApi, listenApi, serviceApi } from '@/api'
@@ -26,7 +27,7 @@ const loadData = async () => {
       clusters.value = response.clusters
     }
   } catch (error: any) {
-    showError(error?.response?.data?.message || '加载概览数据失败')
+    showError(error?.response?.data?.message || t('page.9d2ed714c50b'))
   } finally {
     loading.value = false
   }
@@ -57,10 +58,10 @@ const confirmRestart = async () => {
   restarting.value = true
   try {
     await serviceApi.restart()
-    showSuccess('服务正在重启...')
+    showSuccess(t('page.e070b338a9f2'))
     showRestartConfirm.value = false
   } catch (error: any) {
-    showError(error?.response?.data?.message || error?.message || '重启失败')
+    showError(error?.response?.data?.message || error?.message || t('page.25aa8c9992a0'))
   } finally {
     restarting.value = false
   }
@@ -74,13 +75,13 @@ const openListenDialog = () => {
 
 const submitListen = async () => {
   const { host, port, isHttps } = listenForm.value
-  if (!isValidIP(host)) { showError('监听地址必须是合法的 IP 地址（如 0.0.0.0、127.0.0.1、::）'); return }
-  if (port <= 0 || port > 65535) { showError('端口号无效（1-65535）'); return }
+  if (!isValidIP(host)) { showError(t('page.ed4d152b0965')); return }
+  if (port <= 0 || port > 65535) { showError(t('page.4eaa9d4ff9b3')); return }
   const hosts = listenHosts.value.filter(h => h.trim())
   listenSaving.value = true
   try {
     const res = await listenApi.add({ host, port, isHttps })
-    if (!res.success) { showError(res.message || '添加失败'); return }
+    if (!res.success) { showError(res.message || t('dashboard.failed.to.add')); return }
     // 自动创建默认 SimpleRes 路由
     const routeId = `simpleres_listen_${port}_default`
     const itemRes = await simpleResApi.addItem({
@@ -90,7 +91,7 @@ const submitListen = async () => {
       statusCode: 200,
     })
     if (!itemRes.success) {
-      showError(`端口已添加，但创建默认响应失败: ${itemRes.message || '未知错误'}`)
+      showError(t('page.a7758d1f2205', { p0: itemRes.message || t('page.13a46616e16f') }))
     } else {
       const routeRes = await routeApi.addRoute({
         routeId,
@@ -98,9 +99,9 @@ const submitListen = async () => {
         match: { path: '{**catch-all}', hosts: hosts.length > 0 ? hosts : [`*:${port}`] },
       })
       if (!routeRes.success) {
-        showError(`端口已添加，但创建默认路由失败: ${routeRes.message || '未知错误'}`)
+        showError(t('page.84a4c79e2911', { p0: routeRes.message || t('page.13a46616e16f') }))
       } else {
-        showSuccess('监听端口和默认响应已添加')
+        showSuccess(t('page.fe4e812c8996'))
       }
     }
     showListenDialog.value = false
@@ -108,7 +109,7 @@ const submitListen = async () => {
     // 弹出重启确认
     showRestartConfirm.value = true
   } catch (error: any) {
-    showError(error?.response?.data?.message || error?.message || '添加失败')
+    showError(error?.response?.data?.message || error?.message || t('dashboard.failed.to.add'))
   } finally {
     listenSaving.value = false
   }
@@ -118,7 +119,7 @@ const confirmDeleteListen = ref<ListenInfo | null>(null)
 const deletingListen = ref(false)
 
 const deleteListen = (listen: ListenInfo) => {
-  if (listen.source !== 'patch') { showError('原始配置中的监听不能在此删除'); return }
+  if (listen.source !== 'patch') { showError(t('page.3441ae504fdd')); return }
   confirmDeleteListen.value = listen
 }
 
@@ -128,13 +129,13 @@ const executeDeleteListen = async () => {
   deletingListen.value = true
   try {
     const res = await listenApi.remove({ host: listen.host, port: listen.port })
-    if (!res.success) { showError(res.message || '删除失败'); return }
-    showSuccess('监听端口已删除')
+    if (!res.success) { showError(res.message || t('settings.deletion.failed')); return }
+    showSuccess(t('page.66100f27b84c'))
     confirmDeleteListen.value = null
     await loadData()
     showRestartConfirm.value = true
   } catch (error: any) {
-    showError(error?.response?.data?.message || error?.message || '删除失败')
+    showError(error?.response?.data?.message || error?.message || t('settings.deletion.failed'))
   } finally {
     deletingListen.value = false
   }
@@ -252,7 +253,7 @@ const parseList = (str: string): string[] =>
 
 const submitAdd = async () => {
   const id = addForm.value.itemId.trim()
-  if (!id) { showError('ID 不能为空'); return }
+  if (!id) { showError(t('page.a45065ad89c2')); return }
 
   saving.value = true
   try {
@@ -272,10 +273,10 @@ const submitAdd = async () => {
         statusCode: addForm.value.statusCode,
         headers: Object.keys(hdrs).length > 0 ? hdrs : undefined,
       })
-      if (!itemRes.success) { showError(itemRes.message || '添加简单响应失败'); saving.value = false; return }
+      if (!itemRes.success) { showError(itemRes.message || t('page.fae875b66b98')); saving.value = false; return }
       const routeRes = await routeApi.addRoute({ routeId: id, clusterId: 'cluster_unuse', order, match: { path, hosts } })
-      if (!routeRes.success) { showError(routeRes.message || '添加路由失败'); saving.value = false; return }
-      showSuccess('简单响应已添加')
+      if (!routeRes.success) { showError(routeRes.message || t('page.22872291f5df')); saving.value = false; return }
+      showSuccess(t('page.0e5645c63cea'))
     } else if (addServiceType.value === 'fileserver') {
       const tryFiles = parseList(addForm.value.tryFiles)
       const defaultFiles = parseList(addForm.value.defaultFiles)
@@ -288,26 +289,26 @@ const submitAdd = async () => {
         tryFiles: tryFiles.length > 0 ? tryFiles : undefined,
         defaultFiles: defaultFiles.length > 0 ? defaultFiles : undefined,
       })
-      if (!itemRes.success) { showError(itemRes.message || '添加文件服务失败'); saving.value = false; return }
+      if (!itemRes.success) { showError(itemRes.message || t('page.4a803e131b82')); saving.value = false; return }
       const routeRes = await routeApi.addRoute({ routeId: id, clusterId: 'cluster_unuse', order, match: { path, hosts } })
-      if (!routeRes.success) { showError(routeRes.message || '添加路由失败'); saving.value = false; return }
-      showSuccess('文件服务已添加')
+      if (!routeRes.success) { showError(routeRes.message || t('page.22872291f5df')); saving.value = false; return }
+      showSuccess(t('page.06e0b688fb85'))
     } else {
-      if (!addForm.value.clusterId) { showError('请选择目标集群'); saving.value = false; return }
+      if (!addForm.value.clusterId) { showError(t('page.e2ba56010793')); saving.value = false; return }
       const routeRes = await routeApi.addRoute({
         routeId: id,
         clusterId: addForm.value.clusterId,
         order,
         match: { path, hosts },
       })
-      if (!routeRes.success) { showError(routeRes.message || '添加路由失败'); saving.value = false; return }
-      showSuccess('代理路由已添加')
+      if (!routeRes.success) { showError(routeRes.message || t('page.22872291f5df')); saving.value = false; return }
+      showSuccess(t('page.c83b53e5f348'))
     }
 
     showAddDialog.value = false
     await loadData()
   } catch (error: any) {
-    showError(error?.response?.data?.message || error?.message || '添加失败')
+    showError(error?.response?.data?.message || error?.message || t('dashboard.failed.to.add'))
   } finally {
     saving.value = false
   }
@@ -387,7 +388,7 @@ const openEditDialog = async (route: ListenBoundRoute) => {
           order: routeItem?.order ?? 0,
         }
       } else {
-        showError(`未找到简单响应配置: ${route.routeId}`)
+        showError(t('page.db413dfbc04d', { p0: route.routeId }))
         showEditDialog.value = false
       }
     } else if (route.serviceType === 'fileserver') {
@@ -405,7 +406,7 @@ const openEditDialog = async (route: ListenBoundRoute) => {
           order: routeItem?.order ?? 0,
         }
       } else {
-        showError(`未找到文件服务配置: ${route.routeId}`)
+        showError(t('page.c2ee98fc151e', { p0: route.routeId }))
         showEditDialog.value = false
       }
     } else {
@@ -417,12 +418,12 @@ const openEditDialog = async (route: ListenBoundRoute) => {
           clusterId: routeItem.clusterId ?? '',
         }
       } else {
-        showError(`未找到路由配置: ${route.routeId}`)
+        showError(t('page.26862e73d3f0', { p0: route.routeId }))
         showEditDialog.value = false
       }
     }
   } catch (error: any) {
-    showError(error?.message || '加载编辑数据失败')
+    showError(error?.message || t('page.00b3867f7321'))
     showEditDialog.value = false
   } finally {
     editLoading.value = false
@@ -452,7 +453,7 @@ const submitEdit = async () => {
         showReq: editSimpleRes.value.showReq,
         headers: hdrs,
       })
-      if (!res.success) { showError(res.message || '更新失败'); return }
+      if (!res.success) { showError(res.message || t('page.ec99e5c45d64')); return }
       // 同步更新路由 hosts、path、order
       await routeApi.updateRoute({
         routeId: route.routeId,
@@ -462,7 +463,7 @@ const submitEdit = async () => {
           hosts: newHosts.length > 0 ? newHosts : undefined,
         },
       })
-      showSuccess('简单响应已更新')
+      showSuccess(t('page.6c7e0a27dd54'))
 
     } else if (route.serviceType === 'fileserver') {
       const tryFiles = parseList(editFileServer.value.tryFiles)
@@ -476,7 +477,7 @@ const submitEdit = async () => {
         tryFiles,
         defaultFiles,
       })
-      if (!res.success) { showError(res.message || '更新失败'); return }
+      if (!res.success) { showError(res.message || t('page.ec99e5c45d64')); return }
       // 同步更新路由 hosts、path、order
       await routeApi.updateRoute({
         routeId: route.routeId,
@@ -486,7 +487,7 @@ const submitEdit = async () => {
           hosts: newHosts.length > 0 ? newHosts : undefined,
         },
       })
-      showSuccess('文件服务已更新')
+      showSuccess(t('page.575b777a757c'))
 
     } else {
       const methods = parseList(editProxy.value.methods).map(m => m.toUpperCase())
@@ -500,14 +501,14 @@ const submitEdit = async () => {
           methods: methods.length > 0 ? methods : undefined,
         },
       })
-      if (!res.success) { showError(res.message || '更新失败'); return }
-      showSuccess('路由已更新')
+      if (!res.success) { showError(res.message || t('page.ec99e5c45d64')); return }
+      showSuccess(t('page.f8f23707c6e5'))
     }
 
     showEditDialog.value = false
     await loadData()
   } catch (error: any) {
-    showError(error?.response?.data?.message || error?.message || '更新失败')
+    showError(error?.response?.data?.message || error?.message || t('page.ec99e5c45d64'))
   } finally {
     editSaving.value = false
   }
@@ -519,7 +520,7 @@ const confirmDeleteRoute = ref<ListenBoundRoute | null>(null)
 
 const requestDelete = (route: ListenBoundRoute) => {
   if (route.source !== 'patch') {
-    showError('原始配置中的路由不能在此删除，请修改配置文件')
+    showError(t('page.d4571d4804d2'))
     return
   }
   confirmDeleteRoute.value = route
@@ -532,7 +533,7 @@ const executeDelete = async () => {
   deleting.value = route.routeId
   try {
     const routeRes = await routeApi.removeRoute(route.routeId)
-    if (!routeRes.success) { showError(routeRes.message || '删除路由失败'); return }
+    if (!routeRes.success) { showError(routeRes.message || t('page.e2e089545fbd')); return }
 
     if (route.serviceType === 'simpleres') {
       await simpleResApi.removeItem(route.routeId).catch(() => {})
@@ -540,11 +541,11 @@ const executeDelete = async () => {
       await fileServerApi.removeItem(route.routeId).catch(() => {})
     }
 
-    showSuccess('已删除')
+    showSuccess(t('page.077a6d37719a'))
     confirmDeleteRoute.value = null
     await loadData()
   } catch (error: any) {
-    showError(error?.response?.data?.message || error?.message || '删除失败')
+    showError(error?.response?.data?.message || error?.message || t('settings.deletion.failed'))
   } finally {
     deleting.value = null
   }
@@ -562,9 +563,9 @@ const formatAddress = (listen: ListenInfo) => {
 
 const serviceTypeLabel = (type: string) => {
   switch (type) {
-    case 'proxy': return '反向代理'
-    case 'fileserver': return '文件服务'
-    case 'simpleres': return '简单响应'
+    case 'proxy': return t('page.7b3f1a698530')
+    case 'fileserver': return t('nav.files')
+    case 'simpleres': return t('nav.responses')
     default: return type
   }
 }
@@ -593,17 +594,17 @@ onMounted(() => {
     <div class="card">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
-          <h2 class="text-lg font-semibold text-gray-100">配置概览</h2>
+          <h2 class="text-lg font-semibold text-gray-100">{{ t('nav.configOverview') }}</h2>
         </div>
         <div class="flex items-center gap-2">
           <button @click="openListenDialog"
             class="btn btn-sm btn-primary flex items-center gap-1 text-xs">
-            <span>+ 新增端口</span>
+            <span>{{ t('page.b65b642e5e7d') }}</span>
           </button>
           <button @click="loadData" :disabled="loading"
             class="btn btn-sm btn-secondary flex items-center gap-1.5">
             <span v-if="loading" class="w-3.5 h-3.5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></span>
-            <span>刷新</span>
+            <span>{{ t('common.refresh') }}</span>
           </button>
         </div>
       </div>
@@ -642,22 +643,22 @@ onMounted(() => {
                   {{ listen.isHttps ? 'HTTPS' : 'HTTP' }}
                 </span>
                 <span v-if="listen.autoHttpsPort" class="text-xs text-gray-500">
-                  自动跳转 → :{{ listen.autoHttpsPort }}
+                  {{ t('page.7ffb2efd448f') }}{{ listen.autoHttpsPort }}
                 </span>
               </div>
               <div class="text-xs text-gray-500 mt-0.5">
-                {{ listen.routes.length }} 个服务绑定
+                {{ listen.routes.length }} {{ t('page.e7049bec6873') }}
               </div>
             </div>
             <!-- 操作按钮 -->
             <div class="flex items-center gap-2">
               <button @click="openAddDialog(listen)"
                 class="btn btn-sm btn-primary flex items-center gap-1 text-xs">
-                <span>+ 新增</span>
+                <span>{{ t('page.a91e87b292cc') }}</span>
               </button>
               <button v-if="listen.source === 'patch'" @click="deleteListen(listen)"
                 class="btn btn-sm text-xs bg-red-600/20 text-red-400 hover:bg-red-600/30 border border-red-500/30">
-                删除端口
+                {{ t('page.89d2f906ce47') }}
               </button>
             </div>
           </div>
@@ -677,7 +678,7 @@ onMounted(() => {
                 <div class="flex items-center gap-2 flex-wrap">
                   <span class="font-mono text-sm text-gray-300">{{ route.routeId }}</span>
                   <span v-if="route.path" class="font-mono text-xs text-gray-500">{{ route.path }}</span>
-                  <span v-if="route.source === 'patch'" class="text-xs px-1 py-0.5 rounded bg-amber-500/10 text-amber-400">补丁</span>
+                  <span v-if="route.source === 'patch'" class="text-xs px-1 py-0.5 rounded bg-amber-500/10 text-amber-400">{{ t('page.70f565337ffd') }}</span>
                 </div>
                 <!-- 域名标签 -->
                 <div v-if="route.hosts.length > 0" class="flex flex-wrap gap-1 mt-1">
@@ -690,12 +691,12 @@ onMounted(() => {
                 <div v-if="route.serviceType === 'proxy' && route.clusterId" class="mt-1.5">
                   <template v-if="getClusterInfo(route.clusterId)">
                     <div class="flex items-center gap-2 text-xs text-gray-500">
-                      <span>集群</span>
+                      <span>{{ t('ui.cluster') }}</span>
                       <span class="font-mono text-primary-400">{{ route.clusterId }}</span>
                       <span class="text-gray-600">·</span>
                       <span>{{ getClusterInfo(route.clusterId)!.policy }}</span>
                       <span class="text-gray-600">·</span>
-                      <span>{{ getClusterInfo(route.clusterId)!.destinationCount }} 节点</span>
+                      <span>{{ getClusterInfo(route.clusterId)!.destinationCount }} {{ t('page.2410d860f093') }}</span>
                     </div>
                     <div class="flex flex-wrap gap-x-3 gap-y-1 mt-1">
                       <div v-for="dest in getClusterInfo(route.clusterId)!.destinations" :key="dest.id"
@@ -706,7 +707,7 @@ onMounted(() => {
                     </div>
                   </template>
                   <div v-else class="text-xs text-gray-500">
-                    集群 <span class="font-mono text-gray-400">{{ route.clusterId }}</span>
+                    {{ t('ui.cluster') }} <span class="font-mono text-gray-400">{{ route.clusterId }}</span>
                   </div>
                 </div>
               </div>
@@ -715,7 +716,7 @@ onMounted(() => {
               <div class="flex items-center gap-1 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity mt-0.5">
                 <button @click.stop="openEditDialog(route)"
                   class="text-xs text-gray-500 hover:text-primary-400 transition-colors px-1.5 py-0.5">
-                  编辑
+                  {{ t('common.edit') }}
                 </button>
                 <button @click.stop="requestDelete(route)"
                   :disabled="deleting === route.routeId"
@@ -723,9 +724,9 @@ onMounted(() => {
                   :class="route.source === 'patch'
                     ? 'text-gray-500 hover:text-red-400'
                     : 'text-gray-700 cursor-not-allowed'"
-                  :title="route.source !== 'patch' ? '原始配置不可删除' : '删除'">
+                  :title="route.source !== 'patch' ? t('page.1d22be24dc41') : t('common.delete')">
                   <span v-if="deleting === route.routeId" class="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin inline-block"></span>
-                  <span v-else>删除</span>
+                  <span v-else>{{ t('common.delete') }}</span>
                 </button>
               </div>
             </div>
@@ -733,7 +734,7 @@ onMounted(() => {
 
           <!-- 无绑定服务 -->
           <div v-else class="ml-[52px] text-sm text-gray-600 py-2">
-            暂无绑定的路由或服务
+            {{ t('page.f4e5b6cc5501') }}
           </div>
         </div>
 
@@ -746,10 +747,10 @@ onMounted(() => {
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
                 <span class="text-base font-mono font-semibold text-gray-100">{{ controlListen.host }}:{{ controlListen.port }}</span>
-                <span class="text-xs px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">控制台</span>
+                <span class="text-xs px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">{{ t('page.d0d07d153161') }}</span>
               </div>
               <div class="text-xs text-gray-500 mt-0.5">
-                管理面板和 API 接口
+                {{ t('page.5bc237ecc128') }}
               </div>
             </div>
           </div>
@@ -760,9 +761,9 @@ onMounted(() => {
       <div v-if="certs.length > 0" class="card">
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-base font-medium text-gray-200 flex items-center gap-2">
-            <span class="text-lg">🔒</span> SSL 证书
+            <span class="text-lg">🔒</span> {{ t('page.afac7703f1fb') }}
           </h3>
-          <span class="text-xs text-gray-500">{{ certs.length }} 个证书</span>
+          <span class="text-xs text-gray-500">{{ certs.length }} {{ t('page.92c59766f25e') }}</span>
         </div>
         <div class="space-y-2">
           <div v-for="(cert, ci) in certs" :key="ci"
@@ -783,19 +784,19 @@ onMounted(() => {
       <div class="card">
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-base font-medium text-gray-200 flex items-center gap-2">
-            <span class="text-lg">⚖️</span> 转发集群
+            <span class="text-lg">⚖️</span> {{ t('page.4b0bdb2a5104') }}
           </h3>
           <div class="flex items-center gap-2">
-            <span class="text-xs text-gray-500">{{ clusters.length }} 个集群</span>
+            <span class="text-xs text-gray-500">{{ clusters.length }} {{ t('page.c3a5459903f2') }}</span>
             <button @click="navigateTo('/cluster-config')"
               class="btn btn-sm btn-secondary text-xs">
-              管理 →
+              {{ t('page.d2257df342ab') }}
             </button>
           </div>
         </div>
 
         <div v-if="clusters.length === 0" class="text-sm text-gray-500 py-4 text-center">
-          暂无转发集群配置
+          {{ t('page.1a3f279e11eb') }}
         </div>
 
         <div v-else class="grid gap-3 sm:grid-cols-2">
@@ -818,7 +819,7 @@ onMounted(() => {
               </div>
             </div>
             <div class="mt-2 pt-2 border-t border-dark-border/50 text-xs text-gray-500">
-              {{ cluster.destinationCount }} 个目标节点
+              {{ cluster.destinationCount }} {{ t('page.a7500576c662') }}
             </div>
           </div>
         </div>
@@ -832,10 +833,10 @@ onMounted(() => {
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] overflow-y-auto">
           <div class="flex items-center justify-between px-5 py-4 border-b border-dark-border">
             <h3 class="text-base font-semibold text-gray-100">
-              {{ addStep === 'type' ? '选择服务类型' : `新增${serviceTypeLabel(addServiceType)}` }}
+              {{ addStep === 'type' ? t('page.adfc5ace573e') : t('page.798b4f3bb40b', { p0: serviceTypeLabel(addServiceType) }) }}
             </h3>
             <div class="flex items-center gap-2 text-xs text-gray-500">
-              <span class="font-mono">端口 {{ addPort }}</span>
+              <span class="font-mono">{{ t('fields.Port') }} {{ addPort }}</span>
               <button @click="showAddDialog = false" class="text-gray-400 hover:text-gray-200 text-lg ml-2">×</button>
             </div>
           </div>
@@ -846,24 +847,24 @@ onMounted(() => {
               class="w-full flex items-center gap-4 p-4 rounded-lg bg-dark-sidebar border border-dark-border hover:border-violet-500/40 transition-colors text-left">
               <div class="w-10 h-10 rounded-lg bg-violet-500/15 text-violet-400 flex items-center justify-center text-lg font-bold">R</div>
               <div>
-                <div class="text-sm font-medium text-gray-200">简单响应</div>
-                <div class="text-xs text-gray-500 mt-0.5">返回固定内容，可用于健康检查、接口 mock 等</div>
+                <div class="text-sm font-medium text-gray-200">{{ t('nav.responses') }}</div>
+                <div class="text-xs text-gray-500 mt-0.5">{{ t('page.a237b8a0e4a4') }}</div>
               </div>
             </button>
             <button @click="selectType('fileserver')"
               class="w-full flex items-center gap-4 p-4 rounded-lg bg-dark-sidebar border border-dark-border hover:border-emerald-500/40 transition-colors text-left">
               <div class="w-10 h-10 rounded-lg bg-emerald-500/15 text-emerald-400 flex items-center justify-center text-lg font-bold">F</div>
               <div>
-                <div class="text-sm font-medium text-gray-200">文件服务</div>
-                <div class="text-xs text-gray-500 mt-0.5">提供静态文件访问，支持目录浏览</div>
+                <div class="text-sm font-medium text-gray-200">{{ t('nav.files') }}</div>
+                <div class="text-xs text-gray-500 mt-0.5">{{ t('page.24de4e283a98') }}</div>
               </div>
             </button>
             <button @click="selectType('proxy')"
               class="w-full flex items-center gap-4 p-4 rounded-lg bg-dark-sidebar border border-dark-border hover:border-blue-500/40 transition-colors text-left">
               <div class="w-10 h-10 rounded-lg bg-blue-500/15 text-blue-400 flex items-center justify-center text-lg font-bold">P</div>
               <div>
-                <div class="text-sm font-medium text-gray-200">后台代理</div>
-                <div class="text-xs text-gray-500 mt-0.5">将请求转发到后端集群</div>
+                <div class="text-sm font-medium text-gray-200">{{ t('page.a2b10f6cd3d7') }}</div>
+                <div class="text-xs text-gray-500 mt-0.5">{{ t('page.ee95b386f119') }}</div>
               </div>
             </button>
           </div>
@@ -871,24 +872,24 @@ onMounted(() => {
           <!-- 步骤 2: 填写表单 -->
           <div v-else class="p-5 space-y-4">
             <button @click="addStep = 'type'" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">
-              ← 选择其他类型
+              {{ t('page.ac0bd6b60998') }}
             </button>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">ID <span class="text-gray-600">(唯一标识)</span></label>
+              <label class="block text-xs text-gray-400 mb-1">ID <span class="text-gray-600">{{ t('page.9369671e2469') }}</span></label>
               <input v-model="addForm.itemId" type="text"
-                class="input w-full font-mono text-sm" placeholder="如: simpleres_health" />
+                class="input w-full font-mono text-sm" :placeholder="t('page.6e9fc0e932c5')" />
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">匹配路径</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('page.4695bbcd03e4') }}</label>
               <input v-model="addForm.path" type="text"
                 class="input w-full font-mono text-sm" placeholder="{**catch-all}" />
             </div>
             <!-- Hosts 动态数组 -->
             <div>
               <div class="flex items-center justify-between mb-1">
-                <label class="text-xs text-gray-400">Hosts <span class="text-gray-600">(域名:端口)</span></label>
+                <label class="text-xs text-gray-400">Hosts <span class="text-gray-600">{{ t('page.b0ccc48d53ee') }}</span></label>
                 <button type="button" @click="addHosts.push('')"
-                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">{{ t('page.42bb5c118d25') }}</button>
               </div>
               <div class="space-y-2">
                 <div v-for="(_h, hi) in addHosts" :key="hi" class="flex items-center gap-2">
@@ -901,13 +902,13 @@ onMounted(() => {
             </div>
             <!-- Order 优先级 -->
             <div>
-              <label class="block text-xs text-gray-400 mb-1">Order 优先级 <span class="text-gray-600">(留空自动分配)</span></label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('page.867fb5b1c3e1') }} <span class="text-gray-600">{{ t('page.1ddf0a3405d8') }}</span></label>
               <input v-model.number="addForm.order" type="number"
-                class="input w-full font-mono text-sm" placeholder="留空则自动从 1000 开始分配" />
+                class="input w-full font-mono text-sm" :placeholder="t('page.c876d248ef7f')" />
             </div>
             <template v-if="addServiceType === 'simpleres'">
               <div>
-                <label class="block text-xs text-gray-400 mb-1">响应内容</label>
+                <label class="block text-xs text-gray-400 mb-1">{{ t('dashboard.response.body') }}</label>
                 <textarea v-model="addForm.body" rows="3"
                   class="input w-full font-mono text-sm resize-y" placeholder="Hello World"></textarea>
               </div>
@@ -917,17 +918,17 @@ onMounted(() => {
                   <select v-if="!addCtCustom" :value="addForm.contentType" @change="onAddCtSelect"
                     class="input w-full font-mono text-sm">
                     <option v-for="ct in contentTypeOptions" :key="ct" :value="ct">{{ ct }}</option>
-                    <option value="__custom__">自定义...</option>
+                    <option value="__custom__">{{ t('page.f95208bf93e5') }}</option>
                   </select>
                   <div v-else class="flex items-center gap-2">
                     <input v-model="addForm.contentType" type="text"
-                      class="input flex-1 font-mono text-sm" placeholder="输入 Content-Type" />
+                      class="input flex-1 font-mono text-sm" :placeholder="t('page.d4554b494a59')" />
                     <button type="button" @click="addCtCustom = false; addForm.contentType = contentTypeOptions[0]"
-                      class="text-xs text-primary-400 hover:text-primary-300 transition-colors whitespace-nowrap">预设</button>
+                      class="text-xs text-primary-400 hover:text-primary-300 transition-colors whitespace-nowrap">{{ t('page.f1de1e2621de') }}</button>
                   </div>
                 </div>
                 <div>
-                  <label class="block text-xs text-gray-400 mb-1">状态码</label>
+                  <label class="block text-xs text-gray-400 mb-1">{{ t('page.06f7d7341212') }}</label>
                   <input v-model.number="addForm.statusCode" type="number" min="100" max="599"
                     class="input w-full text-sm" />
                 </div>
@@ -935,18 +936,18 @@ onMounted(() => {
               <!-- 自定义 Headers -->
               <div>
                 <div class="flex items-center justify-between mb-1">
-                  <label class="text-xs text-gray-400">自定义 Headers</label>
+                  <label class="text-xs text-gray-400">{{ t('page.12ae77e6202d') }}</label>
                   <button type="button" @click="addForm.headers.push({ key: '', value: '' })"
-                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors">{{ t('page.42bb5c118d25') }}</button>
                 </div>
                 <div v-if="addForm.headers.length === 0" class="text-xs text-gray-600 py-1">
-                  暂无自定义 Header
+                  {{ t('page.71d8fb6df466') }}
                 </div>
                 <div v-else class="space-y-2">
                   <div v-for="(h, hi) in addForm.headers" :key="hi" class="flex items-center gap-2">
-                    <input v-model="h.key" type="text" placeholder="Header 名"
+                    <input v-model="h.key" type="text" :placeholder="t('page.5bc55cef48e0')"
                       class="input flex-1 font-mono text-sm" />
-                    <input v-model="h.value" type="text" placeholder="值"
+                    <input v-model="h.value" type="text" :placeholder="t('common.value')"
                       class="input flex-1 font-mono text-sm" />
                     <button type="button" @click="addForm.headers.splice(hi, 1)"
                       class="text-gray-500 hover:text-red-400 transition-colors text-sm px-1 flex-shrink-0">×</button>
@@ -956,54 +957,54 @@ onMounted(() => {
             </template>
             <template v-if="addServiceType === 'fileserver'">
               <div>
-                <label class="block text-xs text-gray-400 mb-1">目录路径 (BasePath)</label>
+                <label class="block text-xs text-gray-400 mb-1">{{ t('page.f33b8f56b366') }}</label>
                 <input v-model="addForm.basePath" type="text"
                   class="input w-full font-mono text-sm" placeholder="./wwwroot" />
               </div>
               <div>
-                <label class="block text-xs text-gray-400 mb-1">URL 前缀 (Prefix)</label>
+                <label class="block text-xs text-gray-400 mb-1">{{ t('page.78cd447f6f06') }}</label>
                 <input v-model="addForm.prefix" type="text"
                   class="input w-full font-mono text-sm" placeholder="/" />
               </div>
               <div class="grid grid-cols-2 gap-3">
                 <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
                   <input type="checkbox" v-model="addForm.browse" class="rounded border-gray-600" />
-                  <span>允许浏览目录</span>
+                  <span>{{ t('page.f8af9c5e626f') }}</span>
                 </label>
                 <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
                   <input type="checkbox" v-model="addForm.preCompressed" class="rounded border-gray-600" />
-                  <span>预压缩文件</span>
+                  <span>{{ t('page.d36e4e4adc22') }}</span>
                 </label>
               </div>
               <div>
-                <label class="block text-xs text-gray-400 mb-1">TryFiles <span class="text-gray-600">(逗号分隔)</span></label>
+                <label class="block text-xs text-gray-400 mb-1">TryFiles <span class="text-gray-600">{{ t('page.ed111dcc5927') }}</span></label>
                 <input v-model="addForm.tryFiles" type="text"
                   class="input w-full font-mono text-sm" placeholder="$path, index.html" />
               </div>
               <div>
-                <label class="block text-xs text-gray-400 mb-1">DefaultFiles <span class="text-gray-600">(逗号分隔)</span></label>
+                <label class="block text-xs text-gray-400 mb-1">DefaultFiles <span class="text-gray-600">{{ t('page.ed111dcc5927') }}</span></label>
                 <input v-model="addForm.defaultFiles" type="text"
                   class="input w-full font-mono text-sm" placeholder="index.html, index.htm" />
               </div>
             </template>
             <template v-if="addServiceType === 'proxy'">
               <div>
-                <label class="block text-xs text-gray-400 mb-1">目标集群</label>
+                <label class="block text-xs text-gray-400 mb-1">{{ t('page.409565081c33') }}</label>
                 <select v-model="addForm.clusterId" class="input w-full text-sm">
-                  <option v-if="clusterOptions.length === 0" disabled value="">暂无集群</option>
+                  <option v-if="clusterOptions.length === 0" disabled value="">{{ t('page.25b2d08665bf') }}</option>
                   <option v-for="cid in clusterOptions" :key="cid" :value="cid">{{ cid }}</option>
                 </select>
                 <p v-if="clusterOptions.length === 0" class="text-xs text-amber-400 mt-1">
-                  请先在集群管理页面创建集群
+                  {{ t('page.6f7d1ec50362') }}
                 </p>
               </div>
             </template>
             <div class="pt-2 border-t border-dark-border/50">
               <div class="flex justify-end gap-2">
-                <button @click="showAddDialog = false" class="btn btn-sm btn-secondary">取消</button>
+                <button @click="showAddDialog = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
                 <button @click="submitAdd" :disabled="saving" class="btn btn-sm btn-primary flex items-center gap-1.5">
                   <span v-if="saving" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-                  <span>确认添加</span>
+                  <span>{{ t('page.72dde8dfef88') }}</span>
                 </button>
               </div>
             </div>
@@ -1020,7 +1021,7 @@ onMounted(() => {
           <!-- 头部 -->
           <div class="flex items-center justify-between px-5 py-4 border-b border-dark-border">
             <h3 class="text-base font-semibold text-gray-100">
-              编辑{{ serviceTypeLabel(editRoute.serviceType) }}
+              {{ t('common.edit') }}{{ serviceTypeLabel(editRoute.serviceType) }}
               <span class="font-mono text-sm text-gray-400 ml-2">{{ editRoute.routeId }}</span>
             </h3>
             <button @click="showEditDialog = false" class="text-gray-400 hover:text-gray-200 text-lg">×</button>
@@ -1029,17 +1030,17 @@ onMounted(() => {
           <!-- 加载中 -->
           <div v-if="editLoading" class="p-8 flex items-center justify-center">
             <span class="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></span>
-            <span class="ml-2 text-sm text-gray-400">加载配置...</span>
+            <span class="ml-2 text-sm text-gray-400">{{ t('plugins.loadingConfig') }}</span>
           </div>
 
           <!-- 简单响应编辑表单 -->
           <div v-else-if="editRoute.serviceType === 'simpleres'" class="p-5 space-y-4">
             <div>
               <label class="block text-xs text-gray-400 mb-1">
-                Body <span class="text-gray-600">(支持占位符: {PORT}, {HOST}, {PATH} 等)</span>
+                Body <span class="text-gray-600">{{ t('page.a5eaa7bfed47') }}</span>
               </label>
               <textarea v-model="editSimpleRes.body" rows="4"
-                class="input w-full font-mono text-sm resize-y" placeholder="响应内容"></textarea>
+                class="input w-full font-mono text-sm resize-y" :placeholder="t('dashboard.response.body')"></textarea>
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div>
@@ -1047,13 +1048,13 @@ onMounted(() => {
                 <select v-if="!editCtCustom" :value="editSimpleRes.contentType" @change="onEditCtSelect"
                   class="input w-full font-mono text-sm">
                   <option v-for="ct in contentTypeOptions" :key="ct" :value="ct">{{ ct }}</option>
-                  <option value="__custom__">自定义...</option>
+                  <option value="__custom__">{{ t('page.f95208bf93e5') }}</option>
                 </select>
                 <div v-else class="flex items-center gap-2">
                   <input v-model="editSimpleRes.contentType" type="text"
-                    class="input flex-1 font-mono text-sm" placeholder="输入 Content-Type" />
+                    class="input flex-1 font-mono text-sm" :placeholder="t('page.d4554b494a59')" />
                   <button type="button" @click="editCtCustom = false; editSimpleRes.contentType = contentTypeOptions[0]"
-                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors whitespace-nowrap">预设</button>
+                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors whitespace-nowrap">{{ t('page.f1de1e2621de') }}</button>
                 </div>
               </div>
               <div>
@@ -1083,18 +1084,18 @@ onMounted(() => {
             <!-- 自定义 Headers -->
             <div>
               <div class="flex items-center justify-between mb-1">
-                <label class="text-xs text-gray-400">自定义 Headers</label>
+                <label class="text-xs text-gray-400">{{ t('page.12ae77e6202d') }}</label>
                 <button type="button" @click="editSimpleRes.headers.push({ key: '', value: '' })"
-                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">{{ t('page.42bb5c118d25') }}</button>
               </div>
               <div v-if="editSimpleRes.headers.length === 0" class="text-xs text-gray-600 py-1">
-                暂无自定义 Header
+                {{ t('page.71d8fb6df466') }}
               </div>
               <div v-else class="space-y-2">
                 <div v-for="(h, hi) in editSimpleRes.headers" :key="hi" class="flex items-center gap-2">
-                  <input v-model="h.key" type="text" placeholder="Header 名"
+                  <input v-model="h.key" type="text" :placeholder="t('page.5bc55cef48e0')"
                     class="input flex-1 font-mono text-sm" />
-                  <input v-model="h.value" type="text" placeholder="值"
+                  <input v-model="h.value" type="text" :placeholder="t('common.value')"
                     class="input flex-1 font-mono text-sm" />
                   <button type="button" @click="editSimpleRes.headers.splice(hi, 1)"
                     class="text-gray-500 hover:text-red-400 transition-colors text-sm px-1 flex-shrink-0">×</button>
@@ -1104,7 +1105,7 @@ onMounted(() => {
             <!-- 路由配置：Path / Order -->
             <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="block text-xs text-gray-400 mb-1">匹配路径 (Path)</label>
+                <label class="block text-xs text-gray-400 mb-1">{{ t('page.0d321c95a8e5') }}</label>
                 <input v-model="editSimpleRes.path" type="text"
                   class="input w-full font-mono text-sm" placeholder="{**catch-all}" />
               </div>
@@ -1117,11 +1118,11 @@ onMounted(() => {
             <!-- Hosts 编辑 -->
             <div>
               <div class="flex items-center justify-between mb-1">
-                <label class="text-xs text-gray-400">Hosts <span class="text-gray-600">(域名:端口)</span></label>
+                <label class="text-xs text-gray-400">Hosts <span class="text-gray-600">{{ t('page.b0ccc48d53ee') }}</span></label>
                 <button type="button" @click="editHosts.push('')"
-                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">{{ t('page.42bb5c118d25') }}</button>
               </div>
-              <div v-if="editHosts.length === 0" class="text-xs text-gray-600 py-1">无 Host 限制（匹配所有端口）</div>
+              <div v-if="editHosts.length === 0" class="text-xs text-gray-600 py-1">{{ t('page.83c6e34d9977') }}</div>
               <div v-else class="space-y-2">
                 <div v-for="(_h, hi) in editHosts" :key="hi" class="flex items-center gap-2">
                   <input v-model="editHosts[hi]" type="text"
@@ -1132,10 +1133,10 @@ onMounted(() => {
               </div>
             </div>
             <div class="flex justify-end gap-2 pt-2 border-t border-dark-border/50">
-              <button @click="showEditDialog = false" class="btn btn-sm btn-secondary">取消</button>
+              <button @click="showEditDialog = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
               <button @click="submitEdit" :disabled="editSaving" class="btn btn-sm btn-primary flex items-center gap-1.5">
                 <span v-if="editSaving" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-                <span>确定</span>
+                <span>{{ t('common.confirm') }}</span>
               </button>
             </div>
           </div>
@@ -1143,39 +1144,39 @@ onMounted(() => {
           <!-- 文件服务编辑表单 -->
           <div v-else-if="editRoute.serviceType === 'fileserver'" class="p-5 space-y-4">
             <div>
-              <label class="block text-xs text-gray-400 mb-1">目录路径 (BasePath)</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('page.f33b8f56b366') }}</label>
               <input v-model="editFileServer.basePath" type="text"
                 class="input w-full font-mono text-sm" placeholder="./wwwroot" />
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">URL 前缀 (Prefix)</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('page.78cd447f6f06') }}</label>
               <input v-model="editFileServer.prefix" type="text"
                 class="input w-full font-mono text-sm" placeholder="/" />
             </div>
             <div class="grid grid-cols-2 gap-3">
               <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
                 <input type="checkbox" v-model="editFileServer.browse" class="rounded border-gray-600" />
-                <span>允许浏览目录</span>
+                <span>{{ t('page.f8af9c5e626f') }}</span>
               </label>
               <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
                 <input type="checkbox" v-model="editFileServer.preCompressed" class="rounded border-gray-600" />
-                <span>预压缩文件</span>
+                <span>{{ t('page.d36e4e4adc22') }}</span>
               </label>
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">TryFiles <span class="text-gray-600">(逗号分隔)</span></label>
+              <label class="block text-xs text-gray-400 mb-1">TryFiles <span class="text-gray-600">{{ t('page.ed111dcc5927') }}</span></label>
               <input v-model="editFileServer.tryFiles" type="text"
                 class="input w-full font-mono text-sm" placeholder="$path, index.html" />
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">DefaultFiles <span class="text-gray-600">(逗号分隔)</span></label>
+              <label class="block text-xs text-gray-400 mb-1">DefaultFiles <span class="text-gray-600">{{ t('page.ed111dcc5927') }}</span></label>
               <input v-model="editFileServer.defaultFiles" type="text"
                 class="input w-full font-mono text-sm" placeholder="index.html, index.htm" />
             </div>
             <!-- 路由配置：Path / Order -->
             <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="block text-xs text-gray-400 mb-1">匹配路径 (Path)</label>
+                <label class="block text-xs text-gray-400 mb-1">{{ t('page.0d321c95a8e5') }}</label>
                 <input v-model="editFileServer.path" type="text"
                   class="input w-full font-mono text-sm" placeholder="{**catch-all}" />
               </div>
@@ -1188,11 +1189,11 @@ onMounted(() => {
             <!-- Hosts 编辑 -->
             <div>
               <div class="flex items-center justify-between mb-1">
-                <label class="text-xs text-gray-400">Hosts <span class="text-gray-600">(域名:端口)</span></label>
+                <label class="text-xs text-gray-400">Hosts <span class="text-gray-600">{{ t('page.b0ccc48d53ee') }}</span></label>
                 <button type="button" @click="editHosts.push('')"
-                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">{{ t('page.42bb5c118d25') }}</button>
               </div>
-              <div v-if="editHosts.length === 0" class="text-xs text-gray-600 py-1">无 Host 限制（匹配所有端口）</div>
+              <div v-if="editHosts.length === 0" class="text-xs text-gray-600 py-1">{{ t('page.83c6e34d9977') }}</div>
               <div v-else class="space-y-2">
                 <div v-for="(_h, hi) in editHosts" :key="hi" class="flex items-center gap-2">
                   <input v-model="editHosts[hi]" type="text"
@@ -1203,10 +1204,10 @@ onMounted(() => {
               </div>
             </div>
             <div class="flex justify-end gap-2 pt-2 border-t border-dark-border/50">
-              <button @click="showEditDialog = false" class="btn btn-sm btn-secondary">取消</button>
+              <button @click="showEditDialog = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
               <button @click="submitEdit" :disabled="editSaving" class="btn btn-sm btn-primary flex items-center gap-1.5">
                 <span v-if="editSaving" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-                <span>确定</span>
+                <span>{{ t('common.confirm') }}</span>
               </button>
             </div>
           </div>
@@ -1214,24 +1215,24 @@ onMounted(() => {
           <!-- 代理路由编辑表单 -->
           <div v-else class="p-5 space-y-4">
             <div>
-              <label class="block text-xs text-gray-400 mb-1">目标集群 (ClusterId)</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('page.1f05c33b3667') }}</label>
               <select v-model="editProxy.clusterId" class="input w-full text-sm">
                 <option v-for="cid in clusterOptions" :key="cid" :value="cid">{{ cid }}</option>
               </select>
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">匹配路径 (Path)</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('page.0d321c95a8e5') }}</label>
               <input v-model="editProxy.path" type="text"
                 class="input w-full font-mono text-sm" placeholder="{**catch-all}" />
             </div>
             <!-- Hosts 编辑 -->
             <div>
               <div class="flex items-center justify-between mb-1">
-                <label class="text-xs text-gray-400">Hosts <span class="text-gray-600">(域名:端口)</span></label>
+                <label class="text-xs text-gray-400">Hosts <span class="text-gray-600">{{ t('page.b0ccc48d53ee') }}</span></label>
                 <button type="button" @click="editHosts.push('')"
-                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">{{ t('page.42bb5c118d25') }}</button>
               </div>
-              <div v-if="editHosts.length === 0" class="text-xs text-gray-600 py-1">无 Host 限制（匹配所有端口）</div>
+              <div v-if="editHosts.length === 0" class="text-xs text-gray-600 py-1">{{ t('page.83c6e34d9977') }}</div>
               <div v-else class="space-y-2">
                 <div v-for="(_h, hi) in editHosts" :key="hi" class="flex items-center gap-2">
                   <input v-model="editHosts[hi]" type="text"
@@ -1243,7 +1244,7 @@ onMounted(() => {
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="block text-xs text-gray-400 mb-1">Methods <span class="text-gray-600">(逗号分隔)</span></label>
+                <label class="block text-xs text-gray-400 mb-1">Methods <span class="text-gray-600">{{ t('page.ed111dcc5927') }}</span></label>
                 <input v-model="editProxy.methods" type="text"
                   class="input w-full font-mono text-sm" placeholder="GET, POST" />
               </div>
@@ -1254,10 +1255,10 @@ onMounted(() => {
               </div>
             </div>
             <div class="flex justify-end gap-2 pt-2 border-t border-dark-border/50">
-              <button @click="showEditDialog = false" class="btn btn-sm btn-secondary">取消</button>
+              <button @click="showEditDialog = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
               <button @click="submitEdit" :disabled="editSaving" class="btn btn-sm btn-primary flex items-center gap-1.5">
                 <span v-if="editSaving" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-                <span>确定</span>
+                <span>{{ t('common.confirm') }}</span>
               </button>
             </div>
           </div>
@@ -1271,18 +1272,18 @@ onMounted(() => {
         <div class="absolute inset-0 bg-black/60" @click="confirmDeleteRoute = null"></div>
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-sm mx-4">
           <div class="p-5">
-            <h3 class="text-base font-semibold text-gray-100 mb-3">确认删除</h3>
+            <h3 class="text-base font-semibold text-gray-100 mb-3">{{ t('settings.confirm.deletion') }}</h3>
             <p class="text-sm text-gray-400 mb-1">
-              确定要删除以下{{ serviceTypeLabel(confirmDeleteRoute.serviceType) }}吗？
+              {{ t('page.d2f629cc5722') }}{{ serviceTypeLabel(confirmDeleteRoute.serviceType) }}{{ t('page.9d45d8943988') }}
             </p>
             <p class="font-mono text-sm text-gray-300 mb-4 bg-dark-sidebar rounded px-3 py-2 border border-dark-border">
               {{ confirmDeleteRoute.routeId }}
             </p>
             <div class="flex justify-end gap-2">
-              <button @click="confirmDeleteRoute = null" class="btn btn-sm btn-secondary">取消</button>
+              <button @click="confirmDeleteRoute = null" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
               <button @click="executeDelete" :disabled="!!deleting" class="btn btn-sm bg-red-600 hover:bg-red-500 text-white flex items-center gap-1.5">
                 <span v-if="deleting" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-                <span>确认删除</span>
+                <span>{{ t('settings.confirm.deletion') }}</span>
               </button>
             </div>
           </div>
@@ -1296,17 +1297,17 @@ onMounted(() => {
         <div class="absolute inset-0 bg-black/60" @click="confirmDeleteListen = null"></div>
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-sm mx-4">
           <div class="p-5">
-            <h3 class="text-base font-semibold text-gray-100 mb-3">确认删除监听端口</h3>
-            <p class="text-sm text-gray-400 mb-1">确定要删除以下监听端口吗？删除后需要重启才能生效。</p>
+            <h3 class="text-base font-semibold text-gray-100 mb-3">{{ t('page.37797d3dfe28') }}</h3>
+            <p class="text-sm text-gray-400 mb-1">{{ t('page.65a2b420f448') }}</p>
             <p class="font-mono text-sm text-gray-300 mb-4 bg-dark-sidebar rounded px-3 py-2 border border-dark-border">
               {{ confirmDeleteListen.host }}:{{ confirmDeleteListen.port }}
               <span v-if="confirmDeleteListen.isHttps" class="text-green-400 ml-1">(HTTPS)</span>
             </p>
             <div class="flex justify-end gap-2">
-              <button @click="confirmDeleteListen = null" class="btn btn-sm btn-secondary">取消</button>
+              <button @click="confirmDeleteListen = null" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
               <button @click="executeDeleteListen" :disabled="deletingListen" class="btn btn-sm bg-red-600 hover:bg-red-500 text-white flex items-center gap-1.5">
                 <span v-if="deletingListen" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-                <span>确认删除</span>
+                <span>{{ t('settings.confirm.deletion') }}</span>
               </button>
             </div>
           </div>
@@ -1320,33 +1321,33 @@ onMounted(() => {
         <div class="absolute inset-0 bg-black/60" @click="showListenDialog = false"></div>
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-sm mx-4">
           <div class="flex items-center justify-between px-5 py-4 border-b border-dark-border">
-            <h3 class="text-base font-semibold text-gray-100">新增监听端口</h3>
+            <h3 class="text-base font-semibold text-gray-100">{{ t('page.e3039d65951e') }}</h3>
             <button @click="showListenDialog = false" class="text-gray-400 hover:text-gray-200 text-lg">×</button>
           </div>
           <div class="p-5 space-y-4">
             <div>
-              <label class="block text-xs text-gray-400 mb-1">监听地址 <span class="text-gray-600">(IP 地址)</span></label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('ui.listening.addresses') }} <span class="text-gray-600">{{ t('page.f7d7202d0ff5') }}</span></label>
               <input v-model="listenForm.host" type="text"
                 class="input w-full font-mono text-sm" placeholder="0.0.0.0" />
               <p v-if="listenForm.host && !isValidIP(listenForm.host)" class="text-xs text-red-400 mt-1">
-                请输入合法的 IP 地址（如 0.0.0.0、127.0.0.1、::）
+                {{ t('page.6a730e19448f') }}
               </p>
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">端口号</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('page.7830f101b9ac') }}</label>
               <input v-model.number="listenForm.port" type="number" min="1" max="65535"
                 class="input w-full text-sm" placeholder="5080" />
             </div>
             <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
               <input type="checkbox" v-model="listenForm.isHttps" class="rounded border-gray-600" />
-              <span>启用 HTTPS</span>
+              <span>{{ t('page.30294cdffec7') }}</span>
             </label>
             <!-- Hosts 绑定地址 -->
             <div>
               <div class="flex items-center justify-between mb-1">
-                <label class="text-xs text-gray-400">Hosts 绑定 <span class="text-gray-600">(可选，留空表示匹配所有)</span></label>
+                <label class="text-xs text-gray-400">{{ t('page.5c24e897781f') }} <span class="text-gray-600">{{ t('page.173c70b97740') }}</span></label>
                 <button type="button" @click="listenHosts.push('')"
-                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加</button>
+                  class="text-xs text-primary-400 hover:text-primary-300 transition-colors">{{ t('page.42bb5c118d25') }}</button>
               </div>
               <div class="space-y-2">
                 <div v-for="(_h, hi) in listenHosts" :key="hi" class="flex items-center gap-2">
@@ -1356,13 +1357,13 @@ onMounted(() => {
                     class="text-gray-500 hover:text-red-400 transition-colors text-sm px-1 flex-shrink-0">×</button>
                 </div>
               </div>
-              <p class="text-xs text-gray-600 mt-1">用于路由匹配，如 *:5080、localhost:5080</p>
+              <p class="text-xs text-gray-600 mt-1">{{ t('page.71cde0218095') }}</p>
             </div>
             <div class="flex justify-end gap-2 pt-2 border-t border-dark-border/50">
-              <button @click="showListenDialog = false" class="btn btn-sm btn-secondary">取消</button>
+              <button @click="showListenDialog = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
               <button @click="submitListen" :disabled="listenSaving" class="btn btn-sm btn-primary flex items-center gap-1.5">
                 <span v-if="listenSaving" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-                <span>确认添加</span>
+                <span>{{ t('page.72dde8dfef88') }}</span>
               </button>
             </div>
           </div>
@@ -1376,18 +1377,18 @@ onMounted(() => {
         <div class="absolute inset-0 bg-black/60" @click="showRestartConfirm = false"></div>
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-sm mx-4">
           <div class="p-5">
-            <h3 class="text-base font-semibold text-gray-100 mb-3">是否立即重启？</h3>
+            <h3 class="text-base font-semibold text-gray-100 mb-3">{{ t('page.95aa1f40bc8e') }}</h3>
             <p class="text-sm text-gray-400 mb-4">
-              监听端口变更需要重启服务才能生效。确定要立即重启吗？
+              {{ t('page.521dc0a949a2') }}
             </p>
             <div class="text-xs text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 mb-4">
-              重启期间服务将短暂不可用
+              {{ t('page.2cd99849dc68') }}
             </div>
             <div class="flex justify-end gap-2">
-              <button @click="showRestartConfirm = false" class="btn btn-sm btn-secondary">稍后重启</button>
+              <button @click="showRestartConfirm = false" class="btn btn-sm btn-secondary">{{ t('page.5b31f09799a8') }}</button>
               <button @click="confirmRestart" :disabled="restarting" class="btn btn-sm bg-amber-600 hover:bg-amber-500 text-white flex items-center gap-1.5">
                 <span v-if="restarting" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-                <span>立即重启</span>
+                <span>{{ t('page.700b6c80d954') }}</span>
               </button>
             </div>
           </div>

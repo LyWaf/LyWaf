@@ -16,6 +16,7 @@ public class RequestLoggerPlugin : LyWafPluginBase
     private readonly PluginMetadata _metadata = new()
     {
         Id = "request-logger",
+        LocalizationResourcePrefix = "LyWaf.Plugins.Examples.RequestLogger.Localization",
         Name = "请求日志记录器",
         Version = "1.0.0",
         Description = "记录 HTTP 请求详细信息，支持域名/URL 过滤、请求体/响应体记录、独立日志文件",

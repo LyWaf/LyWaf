@@ -1,4 +1,6 @@
 {
+  "metadata.name": "HTTP upload",
+  "metadata.description": "HMAC-SHA256 signed uploads with optional safe ZIP extraction",
   "fields.Enabled": "Enabled",
   "fields.Path": "Request path",
   "fields.Hosts": "Allowed hosts",

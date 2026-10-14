@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { t } from '@/i18n'
 
 export const stepUpOpen = ref(false)
 let pending: Promise<string> | null = null
@@ -14,7 +15,7 @@ export function requestStepUp(): Promise<string> {
 
 export function finishStepUp(proof?: string) {
   if (proof) resolvePending?.(proof)
-  else rejectPending?.(new Error('已取消身份验证'))
+  else rejectPending?.(new Error(t('auth.cancelled')))
   stepUpOpen.value = false
   pending = null
   resolvePending = undefined

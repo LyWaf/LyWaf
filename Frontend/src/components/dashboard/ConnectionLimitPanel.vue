@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, onMounted } from 'vue'
 import { connectionLimitApi } from '@/api'
 import { useToast } from '@/composables/useToast'
@@ -36,7 +37,7 @@ const loadConfig = async () => {
       stats.value = res.stats || stats.value
     }
   } catch (e) {
-    console.error('加载连接限制配置失败:', e)
+    console.error(t('page.ee841a2c7f38'), e)
   } finally {
     loading.value = false
   }
@@ -50,7 +51,7 @@ const toggle = async () => {
       showSuccess(res.message)
     }
   } catch {
-    showError('操作失败')
+    showError(t('settings.operation.failed'))
   }
 }
 
@@ -67,7 +68,7 @@ const cancelEdit = () => {
 const saveEdit = async () => {
   const val = parseInt(editValue.value)
   if (isNaN(val) || val < 0) {
-    showError('请输入有效数字')
+    showError(t('page.d1e6c6f01819'))
     return
   }
   const field = editingField.value
@@ -78,13 +79,13 @@ const saveEdit = async () => {
     else if (field === 'maxTotal') config.maxTotalConnections = val
     const res = await connectionLimitApi.update(config) as any
     if (res.success) {
-      showSuccess('配置已更新')
+      showSuccess(t('page.f3019e95edf6'))
       await loadConfig()
     } else {
-      showError(res.message || '更新失败')
+      showError(res.message || t('page.ec99e5c45d64'))
     }
   } catch {
-    showError('更新失败')
+    showError(t('page.ec99e5c45d64'))
   } finally {
     cancelEdit()
   }
@@ -94,7 +95,7 @@ const addPathLimit = async () => {
   const path = newPath.value.trim()
   const max = parseInt(newPathMax.value)
   if (!path || isNaN(max) || max <= 0) {
-    showError('请输入有效的路径和最大连接数')
+    showError(t('page.10c9e285ffa8'))
     return
   }
   try {
@@ -105,10 +106,10 @@ const addPathLimit = async () => {
       showSuccess(res.message)
       await loadConfig()
     } else {
-      showError(res.message || '添加失败')
+      showError(res.message || t('dashboard.failed.to.add'))
     }
   } catch {
-    showError('添加失败')
+    showError(t('dashboard.failed.to.add'))
   }
 }
 
@@ -119,14 +120,14 @@ const removePathLimit = async (path: string) => {
       showSuccess(res.message)
       await loadConfig()
     } else {
-      showError(res.message || '移除失败')
+      showError(res.message || t('page.4757fc1d4709'))
     }
   } catch {
-    showError('移除失败')
+    showError(t('page.4757fc1d4709'))
   }
 }
 
-const formatValue = (val: number) => val === 0 ? '不限制' : String(val)
+const formatValue = (val: number) => val === 0 ? t('page.65feea2c2ba2') : String(val)
 
 onMounted(loadConfig)
 </script>
@@ -136,9 +137,9 @@ onMounted(loadConfig)
     <!-- 标题栏 -->
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
-        <h2 class="text-lg font-bold text-gray-100">并发连接限制</h2>
+        <h2 class="text-lg font-bold text-gray-100">{{ t('page.9c02c8961755') }}</h2>
         <span class="text-sm text-gray-500">
-          当前连接 {{ stats.totalConnections }}
+          {{ t('dashboard.active.connections') }} {{ stats.totalConnections }}
         </span>
       </div>
       <button
@@ -161,7 +162,7 @@ onMounted(loadConfig)
     <div class="grid grid-cols-3 gap-4 mb-5">
       <!-- 单 IP 最大连接数 -->
       <div class="bg-dark-card-hover rounded-lg p-3">
-        <div class="text-xs text-gray-500 mb-1">单 IP 最大连接数</div>
+        <div class="text-xs text-gray-500 mb-1">{{ t('page.9e2c059d6cc5') }}</div>
         <template v-if="editingField === 'maxPerIp'">
           <div class="flex items-center gap-1">
             <input
@@ -172,8 +173,8 @@ onMounted(loadConfig)
               @keyup.escape="cancelEdit"
               autofocus
             />
-            <button @click="saveEdit" class="text-xs text-primary-400 hover:text-primary-300">保存</button>
-            <button @click="cancelEdit" class="text-xs text-gray-400 hover:text-gray-300">取消</button>
+            <button @click="saveEdit" class="text-xs text-primary-400 hover:text-primary-300">{{ t('common.save') }}</button>
+            <button @click="cancelEdit" class="text-xs text-gray-400 hover:text-gray-300">{{ t('common.cancel') }}</button>
           </div>
         </template>
         <span
@@ -185,7 +186,7 @@ onMounted(loadConfig)
 
       <!-- 单后端最大连接数 -->
       <div class="bg-dark-card-hover rounded-lg p-3">
-        <div class="text-xs text-gray-500 mb-1">单后端最大连接数</div>
+        <div class="text-xs text-gray-500 mb-1">{{ t('page.e1585839b904') }}</div>
         <template v-if="editingField === 'maxPerDest'">
           <div class="flex items-center gap-1">
             <input
@@ -196,8 +197,8 @@ onMounted(loadConfig)
               @keyup.escape="cancelEdit"
               autofocus
             />
-            <button @click="saveEdit" class="text-xs text-primary-400 hover:text-primary-300">保存</button>
-            <button @click="cancelEdit" class="text-xs text-gray-400 hover:text-gray-300">取消</button>
+            <button @click="saveEdit" class="text-xs text-primary-400 hover:text-primary-300">{{ t('common.save') }}</button>
+            <button @click="cancelEdit" class="text-xs text-gray-400 hover:text-gray-300">{{ t('common.cancel') }}</button>
           </div>
         </template>
         <span
@@ -209,7 +210,7 @@ onMounted(loadConfig)
 
       <!-- 全局最大连接数 -->
       <div class="bg-dark-card-hover rounded-lg p-3">
-        <div class="text-xs text-gray-500 mb-1">全局最大连接数</div>
+        <div class="text-xs text-gray-500 mb-1">{{ t('page.e5373dd47d4c') }}</div>
         <template v-if="editingField === 'maxTotal'">
           <div class="flex items-center gap-1">
             <input
@@ -220,8 +221,8 @@ onMounted(loadConfig)
               @keyup.escape="cancelEdit"
               autofocus
             />
-            <button @click="saveEdit" class="text-xs text-primary-400 hover:text-primary-300">保存</button>
-            <button @click="cancelEdit" class="text-xs text-gray-400 hover:text-gray-300">取消</button>
+            <button @click="saveEdit" class="text-xs text-primary-400 hover:text-primary-300">{{ t('common.save') }}</button>
+            <button @click="cancelEdit" class="text-xs text-gray-400 hover:text-gray-300">{{ t('common.cancel') }}</button>
           </div>
         </template>
         <span
@@ -234,15 +235,15 @@ onMounted(loadConfig)
 
     <!-- 路径限制 -->
     <div>
-      <h3 class="text-sm font-medium text-gray-400 mb-2">路径连接限制</h3>
-      <p class="text-xs text-gray-500 mb-3">限制特定路径的最大并发连接数，0 表示不限制</p>
+      <h3 class="text-sm font-medium text-gray-400 mb-2">{{ t('page.7d15b43d3f73') }}</h3>
+      <p class="text-xs text-gray-500 mb-3">{{ t('page.4d2818ceeb99') }}</p>
 
       <!-- 添加 -->
       <div class="flex items-center gap-2 mb-3">
         <input
           v-model="newPath"
           type="text"
-          placeholder="路径，如 /api/*"
+          :placeholder="t('page.3ee4b3452967')"
           class="flex-1 input text-sm"
           @keyup.enter="addPathLimit"
         />
@@ -257,7 +258,7 @@ onMounted(loadConfig)
           @click="addPathLimit"
           :disabled="!newPath.trim()"
           class="btn btn-sm btn-primary"
-        >添加</button>
+        >{{ t('common.add') }}</button>
       </div>
 
       <!-- 列表 -->
@@ -270,11 +271,11 @@ onMounted(loadConfig)
           <code class="font-mono text-gray-300">{{ path }}</code>
           <div class="flex items-center gap-3">
             <span class="text-blue-400">{{ max }}</span>
-            <button @click="removePathLimit(String(path))" class="text-xs text-red-400 hover:text-red-300">移除</button>
+            <button @click="removePathLimit(String(path))" class="text-xs text-red-400 hover:text-red-300">{{ t('page.6135d4159e89') }}</button>
           </div>
         </div>
       </div>
-      <div v-else class="text-gray-500 text-sm text-center py-3">暂无路径连接限制</div>
+      <div v-else class="text-gray-500 text-sm text-center py-3">{{ t('page.7469456badd6') }}</div>
     </div>
   </div>
 </template>

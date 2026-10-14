@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import ListToolbar from '@/components/common/ListToolbar.vue'
 import { paramApi } from '@/api'
@@ -28,7 +29,7 @@ const loadConfig = async () => {
       isFirstServer.value = res.isFirstServer
     }
   } catch {
-    showError('加载参数配置失败')
+    showError(t('page.7ba74da2c4af'))
   } finally {
     loading.value = false
   }
@@ -49,7 +50,7 @@ const loadEnv = async () => {
       }
     }
   } catch {
-    if (request === envRequest) showError('加载环境变量失败')
+    if (request === envRequest) showError(t('page.74f59dab7bce'))
   } finally {
     if (request === envRequest) envLoading.value = false
   }
@@ -60,12 +61,12 @@ const handleSave = async () => {
   try {
     const res = await paramApi.update({ isFirstServer: isFirstServer.value }) as any
     if (res?.success) {
-      showSuccess(res.message || '参数配置已更新')
+      showSuccess(res.message || t('page.f07e7097578c'))
     } else {
-      showError(res?.message || '更新失败')
+      showError(res?.message || t('page.ec99e5c45d64'))
     }
   } catch {
-    showError('保存参数配置失败')
+    showError(t('page.237d1c2e13ea'))
   } finally {
     saving.value = false
   }
@@ -82,8 +83,8 @@ onMounted(() => {
     <!-- 页面标题 -->
     <div class="card">
       <div class="flex items-center gap-3">
-        <h2 class="text-lg font-semibold text-gray-100">参数配置</h2>
-        <span class="text-xs text-gray-500">运行时参数调整，部分选项也可在 config.ly 中通过 Param 块配置</span>
+        <h2 class="text-lg font-semibold text-gray-100">{{ t('nav.parameters') }}</h2>
+        <span class="text-xs text-gray-500">{{ t('page.251d8500948b') }}</span>
       </div>
     </div>
 
@@ -97,16 +98,15 @@ onMounted(() => {
       <div v-else class="space-y-6">
         <!-- 网络参数 -->
         <div>
-          <h3 class="text-sm font-medium text-gray-300 mb-4">网络参数</h3>
+          <h3 class="text-sm font-medium text-gray-300 mb-4">{{ t('page.a71d1f5ac5d1') }}</h3>
 
           <div class="space-y-4">
             <!-- 首台服务器 -->
             <div class="flex items-start justify-between p-4 bg-dark-card rounded-lg border border-dark-border">
               <div class="flex-1 mr-4">
-                <div class="text-sm text-gray-200 font-medium mb-1">当前为首台服务器</div>
+                <div class="text-sm text-gray-200 font-medium mb-1">{{ t('page.1647bc01c249') }}</div>
                 <div class="text-xs text-gray-500 leading-relaxed">
-                  启用后，获取客户端 IP 时将直接使用连接地址（RemoteIpAddress），忽略 X-Forwarded-For、X-Real-IP 等代理头。
-                  适用于 LyWaf 直接面对客户端、前面没有其他反向代理的部署场景。未启用时将优先从代理头中读取客户端真实 IP。
+                  {{ t('page.d88fa76aedfb') }}
                 </div>
               </div>
               <label class="relative inline-flex items-center cursor-pointer shrink-0 mt-0.5">
@@ -128,7 +128,7 @@ onMounted(() => {
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
             </svg>
             <span v-if="saving" class="w-3.5 h-3.5 border-2 border-gray-900 border-t-transparent rounded-full animate-spin"></span>
-            {{ saving ? '保存中...' : '保存配置' }}
+            {{ saving ? t('page.917b1c1f18d0') : t('plugins.saveConfig') }}
           </button>
         </div>
       </div>
@@ -138,8 +138,8 @@ onMounted(() => {
     <div class="card">
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
-          <h3 class="text-sm font-medium text-gray-300">环境变量</h3>
-          <span class="text-xs text-gray-500">共 {{ envTotal }} 个</span>
+          <h3 class="text-sm font-medium text-gray-300">{{ t('page.ae27b474ea4d') }}</h3>
+          <span class="text-xs text-gray-500">{{ t('page.76e547a8fa54') }} {{ envTotal }} {{ t('page.3a116815bc9d') }}</span>
         </div>
       </div>
       <ListToolbar v-model:page="envPage" v-model:search="envFilter" :total="envTotal" :busy="envLoading" @refresh="loadEnv" />
@@ -154,8 +154,8 @@ onMounted(() => {
         <table class="w-full text-sm">
           <thead class="sticky top-0 z-10">
             <tr class="text-left text-gray-400 border-b border-dark-border bg-dark-card">
-              <th class="py-2.5 font-medium w-1/3">变量名</th>
-              <th class="py-2.5 font-medium">值</th>
+              <th class="py-2.5 font-medium w-1/3">{{ t('page.9d9d763731b4') }}</th>
+              <th class="py-2.5 font-medium">{{ t('common.value') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -173,13 +173,13 @@ onMounted(() => {
 
       <!-- 空状态 -->
       <div v-else class="text-center py-8 text-gray-500 text-sm">
-        {{ envFilter ? '没有匹配的环境变量' : '暂无环境变量' }}
+        {{ envFilter ? t('page.80aec9cea2b3') : t('page.37021d4e1468') }}
       </div>
     </div>
 
     <!-- config.ly 示例 -->
     <div class="card">
-      <h3 class="text-sm font-medium text-gray-300 mb-3">config.ly 配置示例</h3>
+      <h3 class="text-sm font-medium text-gray-300 mb-3">{{ t('page.0541d0e213bd') }}</h3>
       <pre class="bg-dark-card rounded-lg border border-dark-border p-4 text-xs text-gray-400 font-mono leading-relaxed overflow-x-auto">Param {
     IsFirstServer = true
 }</pre>

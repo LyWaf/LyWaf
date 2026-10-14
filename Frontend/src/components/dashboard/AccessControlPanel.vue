@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, computed, onMounted } from 'vue'
 import { accessControlApi } from '@/api'
 import type { AccessControlData } from '@/api'
 import { useToast } from '@/composables/useToast'
 import { countryNameMap, provinceNameMap } from '@/utils/geoNameMap'
+import { geoLabel } from '@/utils/geoLabel'
 
 const props = defineProps<{
   mode: 'ip' | 'geo'
@@ -27,18 +29,18 @@ const deleteTarget = ref<{ type: string; value: string } | null>(null)
 const deleting = ref(false)
 
 // 标题
-const title = computed(() => props.mode === 'ip' ? 'IP 访问控制' : '地理位置访问控制')
+const title = computed(() => props.mode === 'ip' ? t('page.2316186c99ee') : t('page.70cf33d0ceb9'))
 
 const subtitle = computed(() => {
   if (!data.value) return ''
   if (props.mode === 'ip') {
     const wc = data.value.ipControl.whitelist.length
     const bc = data.value.ipControl.blacklist.length
-    return `白名单 ${wc} / 黑名单 ${bc} / 累计拦截 ${formatHit(data.value.stats?.blacklistBlockCount ?? 0)}`
+    return t('page.4759a411f692', { p0: wc, p1: bc, p2: formatHit(data.value.stats?.blacklistBlockCount ?? 0) })
   } else {
     const g = data.value.geoControl
     const count = g.denyCountries.length + g.denyRegions.length + g.allowCountries.length + g.allowRegions.length
-    return `地理规则 ${count} / 模式: ${data.value.geoControl.mode === 'Deny' ? '禁止' : '允许'} / 累计拦截 ${formatHit(data.value.stats?.geoBlockCount ?? 0)}`
+    return t('page.009b80a71eb2', { p0: count, p1: data.value.geoControl.mode === 'Deny' ? t('page.b645c326ce3e') : t('page.ce7ef28b670a'), p2: formatHit(data.value.stats?.geoBlockCount ?? 0) })
   }
 })
 
@@ -55,23 +57,23 @@ const entries = computed(() => {
 
   if (props.mode === 'ip') {
     for (const ip of data.value.ipControl.whitelist) {
-      list.push({ type: 'whitelist', label: '白名单', value: ip })
+      list.push({ type: 'whitelist', label: t('page.27e2d9e2d924'), value: ip })
     }
     for (const ip of data.value.ipControl.blacklist) {
-      list.push({ type: 'blacklist', label: '黑名单', value: ip })
+      list.push({ type: 'blacklist', label: t('page.174ec5a4ab6a'), value: ip })
     }
   } else {
     for (const c of data.value.geoControl.denyCountries) {
-      list.push({ type: 'denyCountry', label: '禁止国家', value: c })
+      list.push({ type: 'denyCountry', label: t('page.284992c00c09'), value: c })
     }
     for (const r of data.value.geoControl.denyRegions) {
-      list.push({ type: 'denyRegion', label: '禁止省份', value: r })
+      list.push({ type: 'denyRegion', label: t('page.3e13bca057db'), value: r })
     }
     for (const c of data.value.geoControl.allowCountries) {
-      list.push({ type: 'allowCountry', label: '允许国家', value: c })
+      list.push({ type: 'allowCountry', label: t('page.d898c561932a'), value: c })
     }
     for (const r of data.value.geoControl.allowRegions) {
-      list.push({ type: 'allowRegion', label: '允许省份', value: r })
+      list.push({ type: 'allowRegion', label: t('page.aea75af799f9'), value: r })
     }
   }
 
@@ -82,15 +84,15 @@ const entries = computed(() => {
 const addMenuOptions = computed(() => {
   if (props.mode === 'ip') {
     return [
-      { type: 'whitelist' as const, label: 'IP 白名单' },
-      { type: 'blacklist' as const, label: 'IP 黑名单' },
+      { type: 'whitelist' as const, label: t('page.2b58f787e5af') },
+      { type: 'blacklist' as const, label: t('page.be6f2d46d830') },
     ]
   } else {
     return [
-      { type: 'denyCountry' as const, label: '禁止国家' },
-      { type: 'denyRegion' as const, label: '禁止省份' },
-      { type: 'allowCountry' as const, label: '允许国家' },
-      { type: 'allowRegion' as const, label: '允许省份' },
+      { type: 'denyCountry' as const, label: t('page.284992c00c09') },
+      { type: 'denyRegion' as const, label: t('page.3e13bca057db') },
+      { type: 'allowCountry' as const, label: t('page.d898c561932a') },
+      { type: 'allowRegion' as const, label: t('page.aea75af799f9') },
     ]
   }
 })
@@ -104,7 +106,7 @@ const loadData = async () => {
       data.value = res
     }
   } catch {
-    showError('加载访问控制数据失败')
+    showError(t('page.96cca6ab0240'))
   } finally {
     loading.value = false
   }
@@ -117,38 +119,38 @@ const toggle = async () => {
       const res = await accessControlApi.toggleIpControl() as unknown as { success: boolean; enabled: boolean }
       if (res?.success) {
         if (data.value) data.value.ipControl.enabled = res.enabled
-        showSuccess(res.enabled ? 'IP 访问控制已启用' : 'IP 访问控制已禁用')
+        showSuccess(res.enabled ? t('page.aac51b1c8159') : t('page.cc25cbeadb83'))
       }
     } else {
       const res = await accessControlApi.toggleGeoControl() as unknown as { success: boolean; enabled: boolean }
       if (res?.success) {
         if (data.value) data.value.geoControl.enabled = res.enabled
-        showSuccess(res.enabled ? '地理位置访问控制已启用' : '地理位置访问控制已禁用')
+        showSuccess(res.enabled ? t('page.98df973bb4c3') : t('page.9caf21e97293'))
       }
     }
   } catch {
-    showError('操作失败')
+    showError(t('settings.operation.failed'))
   }
 }
 
 // 打开添加弹窗
-const addTypeLabels: Record<string, string> = {
-  whitelist: 'IP 白名单',
-  blacklist: 'IP 黑名单',
-  denyCountry: '禁止国家',
-  denyRegion: '禁止省份',
-  allowCountry: '允许国家',
-  allowRegion: '允许省份',
-}
+const addTypeLabels = computed<Record<string, string>>(() => ({
+  whitelist: t('page.2b58f787e5af'),
+  blacklist: t('page.be6f2d46d830'),
+  denyCountry: t('page.284992c00c09'),
+  denyRegion: t('page.3e13bca057db'),
+  allowCountry: t('page.d898c561932a'),
+  allowRegion: t('page.aea75af799f9'),
+}))
 
-const addTypePlaceholders: Record<string, string> = {
-  whitelist: '192.168.1.0/24 或 10.0.0.1',
-  blacklist: '192.168.1.0/24 或 10.0.0.1',
-  denyCountry: '如：美国',
-  denyRegion: '如：广东省',
-  allowCountry: '如：中国',
-  allowRegion: '如：北京',
-}
+const addTypePlaceholders = computed<Record<string, string>>(() => ({
+  whitelist: t('page.2bc7a2a6d976'),
+  blacklist: t('page.2bc7a2a6d976'),
+  denyCountry: t('page.fa1fd2863dc1'),
+  denyRegion: t('page.f5c47a5f7601'),
+  allowCountry: t('page.faad22cdbcef'),
+  allowRegion: t('page.9cb6ef8bd3a2'),
+}))
 
 // 地理类型预设选项
 const geoSearch = ref('')
@@ -175,7 +177,7 @@ const filteredGeoOptions = computed(() => {
   const search = geoSearch.value.toLowerCase()
   const existing = existingGeoValues.value
   return geoOptions.value.filter(name =>
-    !existing.has(name) && name.toLowerCase().includes(search)
+    !existing.has(name) && (name.toLowerCase().includes(search) || geoLabel(name).toLowerCase().includes(search))
   )
 })
 
@@ -203,12 +205,12 @@ const executeAdd = async () => {
     if (res?.success) {
       showAddDialog.value = false
       loadData()
-      showSuccess(res.message || '添加成功')
+      showSuccess(res.message || t('page.ee1a3c93ab01'))
     } else {
-      showError(res?.message || '添加失败')
+      showError(res?.message || t('dashboard.failed.to.add'))
     }
   } catch {
-    showError('添加失败')
+    showError(t('dashboard.failed.to.add'))
   } finally {
     adding.value = false
   }
@@ -238,12 +240,12 @@ const executeDelete = async () => {
       showDeleteConfirm.value = false
       deleteTarget.value = null
       loadData()
-      showSuccess('已移除')
+      showSuccess(t('page.174688c755b9'))
     } else {
-      showError(res?.message || '移除失败')
+      showError(res?.message || t('page.4757fc1d4709'))
     }
   } catch {
-    showError('移除失败')
+    showError(t('page.4757fc1d4709'))
   } finally {
     deleting.value = false
   }
@@ -251,7 +253,7 @@ const executeDelete = async () => {
 
 // 格式化命中数
 const formatHit = (n: number): string => {
-  if (n >= 10000) return (n / 10000).toFixed(1) + '万'
+  if (n >= 10000) return (n / 10000).toFixed(1) + t('page.fc227df4fc94')
   if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
   return n.toString()
 }
@@ -287,7 +289,7 @@ onMounted(() => {
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
             </svg>
-            添加
+            {{ t('common.add') }}
           </button>
           <div class="absolute right-0 top-full mt-1 w-40 bg-dark-card border border-dark-border rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
             <button
@@ -331,16 +333,16 @@ onMounted(() => {
     <!-- 条目列表 -->
     <template v-else-if="data">
       <div v-if="entries.length === 0" class="text-center py-8 text-gray-500">
-        <p class="text-sm">暂无{{ mode === 'ip' ? 'IP 访问控制' : '地理位置' }}规则</p>
+        <p class="text-sm">{{ t('page.b336a174cd1f') }}{{ mode === 'ip' ? t('page.2316186c99ee') : t('page.8dc9d6d1e78d') }}{{ t('fields.Rules') }}</p>
       </div>
 
       <div v-else class="overflow-x-auto -mx-5 -mb-5">
         <table class="w-full text-sm">
           <thead>
             <tr class="border-t border-dark-border text-left text-xs text-gray-500">
-              <th class="px-5 py-2.5 w-28">类型</th>
-              <th class="px-4 py-2.5">值</th>
-              <th class="px-5 py-2.5 w-20">操作</th>
+              <th class="px-5 py-2.5 w-28">{{ t('settings.type') }}</th>
+              <th class="px-4 py-2.5">{{ t('common.value') }}</th>
+              <th class="px-5 py-2.5 w-20">{{ t('settings.actions') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -351,11 +353,11 @@ onMounted(() => {
                   {{ entry.label }}
                 </span>
               </td>
-              <td class="px-4 py-2.5 text-gray-200 font-mono text-sm">{{ entry.value }}</td>
+              <td class="px-4 py-2.5 text-gray-200 font-mono text-sm">{{ mode === 'geo' ? geoLabel(entry.value) : entry.value }}</td>
               <td class="px-5 py-2.5">
                 <button @click="confirmDelete(entry)"
                   class="text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded hover:bg-red-500/10 transition-colors">
-                  移除
+                  {{ t('page.6135d4159e89') }}
                 </button>
               </td>
             </tr>
@@ -370,18 +372,18 @@ onMounted(() => {
     <div v-if="showAddDialog" class="fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/60" @click="showAddDialog = false"></div>
       <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
-        <h3 class="text-lg font-semibold text-gray-100 mb-4">添加{{ addTypeLabels[addType] }}</h3>
+        <h3 class="text-lg font-semibold text-gray-100 mb-4">{{ t('common.add') }}{{ addTypeLabels[addType] }}</h3>
         <div class="space-y-3">
           <!-- IP 类型：文本输入 -->
           <template v-if="!isGeoType">
             <div>
-              <label class="block text-sm text-gray-400 mb-1">值 <span class="text-red-400">*</span></label>
+              <label class="block text-sm text-gray-400 mb-1">{{ t('common.value') }} <span class="text-red-400">*</span></label>
               <input v-model="addValue" type="text" class="input w-full"
                 :placeholder="addTypePlaceholders[addType]"
                 @keyup.enter="executeAdd" />
             </div>
             <div class="text-xs text-gray-500">
-              支持单个 IP 或 CIDR 格式（如 192.168.1.0/24）
+              {{ t('page.ea70d759e386') }}
             </div>
           </template>
 
@@ -391,7 +393,7 @@ onMounted(() => {
               v-model="geoSearch"
               type="text"
               class="input w-full"
-              :placeholder="isCountryType ? '搜索国家名称...' : '搜索省份名称...'"
+              :placeholder="isCountryType ? t('page.b0f54c0ebb01') : t('page.bd5a4343bd31')"
             />
             <div class="max-h-[280px] overflow-y-auto space-y-1 border border-dark-border rounded-lg p-2">
               <div
@@ -405,33 +407,33 @@ onMounted(() => {
                     : 'hover:bg-dark-card-hover text-gray-300'
                 ]"
               >
-                {{ name }}
+                {{ geoLabel(name) }}
               </div>
               <div v-if="filteredGeoOptions.length === 0" class="text-gray-500 text-sm text-center py-4">
-                无匹配项
+                {{ t('page.336cba9a9241') }}
               </div>
             </div>
             <div class="flex items-center gap-2">
-              <span class="text-xs text-gray-500 shrink-0">或手动输入：</span>
+              <span class="text-xs text-gray-500 shrink-0">{{ t('page.8f50913a95d1') }}</span>
               <input
                 v-model="addValue"
                 type="text"
                 class="input text-sm flex-1"
-                :placeholder="isCountryType ? '国家名称' : '省份名称'"
+                :placeholder="isCountryType ? t('page.a1d29f2e404d') : t('page.d5520841b358')"
                 @keyup.enter="executeAdd"
               />
             </div>
             <div v-if="addValue" class="text-sm text-gray-400">
-              当前选择：<span class="text-primary-400 font-medium">{{ addValue }}</span>
+              {{ t('page.99205dfa26c0') }}<span class="text-primary-400 font-medium">{{ geoLabel(addValue) }}</span>
             </div>
           </template>
         </div>
         <div class="flex justify-end gap-3 mt-5">
-          <button @click="showAddDialog = false" class="btn btn-sm btn-secondary">取消</button>
+          <button @click="showAddDialog = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
           <button @click="executeAdd" :disabled="adding || !addValue.trim()"
             class="btn btn-sm btn-primary flex items-center gap-1.5">
             <span v-if="adding" class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
-            <span>{{ adding ? '添加中...' : '添加' }}</span>
+            <span>{{ adding ? t('page.0dae682eddac') : t('common.add') }}</span>
           </button>
         </div>
       </div>
@@ -443,16 +445,16 @@ onMounted(() => {
     <div v-if="showDeleteConfirm" class="fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/60" @click="showDeleteConfirm = false"></div>
       <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
-        <h3 class="text-lg font-semibold text-gray-100 mb-2">移除规则</h3>
+        <h3 class="text-lg font-semibold text-gray-100 mb-2">{{ t('page.b24464068814') }}</h3>
         <p class="text-sm text-gray-400 mb-5">
-          确定要移除「<span class="text-gray-200 font-mono">{{ deleteTarget?.value }}</span>」吗？
+          {{ t('page.30990449e53b') }}<span class="text-gray-200 font-mono">{{ mode === 'geo' ? geoLabel(deleteTarget?.value || '') : deleteTarget?.value }}</span>{{ t('page.342822e51a1b') }}
         </p>
         <div class="flex justify-end gap-3">
-          <button @click="showDeleteConfirm = false" class="btn btn-sm btn-secondary">取消</button>
+          <button @click="showDeleteConfirm = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
           <button @click="executeDelete" :disabled="deleting"
             class="btn btn-sm bg-red-600 hover:bg-red-500 text-white flex items-center gap-1.5">
             <span v-if="deleting" class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
-            <span>{{ deleting ? '移除中...' : '确认移除' }}</span>
+            <span>{{ deleting ? t('page.22669d0d7959') : t('page.ee7dea070d88') }}</span>
           </button>
         </div>
       </div>

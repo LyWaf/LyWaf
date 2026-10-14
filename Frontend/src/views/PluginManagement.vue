@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { fieldLabel, fieldDescription, registerPluginMessages, t } from '@/i18n'
+import { fieldLabel, fieldDescription, registerPluginMessages, pluginMessage, t } from '@/i18n'
 import { refreshPluginMenus } from '@/composables/usePluginMenus'
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { pluginApi } from '@/api'
@@ -49,7 +49,7 @@ const queryEffectiveConfig = async () => {
   effectiveLoading.value = true
   effectiveResult.value = null
   try { effectiveResult.value = await pluginApi.getEffectiveConfig(editConfigPlugin.value.id, effectiveHost.value, effectivePath.value) }
-  catch (error: any) { showError(error?.message || '生效配置查询失败') }
+  catch (error: any) { showError(error?.message || t('page.82fc0fe6d08f')) }
   finally { effectiveLoading.value = false }
 }
 const editConfigItems = ref<ConfigItem[]>([])
@@ -273,6 +273,7 @@ const loadPlugins = async () => {
     if (request !== listRequest) return
     if (res.success) {
       plugins.value = res.data
+      for (const plugin of res.data) registerPluginMessages(plugin.id, plugin.localization)
       total.value = res.total
       if (!res.data.length && page.value > 1) {
         page.value = Math.max(1, Math.ceil(res.total / 20))
@@ -280,7 +281,7 @@ const loadPlugins = async () => {
       }
     }
   } catch {
-    if (request === listRequest) showError('获取插件列表失败')
+    if (request === listRequest) showError(t('page.20ac1210598c'))
   } finally {
     if (request === listRequest) loading.value = false
   }
@@ -294,12 +295,12 @@ const togglePlugin = async (plugin: PluginItem) => {
       plugin.isEnabled = res.isEnabled
         plugin.state = res.state
         await refreshPluginMenus()
-      showSuccess(res.message || '操作成功')
+      showSuccess(res.message || t('dashboard.operation.successful'))
     } else {
-      showError(res.message || '操作失败')
+      showError(res.message || t('settings.operation.failed'))
     }
   } catch (error: any) {
-    showError(error?.response?.data?.message || error?.message || '操作失败')
+    showError(error?.response?.data?.message || error?.message || t('settings.operation.failed'))
   } finally {
     toggling.value = null
   }
@@ -312,9 +313,9 @@ const installPackage = async (event: Event) => {
   installingPackage.value = true
   try {
     const result = await pluginApi.installPackage(file)
-    result.success ? showSuccess(result.message || '插件包已安装，重启后生效') : showError(result.message || '安装失败')
+    result.success ? showSuccess(result.message || t('page.bc801c898b36')) : showError(result.message || t('page.a8581cc00ff3'))
   } catch (error: any) {
-    showError(error?.response?.data?.message || error?.message || '安装失败')
+    showError(error?.response?.data?.message || error?.message || t('page.a8581cc00ff3'))
   } finally {
     installingPackage.value = false
     input.value = ''
@@ -325,9 +326,9 @@ const rollbackPlugin = async (plugin: PluginItem) => {
   rollingBack.value = plugin.id
   try {
     const result = await pluginApi.rollback(plugin.id)
-    result.success ? showSuccess(result.message || '已切换回滚版本，重启后生效') : showError(result.message || '回滚失败')
+    result.success ? showSuccess(result.message || t('page.25a352766461')) : showError(result.message || t('page.c859b98a0150'))
   } catch (error: any) {
-    showError(error?.response?.data?.message || error?.message || '回滚失败')
+    showError(error?.response?.data?.message || error?.message || t('page.c859b98a0150'))
   } finally {
     rollingBack.value = null
   }
@@ -362,10 +363,10 @@ const openEditConfig = async (plugin: PluginItem) => {
       editConfigItems.value = items
       editConfigSnapshot.value = JSON.stringify(flattenItems(items))
     } else {
-      showError('获取插件配置失败')
+      showError(t('page.04773368668f'))
     }
   } catch {
-    showError('获取插件配置失败')
+    showError(t('page.04773368668f'))
   } finally {
     editConfigLoading.value = false
   }
@@ -379,15 +380,15 @@ const saveConfig = async () => {
     const configMap = flattenItems(editConfigItems.value)
     const res = await pluginApi.saveConfig(editConfigPlugin.value.id, configMap, editConfigVersion.value)
     if (res.success) {
-      showSuccess(res.message || '插件配置已保存')
+      showSuccess(res.message || t('page.866cc0a9f3e3'))
       editConfigSnapshot.value = JSON.stringify(configMap)
       editConfigVisible.value = false
     } else {
-      showError(res.message || '保存失败')
+      showError(res.message || t('ui.save.failed'))
     }
   } catch (error: any) {
     editConfigErrors.value = error?.response?.data?.error?.details || {}
-    showError(error?.response?.data?.message || error?.message || '保存失败')
+    showError(error?.response?.data?.message || error?.message || t('ui.save.failed'))
   } finally {
     editConfigSaving.value = false
   }
@@ -399,10 +400,10 @@ const validateConfig = async () => {
   editConfigErrors.value = {}
   try {
     await pluginApi.validateConfig(editConfigPlugin.value.id, flattenItems(editConfigItems.value))
-    showSuccess('配置校验通过，尚未保存')
+    showSuccess(t('page.49ba85832c76'))
   } catch (error: any) {
     editConfigErrors.value = error?.response?.data?.error?.details || {}
-    showError(error?.response?.data?.message || error?.message || '配置校验失败')
+    showError(error?.response?.data?.message || error?.message || t('page.5659eb393c4d'))
   } finally { editConfigValidating.value = false }
 }
 
@@ -456,22 +457,22 @@ const stateColor = (state: string) => {
 }
 const stateLabel = (state: string) => {
   switch (state) {
-    case 'Running': return '运行中'
-    case 'Initialized': return '已初始化'
-    case 'Loaded': return '已加载'
-    case 'Stopped': return '已停止'
-    case 'Error': return '错误'
-    case 'Unloaded': return '未加载'
+    case 'Running': return t('common.running')
+    case 'Initialized': return t('common.initialized')
+    case 'Loaded': return t('page.6bdcbfd2f640')
+    case 'Stopped': return t('common.stopped')
+    case 'Error': return t('common.error')
+    case 'Unloaded': return t('common.notLoaded')
     default: return state
   }
 }
 const priorityLabel = (priority: string) => {
   switch (priority) {
-    case 'Highest': return '最高'
-    case 'High': return '高'
-    case 'Normal': return '普通'
-    case 'Low': return '低'
-    case 'Lowest': return '最低'
+    case 'Highest': return t('page.8672864e9041')
+    case 'High': return t('dashboard.high')
+    case 'Normal': return t('page.de907d10df98')
+    case 'Low': return t('dashboard.low')
+    case 'Lowest': return t('page.8b5f2a61b797')
     default: return priority
   }
 }
@@ -525,7 +526,7 @@ const loadLogFiles = async () => {
       }
     }
   } catch {
-    showError('获取日志文件列表失败')
+    showError(t('page.58c3a0232798'))
   } finally {
     logViewerLoading.value = false
   }
@@ -555,7 +556,7 @@ const loadLogEntries = async (resetOffset = true) => {
     } else {
       logEntries.value = []
       logTotal.value = 0
-      showError(res.message || '读取日志失败')
+      showError(res.message || t('page.c9d4f6cd74ec'))
     }
   } catch {
     logEntries.value = []
@@ -583,11 +584,11 @@ const logSelectFile = (fileName: string) => {
 
 const deleteLogFile = async (fileName: string) => {
   if (!logViewerPlugin.value || !logViewerAction.value) return
-  if (!confirm(`确定要删除日志文件 ${fileName} 吗？`)) return
+  if (!confirm(t('page.798001116e08', { p0: fileName }))) return
   try {
     const res = await pluginApi.executeAction(logViewerPlugin.value.id, logViewerAction.value.id, { action: 'delete-file', file: fileName })
     if (res.success) {
-      showSuccess(res.message || '已删除')
+      showSuccess(res.message || t('page.077a6d37719a'))
       logFiles.value = logFiles.value.filter(f => f.name !== fileName)
       if (logSelectedFile.value === fileName) {
         logSelectedFile.value = logFiles.value.length > 0 ? logFiles.value[0].name : ''
@@ -595,20 +596,20 @@ const deleteLogFile = async (fileName: string) => {
         else { logEntries.value = []; logTotal.value = 0 }
       }
     } else {
-      showError(res.message || '删除失败')
+      showError(res.message || t('settings.deletion.failed'))
     }
   } catch {
-    showError('删除失败')
+    showError(t('settings.deletion.failed'))
   }
 }
 
 const clearLogFile = async (fileName: string) => {
   if (!logViewerPlugin.value || !logViewerAction.value) return
-  if (!confirm(`确定要清空 ${fileName} 中的所有日志吗？`)) return
+  if (!confirm(t('page.59cb6bce95db', { p0: fileName }))) return
   try {
     const res = await pluginApi.executeAction(logViewerPlugin.value.id, logViewerAction.value.id, { action: 'clear-file', file: fileName })
     if (res.success) {
-      showSuccess(res.message || '已清空')
+      showSuccess(res.message || t('page.9790c6e72a16'))
       if (logSelectedFile.value === fileName) {
         logEntries.value = []
         logTotal.value = 0
@@ -617,10 +618,10 @@ const clearLogFile = async (fileName: string) => {
       // 刷新文件列表以更新大小
       await loadLogFiles()
     } else {
-      showError(res.message || '清空失败')
+      showError(res.message || t('dashboard.failed.to.clear'))
     }
   } catch {
-    showError('清空失败')
+    showError(t('dashboard.failed.to.clear'))
   }
 }
 
@@ -633,7 +634,7 @@ const deleteLogEntry = async (entry: PluginLogEntry) => {
       index: String(entry.index),
     })
     if (res.success) {
-      showSuccess(res.message || '已删除')
+      showSuccess(res.message || t('page.077a6d37719a'))
       // 重新加载当前页
       await loadLogEntries(false)
       // 刷新文件列表以更新大小
@@ -642,28 +643,28 @@ const deleteLogEntry = async (entry: PluginLogEntry) => {
         logFiles.value[fileIdx].size = logFileSize.value
       }
     } else {
-      showError(res.message || '删除失败')
+      showError(res.message || t('settings.deletion.failed'))
     }
   } catch {
-    showError('删除条目失败')
+    showError(t('page.7ff505f9d1c5'))
   }
 }
 
 const deleteAllLogFiles = async () => {
   if (!logViewerPlugin.value || !logViewerAction.value) return
-  if (!confirm(`确定要删除所有 ${logFiles.value.length} 个日志文件吗？此操作不可撤销！`)) return
+  if (!confirm(t('page.ca696c7ff162', { p0: logFiles.value.length }))) return
   try {
     for (const file of [...logFiles.value]) {
       await pluginApi.executeAction(logViewerPlugin.value.id, logViewerAction.value.id, { action: 'delete-file', file: file.name })
     }
-    showSuccess('已删除所有日志文件')
+    showSuccess(t('page.b7175a2477f5'))
     logFiles.value = []
     logSelectedFile.value = ''
     logEntries.value = []
     logTotal.value = 0
     logFileSize.value = 0
   } catch {
-    showError('删除失败')
+    showError(t('settings.deletion.failed'))
     await loadLogFiles()
   }
 }
@@ -748,9 +749,9 @@ const copyLogCurl = async (format: CurlFormat) => {
   const curl = buildCurl(entry, format)
   try {
     await navigator.clipboard.writeText(curl)
-    showSuccess(`已复制 cURL（${format === 'bash' ? 'Bash' : format === 'cmd' ? 'CMD' : 'PowerShell'}）`)
+    showSuccess(t('page.f57d3587f369', { p0: format === 'bash' ? 'Bash' : format === 'cmd' ? 'CMD' : 'PowerShell' }))
   } catch {
-    showError('复制失败')
+    showError(t('dashboard.copy.failed'))
   }
   closeLogContextMenu()
 }
@@ -773,12 +774,12 @@ const executePluginAction = async (plugin: PluginItem, action: PluginActionItem)
   try {
     const res = await pluginApi.executeAction(plugin.id, action.id)
     if (res.success) {
-      showSuccess(res.message || '操作成功')
+      showSuccess(res.message || t('dashboard.operation.successful'))
     } else {
-      showError(res.message || '操作失败')
+      showError(res.message || t('settings.operation.failed'))
     }
   } catch {
-    showError('操作失败')
+    showError(t('settings.operation.failed'))
   }
 }
 
@@ -790,18 +791,18 @@ onMounted(loadPlugins)
     <!-- 页面标题 -->
     <div class="flex items-center justify-between">
       <div>
-        <h1 class="text-2xl font-bold text-gray-100">插件管理</h1>
-        <p class="text-sm text-gray-500 mt-1">管理已加载的插件，控制启用和禁用状态</p>
+        <h1 class="text-2xl font-bold text-gray-100">{{ t('nav.pluginManagement') }}</h1>
+        <p class="text-sm text-gray-500 mt-1">{{ t('page.b9eb1e40c92b') }}</p>
       </div>
       <div class="flex items-center gap-2">
         <input ref="packageInput" type="file" accept=".lyplugin" class="hidden" @change="installPackage" />
         <button class="btn btn-sm btn-primary" :disabled="installingPackage" @click="packageInput?.click()">
-          {{ installingPackage ? '验证安装中...' : '安装插件包' }}
+          {{ installingPackage ? t('page.0c82e67ec5fc') : t('plugins.install') }}
         </button>
         <button @click="loadPlugins" :disabled="loading"
           class="btn btn-sm btn-secondary flex items-center gap-1.5">
           <span v-if="loading" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-          <span>{{ loading ? '加载中...' : '刷新' }}</span>
+          <span>{{ loading ? t('common.loading') : t('common.refresh') }}</span>
         </button>
       </div>
     </div>
@@ -810,14 +811,14 @@ onMounted(loadPlugins)
     <ListToolbar v-model:page="page" v-model:search="search" :total="total" :busy="loading" @refresh="loadPlugins" />
     <div v-if="loading && plugins.length === 0" class="flex items-center justify-center py-20">
       <span class="w-6 h-6 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></span>
-      <span class="ml-3 text-gray-400">加载插件列表...</span>
+      <span class="ml-3 text-gray-400">{{ t('page.21fe13ab0638') }}</span>
     </div>
 
     <!-- 空状态 -->
     <div v-else-if="plugins.length === 0" class="text-center py-20">
       <div class="text-4xl mb-3">🧩</div>
-      <p class="text-gray-400">暂无已加载的插件</p>
-      <p class="text-sm text-gray-600 mt-1">将插件 DLL 放入 plugins 目录后重启服务</p>
+      <p class="text-gray-400">{{ t('page.d812732d943b') }}</p>
+      <p class="text-sm text-gray-600 mt-1">{{ t('page.39ee2dbbf287') }}</p>
     </div>
 
     <!-- 插件列表 -->
@@ -827,36 +828,36 @@ onMounted(loadPlugins)
         <div class="flex items-start justify-between gap-4">
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 flex-wrap">
-              <h3 class="text-base font-semibold text-gray-100">{{ plugin.name }}</h3>
+              <h3 class="text-base font-semibold text-gray-100">{{ pluginMessage(plugin.id, 'metadata.name', plugin.name) }}</h3>
               <span class="text-xs font-mono px-1.5 py-0.5 rounded bg-dark-sidebar text-gray-400 border border-dark-border">
                 v{{ plugin.version }}
               </span>
               <span v-if="plugin.isSystem"
                 class="text-xs px-1.5 py-0.5 rounded bg-primary-500/15 text-primary-400 border border-primary-500/30">
-                系统
+                {{ t('plugins.system') }}
               </span>
               <span :class="['text-xs px-1.5 py-0.5 rounded border', stateColor(plugin.state)]">
                 {{ stateLabel(plugin.state) }}
               </span>
             </div>
-            <p v-if="plugin.description" class="text-sm text-gray-400 mt-1.5">{{ plugin.description }}</p>
+            <p v-if="plugin.description" class="text-sm text-gray-400 mt-1.5">{{ pluginMessage(plugin.id, 'metadata.description', plugin.description) }}</p>
             <div class="flex items-center gap-4 mt-2 text-xs text-gray-500">
-              <span v-if="plugin.author">作者: {{ plugin.author }}</span>
-              <span>优先级: {{ priorityLabel(plugin.priority) }}</span>
+              <span v-if="plugin.author">{{ t('page.d40e1a908e0e') }} {{ plugin.author }}</span>
+              <span>{{ t('page.490391ce6680') }} {{ priorityLabel(plugin.priority) }}</span>
               <span class="font-mono text-gray-600">{{ plugin.id }}</span>
             </div>
           </div>
           <div class="flex items-center gap-3 flex-shrink-0 pt-1">
             <button v-if="!plugin.isSystem" @click="rollbackPlugin(plugin)" :disabled="rollingBack === plugin.id"
-              class="text-xs text-gray-400 hover:text-primary-400 disabled:opacity-50" title="切换到上一安装版本，重启后生效">
-              {{ rollingBack === plugin.id ? '回滚中...' : '回滚' }}
+              class="text-xs text-gray-400 hover:text-primary-400 disabled:opacity-50" :title="t('page.e2e7ba78885f')">
+              {{ rollingBack === plugin.id ? t('page.7cc758a5d3f8') : t('plugins.rollback') }}
             </button>
             <!-- 插件操作按钮 -->
             <button v-for="action in (plugin.actions || [])" :key="action.id"
               @click="executePluginAction(plugin, action)"
               class="text-gray-400 hover:text-primary-400 transition-colors p-1"
-              :title="action.name">
-              <span v-if="action.type === 'page-link'" class="text-xs px-1">管理</span>
+              :title="pluginMessage(plugin.id, `actions.${action.id}.name`, action.name)">
+              <span v-if="action.type === 'page-link'" class="text-xs px-1">{{ t('plugins.manage') }}</span>
               <!-- 日志查看器图标 -->
               <svg v-else-if="action.type === 'log-viewer'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -867,7 +868,7 @@ onMounted(loadPlugins)
               </svg>
             </button>
             <button v-if="plugin.hasOptions" @click="openEditConfig(plugin)"
-              class="text-gray-400 hover:text-primary-400 transition-colors p-1" title="编辑配置">
+              class="text-gray-400 hover:text-primary-400 transition-colors p-1" :title="t('page.b2b5b9fafa31')">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                   d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -903,7 +904,7 @@ onMounted(loadPlugins)
         <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
           <div>
             <h2 class="text-lg font-semibold text-gray-100">{{ t('plugins.editConfig') }}</h2>
-            <p class="text-xs text-gray-500 mt-0.5">{{ editConfigPlugin?.name }} ({{ editConfigPlugin?.id }})</p>
+            <p class="text-xs text-gray-500 mt-0.5">{{ pluginMessage(editConfigPlugin?.id, 'metadata.name', editConfigPlugin?.name) }} ({{ editConfigPlugin?.id }})</p>
           </div>
           <button @click="editConfigVisible = false" class="text-gray-400 hover:text-gray-200 transition-colors">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -916,7 +917,7 @@ onMounted(loadPlugins)
         <div class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
           <div v-if="editConfigLoading" class="flex items-center justify-center py-12">
             <span class="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></span>
-            <span class="ml-3 text-gray-400">加载配置...</span>
+            <span class="ml-3 text-gray-400">{{ t('plugins.loadingConfig') }}</span>
           </div>
 
           <div v-else-if="editConfigItems.length === 0" class="text-center py-12">
@@ -1052,19 +1053,19 @@ onMounted(loadPlugins)
                     </svg>
                   </button>
                   <button @click="addObjArrayItem(item as ObjArrayItem)"
-                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ 添加规则</button>
+                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors">{{ t('page.fbf5151f677c') }}</button>
                 </div>
               </div>
               <!-- 每条规则卡片 -->
               <div v-for="(obj, idx) in (item as ObjArrayItem).items" :key="idx"
                 class="bg-dark-sidebar/50 border border-dark-border/40 rounded-lg p-3 space-y-2">
                 <div class="flex items-center justify-between mb-1">
-                  <span class="text-xs text-gray-500">规则 #{{ idx + 1 }}</span>
+                  <span class="text-xs text-gray-500">{{ t('page.71a68f78c9e6') }}{{ idx + 1 }}</span>
                   <div class="flex items-center gap-1">
                     <button @click="moveObjArrayItem(item as ObjArrayItem, idx, -1)"
                       :disabled="idx === 0"
                       :class="['transition-colors p-0.5', idx === 0 ? 'text-gray-700 cursor-not-allowed' : 'text-gray-500 hover:text-primary-400']"
-                      title="上移">
+                      :title="t('common.moveUp')">
                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
                       </svg>
@@ -1072,13 +1073,13 @@ onMounted(loadPlugins)
                     <button @click="moveObjArrayItem(item as ObjArrayItem, idx, 1)"
                       :disabled="idx === (item as ObjArrayItem).items.length - 1"
                       :class="['transition-colors p-0.5', idx === (item as ObjArrayItem).items.length - 1 ? 'text-gray-700 cursor-not-allowed' : 'text-gray-500 hover:text-primary-400']"
-                      title="下移">
+                      :title="t('common.moveDown')">
                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                       </svg>
                     </button>
                     <button @click="removeObjArrayItem(item as ObjArrayItem, idx)"
-                      class="text-gray-600 hover:text-red-400 transition-colors p-0.5" title="删除">
+                      class="text-gray-600 hover:text-red-400 transition-colors p-0.5" :title="t('common.delete')">
                       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                       </svg>
@@ -1107,22 +1108,22 @@ onMounted(loadPlugins)
                 </div>
               </div>
               <div v-if="(item as ObjArrayItem).items.length === 0"
-                class="text-xs text-gray-600 text-center py-2">暂无规则，点击右上角添加</div>
+                class="text-xs text-gray-600 text-center py-2">{{ t('page.fcd8ed2e793f') }}</div>
             </div>
           </template>
         </div>
 
         <!-- 底部按钮 -->
         <section v-if="supportsScopedConfig" class="px-6 py-3 border-t border-gray-700 max-h-64 overflow-auto">
-          <h3 class="text-sm font-medium mb-2">生效配置</h3>
+          <h3 class="text-sm font-medium mb-2">{{ t('page.b97e9cb78e75') }}</h3>
           <div class="flex flex-wrap gap-2">
-            <input v-model="effectiveHost" aria-label="站点域名" placeholder="img.example.com" class="input min-w-0 flex-1" />
-            <input v-model="effectivePath" aria-label="请求路径" placeholder="/thumb/a.png" class="input min-w-0 flex-1" />
-            <button class="btn btn-sm btn-secondary" :disabled="effectiveLoading" @click="queryEffectiveConfig">{{ effectiveLoading ? '查询中...' : '查询' }}</button>
+            <input v-model="effectiveHost" :aria-label="t('page.1b0bd09c7cc4')" placeholder="img.example.com" class="input min-w-0 flex-1" />
+            <input v-model="effectivePath" :aria-label="t('fields.Path')" placeholder="/thumb/a.png" class="input min-w-0 flex-1" />
+            <button class="btn btn-sm btn-secondary" :disabled="effectiveLoading" @click="queryEffectiveConfig">{{ effectiveLoading ? t('page.192533042f7f') : t('ui.query') }}</button>
           </div>
           <p v-if="effectiveResult?.lastReloadError" role="alert" class="text-sm text-red-400 mt-2">{{ effectiveResult.lastReloadError }}</p>
           <table v-if="effectiveResult" class="w-full text-xs mt-3 table-fixed">
-            <thead><tr><th class="text-left">字段</th><th class="text-left">值</th><th class="text-left">来源</th></tr></thead>
+            <thead><tr><th class="text-left">{{ t('page.49ecd0e342d6') }}</th><th class="text-left">{{ t('common.value') }}</th><th class="text-left">{{ t('settings.source') }}</th></tr></thead>
             <tbody><tr v-for="(value, key) in effectiveResult.config" :key="key">
               <td class="break-all py-1">{{ key }}</td><td class="break-all">{{ value }}</td><td class="break-all">{{ effectiveResult.sources[key] }}</td>
             </tr></tbody>
@@ -1154,11 +1155,11 @@ onMounted(loadPlugins)
         <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border shrink-0">
           <div class="flex items-center gap-4">
             <h3 class="text-lg font-semibold text-gray-100">
-              {{ logViewerAction?.name || '查看日志' }}
-              <span class="text-sm font-normal text-gray-500 ml-2">{{ logViewerPlugin?.name }}</span>
+              {{ logViewerAction?.name || t('dashboard.view.logs') }}
+              <span class="text-sm font-normal text-gray-500 ml-2">{{ pluginMessage(logViewerPlugin?.id, 'metadata.name', logViewerPlugin?.name) }}</span>
             </h3>
             <span v-if="logTotal > 0" class="text-xs text-gray-500">
-              共 {{ logTotal }} 条 · {{ formatFileSize(logFileSize) }}
+              {{ t('page.76e547a8fa54') }} {{ logTotal }} {{ t('page.4bb170bf439d') }} {{ formatFileSize(logFileSize) }}
             </span>
           </div>
           <button @click="logViewerVisible = false" class="text-gray-400 hover:text-gray-200 text-xl leading-none">&times;</button>
@@ -1169,14 +1170,14 @@ onMounted(loadPlugins)
           <!-- 左侧文件列表 -->
           <div class="w-56 shrink-0 border-r border-dark-border flex flex-col">
             <div class="px-3 py-2 border-b border-dark-border/50 flex items-center justify-between">
-              <span class="text-xs text-gray-500 font-semibold">日志文件</span>
+              <span class="text-xs text-gray-500 font-semibold">{{ t('page.f88d392b86ea') }}</span>
               <div class="flex items-center gap-2">
-                <button v-if="logFiles.length > 0" @click="deleteAllLogFiles" class="text-[10px] text-gray-600 hover:text-red-400 transition-colors" title="删除所有文件">全部删除</button>
-                <button @click="loadLogFiles" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">刷新</button>
+                <button v-if="logFiles.length > 0" @click="deleteAllLogFiles" class="text-[10px] text-gray-600 hover:text-red-400 transition-colors" :title="t('page.47b6ebb7072c')">{{ t('page.9b2ccbb48e31') }}</button>
+                <button @click="loadLogFiles" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">{{ t('common.refresh') }}</button>
               </div>
             </div>
             <div class="flex-1 overflow-y-auto">
-              <div v-if="logFiles.length === 0 && !logViewerLoading" class="text-xs text-gray-600 text-center py-8">暂无日志文件</div>
+              <div v-if="logFiles.length === 0 && !logViewerLoading" class="text-xs text-gray-600 text-center py-8">{{ t('page.edf2a6a09da3') }}</div>
               <div v-for="file in logFiles" :key="file.name"
                 @click="logSelectFile(file.name)"
                 :class="[
@@ -1191,11 +1192,11 @@ onMounted(loadPlugins)
                 <div class="flex items-center gap-2 mt-1 hidden group-hover:flex">
                   <button @click.stop="clearLogFile(file.name)"
                     class="text-[10px] text-gray-600 hover:text-yellow-400 transition-colors">
-                    清空
+                    {{ t('page.1ef3de06b32e') }}
                   </button>
                   <button @click.stop="deleteLogFile(file.name)"
                     class="text-[10px] text-gray-600 hover:text-red-400 transition-colors">
-                    删除文件
+                    {{ t('page.88f47860e77d') }}
                   </button>
                 </div>
               </div>
@@ -1206,21 +1207,21 @@ onMounted(loadPlugins)
           <div class="flex-1 flex flex-col overflow-hidden">
             <!-- 搜索栏 -->
             <div class="px-4 py-2 border-b border-dark-border/50 flex items-center gap-2">
-              <input v-model="logSearch" type="text" placeholder="搜索日志内容..."
+              <input v-model="logSearch" type="text" :placeholder="t('page.0080a0856da2')"
                 class="flex-1 bg-dark-sidebar border border-dark-border rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
                 @keydown.enter="loadLogEntries()" />
-              <button @click="loadLogEntries()" class="btn btn-sm btn-secondary text-xs">搜索</button>
+              <button @click="loadLogEntries()" class="btn btn-sm btn-secondary text-xs">{{ t('common.search') }}</button>
             </div>
 
             <!-- 加载中 -->
             <div v-if="logViewerLoading" class="flex-1 flex items-center justify-center">
               <div class="animate-spin w-6 h-6 border-2 border-gray-500 border-t-primary-400 rounded-full"></div>
-              <span class="ml-3 text-gray-400 text-sm">加载中...</span>
+              <span class="ml-3 text-gray-400 text-sm">{{ t('common.loading') }}</span>
             </div>
 
             <!-- 无数据 -->
             <div v-else-if="logEntries.length === 0" class="flex-1 flex items-center justify-center">
-              <span class="text-gray-500 text-sm">{{ logSelectedFile ? '暂无日志条目' : '请选择日志文件' }}</span>
+              <span class="text-gray-500 text-sm">{{ logSelectedFile ? t('dashboard.no.log.entries') : t('page.805a9989bb6c') }}</span>
             </div>
 
             <!-- 条目列表 -->
@@ -1250,7 +1251,7 @@ onMounted(loadPlugins)
                   <!-- 删除条目 -->
                   <button @click.stop="deleteLogEntry(entry)"
                     class="text-gray-600 hover:text-red-400 transition-colors shrink-0 opacity-0 group-hover/entry:opacity-100 ml-2"
-                    title="删除此条目">
+                    :title="t('page.c747887833b3')">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                     </svg>
@@ -1261,7 +1262,7 @@ onMounted(loadPlugins)
                 <div v-if="logExpandedEntry === entry.index" class="px-5 pb-4 space-y-3">
                   <!-- 请求行 -->
                   <div class="bg-dark-bg rounded-lg p-3">
-                    <div class="text-xs text-gray-500 mb-1">请求行</div>
+                    <div class="text-xs text-gray-500 mb-1">{{ t('page.c82d19cd1137') }}</div>
                     <div class="text-xs text-gray-200 font-mono">{{ entry.requestLine }}</div>
                     <div v-if="entry.host" class="text-xs text-gray-400 font-mono mt-1">Host: {{ entry.host }}</div>
                     <div v-if="entry.clientIp" class="text-xs text-gray-400 font-mono mt-1">Client-IP: {{ entry.clientIp }}</div>
@@ -1269,19 +1270,19 @@ onMounted(loadPlugins)
 
                   <!-- 请求头 -->
                   <div v-if="entry.headers" class="bg-dark-bg rounded-lg p-3">
-                    <div class="text-xs text-gray-500 mb-1">请求头</div>
+                    <div class="text-xs text-gray-500 mb-1">{{ t('fields.Headers') }}</div>
                     <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[200px] overflow-auto">{{ entry.headers }}</pre>
                   </div>
 
                   <!-- 请求体 -->
                   <div v-if="entry.requestBody" class="bg-dark-bg rounded-lg p-3">
-                    <div class="text-xs text-gray-500 mb-1">请求体</div>
+                    <div class="text-xs text-gray-500 mb-1">{{ t('dashboard.request.body') }}</div>
                     <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[300px] overflow-auto">{{ entry.requestBody }}</pre>
                   </div>
 
                   <!-- 响应体 -->
                   <div v-if="entry.responseBody" class="bg-dark-bg rounded-lg p-3">
-                    <div class="text-xs text-gray-500 mb-1">响应体</div>
+                    <div class="text-xs text-gray-500 mb-1">{{ t('page.4d008af0350e') }}</div>
                     <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[300px] overflow-auto">{{ entry.responseBody }}</pre>
                   </div>
                 </div>
@@ -1292,18 +1293,18 @@ onMounted(loadPlugins)
             <div class="flex items-center justify-between px-6 py-3 border-t border-dark-border shrink-0">
               <div class="flex items-center gap-2">
                 <template v-if="logTotalPages > 1">
-                  <button @click="logGotoPage(1)" :disabled="logCurrentPage === 1" class="btn btn-sm btn-secondary text-xs px-2">首页</button>
-                  <button @click="logGotoPage(logCurrentPage - 1)" :disabled="logCurrentPage === 1" class="btn btn-sm btn-secondary text-xs px-2">上一页</button>
-                  <span class="text-xs text-gray-400 px-2">第 {{ logCurrentPage }} / {{ logTotalPages }} 页</span>
-                  <button @click="logGotoPage(logCurrentPage + 1)" :disabled="logCurrentPage === logTotalPages" class="btn btn-sm btn-secondary text-xs px-2">下一页</button>
-                  <button @click="logGotoPage(logTotalPages)" :disabled="logCurrentPage === logTotalPages" class="btn btn-sm btn-secondary text-xs px-2">末页</button>
+                  <button @click="logGotoPage(1)" :disabled="logCurrentPage === 1" class="btn btn-sm btn-secondary text-xs px-2">{{ t('dashboard.first') }}</button>
+                  <button @click="logGotoPage(logCurrentPage - 1)" :disabled="logCurrentPage === 1" class="btn btn-sm btn-secondary text-xs px-2">{{ t('common.previous') }}</button>
+                  <span class="text-xs text-gray-400 px-2">{{ t('ui.pageOf', { page: logCurrentPage, pages: logTotalPages }) }}</span>
+                  <button @click="logGotoPage(logCurrentPage + 1)" :disabled="logCurrentPage === logTotalPages" class="btn btn-sm btn-secondary text-xs px-2">{{ t('common.next') }}</button>
+                  <button @click="logGotoPage(logTotalPages)" :disabled="logCurrentPage === logTotalPages" class="btn btn-sm btn-secondary text-xs px-2">{{ t('dashboard.last') }}</button>
                 </template>
-                <span v-else-if="logTotal > 0" class="text-xs text-gray-500">共 {{ logTotal }} 条</span>
+                <span v-else-if="logTotal > 0" class="text-xs text-gray-500">{{ t('page.76e547a8fa54') }} {{ logTotal }} {{ t('page.f004f1d84cf9') }}</span>
               </div>
               <div class="flex items-center gap-2">
-                <button v-if="logSelectedFile && logTotal > 0" @click="clearLogFile(logSelectedFile)" class="btn btn-sm text-xs text-red-400 hover:bg-red-500/10 border border-red-500/20">清空当前文件</button>
-                <button @click="loadLogEntries()" class="btn btn-secondary btn-sm">刷新</button>
-                <button @click="logViewerVisible = false" class="btn btn-secondary btn-sm">关闭</button>
+                <button v-if="logSelectedFile && logTotal > 0" @click="clearLogFile(logSelectedFile)" class="btn btn-sm text-xs text-red-400 hover:bg-red-500/10 border border-red-500/20">{{ t('page.ead678844b79') }}</button>
+                <button @click="loadLogEntries()" class="btn btn-secondary btn-sm">{{ t('common.refresh') }}</button>
+                <button @click="logViewerVisible = false" class="btn btn-secondary btn-sm">{{ t('common.close') }}</button>
               </div>
             </div>
           </div>
@@ -1320,7 +1321,7 @@ onMounted(loadPlugins)
       :style="{ left: logContextMenu.x + 'px', top: logContextMenu.y + 'px' }"
       @click.stop
     >
-      <div class="px-3 py-1.5 text-xs text-gray-500 select-none">复制为 cURL</div>
+      <div class="px-3 py-1.5 text-xs text-gray-500 select-none">{{ t('dashboard.copy.as.curl') }}</div>
       <button
         @click="copyLogCurl('bash')"
         class="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-dark-card-hover flex items-center gap-2"

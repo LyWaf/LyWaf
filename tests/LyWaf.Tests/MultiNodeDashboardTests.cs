@@ -1,10 +1,38 @@
 using LyWaf.Services.Distribution;
+using LyWaf.Localization;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace LyWaf.Tests;
 
 public sealed class MultiNodeDashboardTests
 {
+    [Theory]
+    [InlineData("en-US", "This instance is not a multi-node controller")]
+    [InlineData("zh-CN", "当前实例不是多节点控制器")]
+    public async Task NonControllerErrorUsesRequestLanguage(string language, string expected)
+    {
+        using var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection().BuildServiceProvider();
+        var app = new Microsoft.AspNetCore.Builder.ApplicationBuilder(services);
+        app.UseManagementLocalization(7030, "zh-CN");
+        var service = new MultiNodeDashboardService(
+            new StaticOptionsMonitor<DistributionOptions>(new DistributionOptions()), new DashboardClient());
+        app.Run(async context =>
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () => { await service.GetAsync("admin", default); });
+            var error = LyWaf.Services.ManagementApi.ManagementApiContract.CreateError(
+                context, "distribution_not_controller", exception.Message);
+            Assert.Equal(expected, error.Message);
+            Assert.Equal(expected, error.Error.Message);
+            Assert.Equal("distribution_not_controller", error.Error.Code);
+        });
+        var context = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        context.Connection.LocalPort = 7030;
+        context.Request.Headers.AcceptLanguage = language;
+        await app.Build()(context);
+    }
+
     [Fact]
     public async Task AggregatesSecurityDeduplicatesEventsAndFlagsClockSkew()
     {

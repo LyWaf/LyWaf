@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, onMounted } from 'vue'
 import { simpleResApi } from '@/api'
 import ListToolbar from '@/components/common/ListToolbar.vue'
@@ -40,7 +41,7 @@ const loadData = async () => {
       total.value = res.total
     }
   } catch (error) {
-    if (request === listRequest) showError('加载简单响应配置失败')
+    if (request === listRequest) showError(t('page.092cfc07cf5a'))
   } finally {
     if (request === listRequest) loading.value = false
   }
@@ -82,7 +83,7 @@ const handleSave = async () => {
   try {
     if (dialogMode.value === 'add') {
       if (!form.value.itemId.trim()) {
-        showError('ID 不能为空')
+        showError(t('page.a45065ad89c2'))
         saving.value = false
         return
       }
@@ -95,11 +96,11 @@ const handleSave = async () => {
         showReq: form.value.showReq,
       })
       if (res.success) {
-        showSuccess('简单响应已新增')
+        showSuccess(t('page.ec6dcf27baf1'))
         showDialog.value = false
         await loadData()
       } else {
-        showError(res.message || '新增失败')
+        showError(res.message || t('page.a2ae1e9901c1'))
       }
     } else {
       if (!editingItem.value) return
@@ -112,15 +113,15 @@ const handleSave = async () => {
         showReq: form.value.showReq,
       })
       if (res.success) {
-        showSuccess('简单响应已更新')
+        showSuccess(t('page.6c7e0a27dd54'))
         showDialog.value = false
         await loadData()
       } else {
-        showError(res.message || '更新失败')
+        showError(res.message || t('page.ec99e5c45d64'))
       }
     }
   } catch (error) {
-    showError(dialogMode.value === 'add' ? '新增失败' : '更新失败')
+    showError(dialogMode.value === 'add' ? t('page.a2ae1e9901c1') : t('page.ec99e5c45d64'))
   } finally {
     saving.value = false
   }
@@ -128,33 +129,33 @@ const handleSave = async () => {
 
 // 删除单个
 const removeItem = async (item: SimpleResItem) => {
-  if (!confirm(`确定要删除简单响应 "${item.itemId}" 吗？`)) return
+  if (!confirm(t('page.24b7580c8bb0', { p0: item.itemId }))) return
   try {
     const res = await simpleResApi.removeItem(item.itemId)
     if (res.success) {
-      showSuccess('简单响应已删除')
+      showSuccess(t('page.64b07e918585'))
       await loadData()
     } else {
-      showError(res.message || '删除失败')
+      showError(res.message || t('settings.deletion.failed'))
     }
   } catch (error) {
-    showError('删除失败')
+    showError(t('settings.deletion.failed'))
   }
 }
 
 // 删除所有补丁
 const removePatch = async () => {
-  if (!confirm('确定要删除所有简单响应的补丁数据吗？这将恢复为原始配置。')) return
+  if (!confirm(t('page.44ca63bb744c'))) return
   try {
     const res = await simpleResApi.removePatch()
     if (res.success) {
-      showSuccess('简单响应补丁已删除，已恢复原始配置')
+      showSuccess(t('page.23a8e1f7819c'))
       await loadData()
     } else {
-      showError(res.message || '删除补丁失败')
+      showError(res.message || t('page.2f476ccaec39'))
     }
   } catch (error) {
-    showError('删除补丁失败')
+    showError(t('page.2f476ccaec39'))
   }
 }
 
@@ -165,16 +166,16 @@ onMounted(loadData)
   <div class="space-y-6">
     <div class="card">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-medium text-gray-100">简单响应配置</h2>
+        <h2 class="text-lg font-medium text-gray-100">{{ t('page.c857073cc9ab') }}</h2>
         <div class="flex items-center gap-2">
           <button @click="removePatch" class="btn btn-sm btn-warning flex items-center gap-1">
-            删除补丁
+            {{ t('page.c9fee9110ba0') }}
           </button>
           <button @click="openAddDialog" class="btn btn-sm btn-primary flex items-center gap-1">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
             </svg>
-            新增
+            {{ t('page.0006d696d8e1') }}
           </button>
         </div>
       </div>
@@ -186,12 +187,12 @@ onMounted(loadData)
           <thead>
             <tr class="border-b border-dark-border text-gray-400">
               <th class="py-3 px-3 text-left">ID</th>
-              <th class="py-3 px-3 text-left">来源</th>
+              <th class="py-3 px-3 text-left">{{ t('settings.source') }}</th>
               <th class="py-3 px-3 text-left">Body</th>
               <th class="py-3 px-3 text-left">ContentType</th>
               <th class="py-3 px-3 text-left">StatusCode</th>
               <th class="py-3 px-3 text-left">Charset</th>
-              <th class="py-3 px-3 text-left">操作</th>
+              <th class="py-3 px-3 text-left">{{ t('settings.actions') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -205,11 +206,11 @@ onMounted(loadData)
                 <span
                   v-if="item.source === 'patch'"
                   class="inline-block px-1.5 py-0.5 text-xs bg-yellow-500/20 text-yellow-400 rounded"
-                >补丁</span>
+                >{{ t('page.70f565337ffd') }}</span>
                 <span
                   v-else
                   class="inline-block px-1.5 py-0.5 text-xs bg-gray-500/20 text-gray-400 rounded"
-                >默认</span>
+                >{{ t('page.844b8cc8dff7') }}</span>
               </td>
               <td class="py-3 px-3 text-gray-300 font-mono max-w-[200px] truncate" :title="item.body">
                 {{ item.body || '-' }}
@@ -231,13 +232,13 @@ onMounted(loadData)
                     @click="openEditDialog(item)"
                     class="px-3 py-1 text-xs border border-primary-500 text-primary-400 rounded hover:bg-primary-500/10 transition-colors"
                   >
-                    编辑
+                    {{ t('common.edit') }}
                   </button>
                   <button
                     @click="removeItem(item)"
                     class="px-3 py-1 text-xs border border-red-500 text-red-400 rounded hover:bg-red-500/10 transition-colors"
                   >
-                    删除
+                    {{ t('common.delete') }}
                   </button>
                 </div>
               </td>
@@ -246,13 +247,13 @@ onMounted(loadData)
         </table>
 
         <div v-if="!loading && items.length === 0" class="text-center py-12 text-gray-500">
-          暂无简单响应配置
+          {{ t('page.bb1fa38106a7') }}
         </div>
       </div>
     </div>
 
     <div v-if="loading" class="text-center py-12 text-gray-500">
-      加载中...
+      {{ t('common.loading') }}
     </div>
 
     <!-- 新增/编辑对话框 -->
@@ -262,7 +263,7 @@ onMounted(loadData)
 
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
           <h3 class="text-lg font-medium text-gray-100 mb-4">
-            {{ dialogMode === 'add' ? '新增简单响应' : '编辑简单响应' }}
+            {{ dialogMode === 'add' ? t('page.395ab6a3f1af') : t('page.2f8d80e6c05e') }}
             <span v-if="dialogMode === 'edit'" class="text-primary-400 font-mono">{{ editingItem?.itemId }}</span>
           </h3>
 
@@ -273,14 +274,14 @@ onMounted(loadData)
               <input
                 v-model="form.itemId"
                 type="text"
-                placeholder="如: simpleres_2"
+                :placeholder="t('page.3850ee98b8c9')"
                 class="w-full bg-dark-sidebar border border-dark-border rounded-lg px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-primary-500"
               />
             </div>
 
             <!-- Body -->
             <div>
-              <label class="block text-sm text-gray-400 mb-1">Body <span class="text-gray-600">(支持占位符: {PORT}, {HOST}, {PATH} 等)</span></label>
+              <label class="block text-sm text-gray-400 mb-1">Body <span class="text-gray-600">{{ t('page.a5eaa7bfed47') }}</span></label>
               <textarea
                 v-model="form.body"
                 rows="3"
@@ -339,14 +340,14 @@ onMounted(loadData)
               @click="showDialog = false"
               class="px-4 py-2 text-sm text-gray-400 border border-dark-border rounded-lg hover:bg-white/5 transition-colors"
             >
-              取消
+              {{ t('common.cancel') }}
             </button>
             <button
               @click="handleSave"
               :disabled="saving"
               class="px-4 py-2 text-sm bg-primary-500 text-gray-900 rounded-lg hover:bg-primary-400 transition-colors disabled:opacity-50"
             >
-              {{ saving ? '保存中...' : '确定' }}
+              {{ saving ? t('page.917b1c1f18d0') : t('common.confirm') }}
             </button>
           </div>
         </div>

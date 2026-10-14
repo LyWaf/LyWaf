@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, computed, onMounted } from 'vue'
 import { errorTemplateApi } from '@/api'
 import type { ErrorTemplateItem, ErrorTemplateDetail } from '@/api'
@@ -6,14 +7,14 @@ import { useToast } from '@/composables/useToast'
 
 const { showSuccess, showError } = useToast()
 
-const STATUS_INFO: Record<number, { en: string; zh: string }> = {
-  403: { en: 'Forbidden', zh: '禁止访问' },
-  404: { en: 'Not Found', zh: '页面未找到' },
-  429: { en: 'Too Many Requests', zh: '请求过多' },
-  500: { en: 'Internal Server Error', zh: '服务器内部错误' },
-  502: { en: 'Bad Gateway', zh: '网关错误' },
-  503: { en: 'Service Unavailable', zh: '服务不可用' },
-}
+const STATUS_INFO = computed<Record<number, { en: string; zh: string }>>(() => ({
+  403: { en: 'Forbidden', zh: t('api.forbidden') },
+  404: { en: 'Not Found', zh: t('page.8e5568258ee0') },
+  429: { en: 'Too Many Requests', zh: t('page.a7942bc6d6d7') },
+  500: { en: 'Internal Server Error', zh: t('page.036549074827') },
+  502: { en: 'Bad Gateway', zh: t('page.20edb0eb0d18') },
+  503: { en: 'Service Unavailable', zh: t('page.c5798f0b3110') },
+}))
 
 // 状态
 const loading = ref(false)
@@ -42,7 +43,7 @@ const loadList = async () => {
       templates.value = res.templates
     }
   } catch {
-    showError('加载模板列表失败')
+    showError(t('page.2a7a6978460b'))
   } finally {
     loading.value = false
   }
@@ -60,7 +61,7 @@ const selectTemplate = async (code: number) => {
       editContent.value = res.activeContent
     }
   } catch {
-    showError('加载模板内容失败')
+    showError(t('page.6b5775a59018'))
   } finally {
     loadingDetail.value = false
   }
@@ -73,15 +74,15 @@ const saveTemplate = async () => {
   try {
     const res = await errorTemplateApi.save(selectedCode.value, editContent.value) as unknown as { success: boolean; message?: string }
     if (res?.success) {
-      showSuccess('模板已保存')
+      showSuccess(t('page.11cd7a79f4da'))
       // 刷新详情和列表
       await selectTemplate(selectedCode.value)
       await loadList()
     } else {
-      showError(res?.message || '保存失败')
+      showError(res?.message || t('ui.save.failed'))
     }
   } catch {
-    showError('保存失败')
+    showError(t('ui.save.failed'))
   } finally {
     saving.value = false
   }
@@ -94,16 +95,16 @@ const revertTemplate = async () => {
   try {
     const res = await errorTemplateApi.revert(selectedCode.value) as unknown as { success: boolean; message?: string }
     if (res?.success) {
-      showSuccess('已恢复为原始模板')
+      showSuccess(t('page.70217866ec64'))
       showRevertConfirm.value = false
       selectedCode.value = selectedCode.value // force re-select
       await selectTemplate(selectedCode.value!)
       await loadList()
     } else {
-      showError(res?.message || '恢复失败')
+      showError(res?.message || t('page.89281a45e04f'))
     }
   } catch {
-    showError('恢复失败')
+    showError(t('page.89281a45e04f'))
   } finally {
     reverting.value = false
   }
@@ -113,7 +114,7 @@ const revertTemplate = async () => {
 const resetContent = () => {
   if (detail.value) {
     editContent.value = detail.value.activeContent
-    showSuccess('已撤销修改')
+    showSuccess(t('page.d9eb707cf247'))
   }
 }
 
@@ -148,16 +149,16 @@ onMounted(() => {
     <div class="card">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
-          <h2 class="text-lg font-semibold text-gray-100">错误模板</h2>
-          <span class="text-xs text-gray-500">自定义 HTTP 错误页面</span>
+          <h2 class="text-lg font-semibold text-gray-100">{{ t('nav.errorTemplates') }}</h2>
+          <span class="text-xs text-gray-500">{{ t('page.4d2777b5a590') }}</span>
         </div>
       </div>
     </div>
 
     <!-- 提示 -->
     <div class="px-4 py-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-sm text-blue-300">
-      <span class="font-medium">提示：</span>
-      编辑后保存为独立文件（如 <code class="bg-white/10 px-1 rounded">.lywaf.403.html</code>），不会覆盖原始模板。可随时恢复为原始版本。
+      <span class="font-medium">{{ t('page.be8e4dd716fb') }}</span>
+      {{ t('page.5054e27de803') }} <code class="bg-white/10 px-1 rounded">.lywaf.403.html</code>{{ t('page.11ea5238804a') }}
     </div>
 
     <div class="flex gap-4" style="min-height: 600px;">
@@ -178,7 +179,7 @@ onMounted(() => {
         >
           <div class="flex items-center justify-between gap-1">
             <span class="font-mono">{{ tpl.statusCode }}</span>
-            <span v-if="tpl.hasEdit" class="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0" title="已编辑"></span>
+            <span v-if="tpl.hasEdit" class="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0" :title="t('page.d0c9d92453ab')"></span>
           </div>
           <div v-if="STATUS_INFO[tpl.statusCode]" class="text-[11px] mt-0.5 opacity-60 truncate">
             {{ STATUS_INFO[tpl.statusCode].en }}
@@ -194,18 +195,18 @@ onMounted(() => {
             <div class="flex items-center gap-2">
               <span class="text-sm font-medium text-gray-200">{{ selectedCode }} {{ STATUS_INFO[selectedCode]?.en }}</span>
               <span v-if="STATUS_INFO[selectedCode]?.zh" class="text-xs text-gray-500">{{ STATUS_INFO[selectedCode].zh }}</span>
-              <span v-if="detail.hasEdit" class="px-1.5 py-0.5 text-[10px] rounded bg-cyan-500/20 text-cyan-400">已编辑</span>
-              <span v-if="hasChanges" class="px-1.5 py-0.5 text-[10px] rounded bg-amber-500/20 text-amber-400">未保存</span>
+              <span v-if="detail.hasEdit" class="px-1.5 py-0.5 text-[10px] rounded bg-cyan-500/20 text-cyan-400">{{ t('page.d0c9d92453ab') }}</span>
+              <span v-if="hasChanges" class="px-1.5 py-0.5 text-[10px] rounded bg-amber-500/20 text-amber-400">{{ t('page.6a1be012c99c') }}</span>
             </div>
             <div class="flex items-center gap-2">
-              <span class="text-xs text-gray-500 mr-2">Ctrl+S 保存</span>
+              <span class="text-xs text-gray-500 mr-2">{{ t('page.1da37f8d35e3') }}</span>
               <button v-if="detail.hasEdit && detail.hasOriginal" @click="viewOriginal"
                 class="text-xs text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded hover:bg-white/5">
-                查看原始
+                {{ t('page.3b9f1e3ddd11') }}
               </button>
               <button v-if="detail.hasEdit" @click="showRevertConfirm = true"
                 class="text-xs text-red-400 hover:text-red-300 transition-colors px-2 py-1 rounded hover:bg-red-500/10">
-                恢复原始
+                {{ t('page.2d41469ba61a') }}
               </button>
             </div>
           </div>
@@ -217,14 +218,14 @@ onMounted(() => {
                 activeTab === 'source'
                   ? 'bg-primary-500/15 text-primary-400'
                   : 'text-gray-500 hover:text-gray-300 hover:bg-white/5']">
-              源码
+              {{ t('page.41b50a9198f4') }}
             </button>
             <button @click="activeTab = 'preview'"
               :class="['px-3 py-1 text-xs font-medium rounded transition-colors',
                 activeTab === 'preview'
                   ? 'bg-primary-500/15 text-primary-400'
                   : 'text-gray-500 hover:text-gray-300 hover:bg-white/5']">
-              预览
+              {{ t('page.13d61fea9f17') }}
             </button>
           </div>
 
@@ -256,17 +257,17 @@ onMounted(() => {
           <!-- 底部操作栏 -->
           <div class="flex items-center justify-between px-4 py-3 bg-dark-sidebar border-t border-dark-border">
             <div class="text-xs text-gray-500">
-              {{ detail.hasEdit ? `文件: .lywaf.${selectedCode}.html` : `文件: ${selectedCode}.html` }}
+              {{ detail.hasEdit ? t('page.14f3481090a7', { p0: selectedCode }) : t('page.1b4690b0dc2f', { p0: selectedCode }) }}
             </div>
             <div class="flex items-center gap-2">
               <button @click="resetContent" :disabled="!hasChanges || saving"
                 class="btn btn-sm btn-secondary text-xs">
-                撤销修改
+                {{ t('page.b5a929dae5ba') }}
               </button>
               <button @click="saveTemplate" :disabled="saving || !hasChanges"
                 class="btn btn-sm btn-primary text-xs flex items-center gap-1.5">
                 <span v-if="saving" class="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
-                <span>{{ saving ? '保存中...' : '保存' }}</span>
+                <span>{{ saving ? t('page.917b1c1f18d0') : t('common.save') }}</span>
               </button>
             </div>
           </div>
@@ -274,7 +275,7 @@ onMounted(() => {
 
         <!-- 未选中状态 -->
         <div v-else class="flex-1 flex items-center justify-center text-gray-500 text-sm">
-          请从左侧选择一个状态码进行编辑
+          {{ t('page.7b5b8edec475') }}
         </div>
       </div>
     </div>
@@ -284,17 +285,17 @@ onMounted(() => {
       <div v-if="showRevertConfirm" class="fixed inset-0 z-50 flex items-center justify-center">
         <div class="absolute inset-0 bg-black/60" @click="showRevertConfirm = false"></div>
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
-          <h3 class="text-lg font-semibold text-gray-100 mb-2">恢复为原始模板</h3>
+          <h3 class="text-lg font-semibold text-gray-100 mb-2">{{ t('page.82d20f9e1a44') }}</h3>
           <p class="text-sm text-gray-400 mb-4">
-            将删除 <code class="bg-white/10 px-1 rounded">.lywaf.{{ selectedCode }}.html</code> 编辑文件，恢复使用原始模板。
+            {{ t('page.8bee9be79dcd') }} <code class="bg-white/10 px-1 rounded">.lywaf.{{ selectedCode }}.html</code> {{ t('page.125d21e67b19') }}
           </p>
-          <p class="text-sm text-red-400 mb-5">此操作不可撤销，确定要继续吗？</p>
+          <p class="text-sm text-red-400 mb-5">{{ t('page.a13c91288e4c') }}</p>
           <div class="flex justify-end gap-3">
-            <button @click="showRevertConfirm = false" class="btn btn-sm btn-secondary">取消</button>
+            <button @click="showRevertConfirm = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
             <button @click="revertTemplate" :disabled="reverting"
               class="btn btn-sm bg-red-600 hover:bg-red-500 text-white flex items-center gap-1.5">
               <span v-if="reverting" class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
-              <span>{{ reverting ? '恢复中...' : '确认恢复' }}</span>
+              <span>{{ reverting ? t('page.c93c8b1cadcc') : t('page.51e44d56ec90') }}</span>
             </button>
           </div>
         </div>

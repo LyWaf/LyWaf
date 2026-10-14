@@ -15,6 +15,7 @@ public class ImageProcessPlugin : LyWafPluginBase
     private readonly PluginMetadata _metadata = new()
     {
         Id = "image-process",
+        LocalizationResourcePrefix = "LyWaf.Plugins.Sys.ImageProcess.Localization",
         SupportsScopedConfiguration = true,
         Name = "图片处理器",
         Version = "1.0.0",

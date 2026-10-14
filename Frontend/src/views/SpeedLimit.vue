@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, onMounted } from 'vue'
 import { throttleApi } from '@/api'
 import { useToast } from '@/composables/useToast'
@@ -23,7 +24,7 @@ const startEditGlobal = () => {
 }
 const saveGlobal = async () => {
   const val = parseInt(globalEditValue.value || '0')
-  if (isNaN(val) || val < 0) return showError('请输入有效数值')
+  if (isNaN(val) || val < 0) return showError(t('page.f9c48451c226'))
   try {
     const res = await throttleApi.setGlobal(val) as any
     if (res.success) {
@@ -32,10 +33,10 @@ const saveGlobal = async () => {
       showSuccess(res.message)
       await autoSavePatch()
     } else {
-      showError(res.message || '设置失败')
+      showError(res.message || t('page.bf76bc819550'))
     }
   } catch {
-    showError('设置全局限速失败')
+    showError(t('page.ff3bc79d5cbc'))
   }
 }
 
@@ -65,7 +66,7 @@ const toggleEnabled = async () => {
       await autoSavePatch()
     }
   } catch {
-    showError('切换失败')
+    showError(t('page.d08fd4224abc'))
   } finally {
     toggling.value = false
   }
@@ -89,7 +90,7 @@ const loadConfig = async () => {
       }))
     }
   } catch (e) {
-    showError('加载限速配置失败')
+    showError(t('page.a1792f1fd7dd'))
   } finally {
     loading.value = false
   }
@@ -98,21 +99,21 @@ const loadConfig = async () => {
 // IP 限速操作
 const addIpThrottle = async () => {
   const ip = newIp.value.trim()
-  if (!ip) return showError('请输入 IP 地址')
-  if (newIpLimit.value <= 0) return showError('限速值必须大于 0')
+  if (!ip) return showError(t('dashboard.enter.an.ip.address'))
+  if (newIpLimit.value <= 0) return showError(t('page.fe1bd8a37695'))
   try {
     const res = await throttleApi.addIpThrottle(ip, newIpLimit.value) as any
     if (res.success) {
-      showSuccess(res.message || '添加成功')
+      showSuccess(res.message || t('page.ee1a3c93ab01'))
       newIp.value = ''
       newIpLimit.value = 100
       await loadConfig()
       await autoSavePatch()
     } else {
-      showError(res.message || '添加失败')
+      showError(res.message || t('dashboard.failed.to.add'))
     }
   } catch {
-    showError('添加 IP 限速失败')
+    showError(t('page.574e298dfb27'))
   }
 }
 
@@ -120,14 +121,14 @@ const removeIpThrottle = async (ip: string) => {
   try {
     const res = await throttleApi.removeIpThrottle(ip) as any
     if (res.success) {
-      showSuccess(res.message || '已移除')
+      showSuccess(res.message || t('page.174688c755b9'))
       await loadConfig()
       await autoSavePatch()
     } else {
-      showError(res.message || '移除失败')
+      showError(res.message || t('page.4757fc1d4709'))
     }
   } catch {
-    showError('移除 IP 限速失败')
+    showError(t('page.5feea8bee124'))
   }
 }
 
@@ -139,19 +140,19 @@ const startEditIp = (item: { ip: string; limitKbps: number; editing?: boolean; e
 
 const saveEditIp = async (item: { ip: string; limitKbps: number; editing?: boolean; editValue?: string }) => {
   const val = parseInt(item.editValue || '0')
-  if (!val || val <= 0) return showError('限速值必须大于 0')
+  if (!val || val <= 0) return showError(t('page.fe1bd8a37695'))
   try {
     const res = await throttleApi.addIpThrottle(item.ip, val) as any
     if (res.success) {
       item.limitKbps = val
       item.editing = false
-      showSuccess('已更新')
+      showSuccess(t('page.434203a723b4'))
       await autoSavePatch()
     } else {
-      showError(res.message || '更新失败')
+      showError(res.message || t('page.ec99e5c45d64'))
     }
   } catch {
-    showError('更新 IP 限速失败')
+    showError(t('page.d752c38895ae'))
   }
 }
 
@@ -162,21 +163,21 @@ const cancelEditIp = (item: { editing?: boolean }) => {
 // 路径限速操作
 const addPathThrottle = async () => {
   const path = newPath.value.trim()
-  if (!path) return showError('请输入路径')
-  if (newPathLimit.value <= 0) return showError('限速值必须大于 0')
+  if (!path) return showError(t('page.13c40c0b2513'))
+  if (newPathLimit.value <= 0) return showError(t('page.fe1bd8a37695'))
   try {
     const res = await throttleApi.addPathThrottle(path, newPathLimit.value) as any
     if (res.success) {
-      showSuccess(res.message || '添加成功')
+      showSuccess(res.message || t('page.ee1a3c93ab01'))
       newPath.value = ''
       newPathLimit.value = 1024
       await loadConfig()
       await autoSavePatch()
     } else {
-      showError(res.message || '添加失败')
+      showError(res.message || t('dashboard.failed.to.add'))
     }
   } catch {
-    showError('添加路径限速失败')
+    showError(t('page.f33e8c28a239'))
   }
 }
 
@@ -184,14 +185,14 @@ const removePathThrottle = async (path: string) => {
   try {
     const res = await throttleApi.removePathThrottle(path) as any
     if (res.success) {
-      showSuccess(res.message || '已移除')
+      showSuccess(res.message || t('page.174688c755b9'))
       await loadConfig()
       await autoSavePatch()
     } else {
-      showError(res.message || '移除失败')
+      showError(res.message || t('page.4757fc1d4709'))
     }
   } catch {
-    showError('移除路径限速失败')
+    showError(t('page.24611120eed0'))
   }
 }
 
@@ -203,19 +204,19 @@ const startEditPath = (item: { path: string; limitKbps: number; editing?: boolea
 
 const saveEditPath = async (item: { path: string; limitKbps: number; editing?: boolean; editValue?: string }) => {
   const val = parseInt(item.editValue || '0')
-  if (!val || val <= 0) return showError('限速值必须大于 0')
+  if (!val || val <= 0) return showError(t('page.fe1bd8a37695'))
   try {
     const res = await throttleApi.addPathThrottle(item.path, val) as any
     if (res.success) {
       item.limitKbps = val
       item.editing = false
-      showSuccess('已更新')
+      showSuccess(t('page.434203a723b4'))
       await autoSavePatch()
     } else {
-      showError(res.message || '更新失败')
+      showError(res.message || t('page.ec99e5c45d64'))
     }
   } catch {
-    showError('更新路径限速失败')
+    showError(t('page.7a0f921d9a81'))
   }
 }
 
@@ -230,13 +231,13 @@ const removePatch = async () => {
   try {
     const res = await throttleApi.removePatch() as any
     if (res.success) {
-      showSuccess(res.message || '已删除补丁')
+      showSuccess(res.message || t('page.25daa3a60a35'))
       await loadConfig()
     } else {
-      showError(res.message || '删除失败')
+      showError(res.message || t('settings.deletion.failed'))
     }
   } catch {
-    showError('删除补丁失败')
+    showError(t('page.2f476ccaec39'))
   } finally {
     deletingPatch.value = false
   }
@@ -256,7 +257,7 @@ onMounted(loadConfig)
     <!-- 顶部操作 -->
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-4">
-        <h1 class="text-xl font-bold">速度限制</h1>
+        <h1 class="text-xl font-bold">{{ t('nav.speed') }}</h1>
         <button
           @click="toggleEnabled"
           :disabled="toggling"
@@ -273,20 +274,20 @@ onMounted(loadConfig)
           />
         </button>
         <span class="text-sm" :class="enabled ? 'text-green-400' : 'text-gray-500'">
-          {{ enabled ? '已启用' : '已禁用' }}
+          {{ enabled ? t('common.enabled') : t('common.disabled') }}
         </span>
       </div>
       <button @click="removePatch" :disabled="deletingPatch" class="btn btn-sm btn-danger">
-        {{ deletingPatch ? '删除中...' : '删除补丁' }}
+        {{ deletingPatch ? t('settings.deleting') : t('page.c9fee9110ba0') }}
       </button>
     </div>
 
     <!-- 全局限速 -->
     <div class="card">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-bold">全局带宽限速</h2>
+        <h2 class="text-lg font-bold">{{ t('page.8619ab93dbbe') }}</h2>
       </div>
-      <p class="text-sm text-gray-400 mb-3">对所有响应进行带宽限制，设为 0 表示不限制</p>
+      <p class="text-sm text-gray-400 mb-3">{{ t('page.e1dcf179ae81') }}</p>
       <div class="flex items-center gap-3">
         <template v-if="globalEditing">
           <input
@@ -297,29 +298,29 @@ onMounted(loadConfig)
             @keyup.escape="globalEditing = false"
           />
           <span class="text-sm text-gray-400">KB/s</span>
-          <button @click="saveGlobal" class="btn btn-sm btn-primary">保存</button>
-          <button @click="globalEditing = false" class="btn btn-sm btn-secondary">取消</button>
+          <button @click="saveGlobal" class="btn btn-sm btn-primary">{{ t('common.save') }}</button>
+          <button @click="globalEditing = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
         </template>
         <template v-else>
           <span class="font-mono text-blue-400 text-lg cursor-pointer hover:underline" @click="startEditGlobal">
-            {{ globalLimit > 0 ? formatSpeed(globalLimit) : '未限制' }}
+            {{ globalLimit > 0 ? formatSpeed(globalLimit) : t('page.67a4d26098f4') }}
           </span>
-          <button @click="startEditGlobal" class="btn btn-sm btn-secondary">修改</button>
+          <button @click="startEditGlobal" class="btn btn-sm btn-secondary">{{ t('page.37090f456516') }}</button>
         </template>
       </div>
     </div>
 
     <!-- IP 限速 -->
     <div class="card">
-      <h2 class="text-lg font-bold mb-4">IP 带宽限速</h2>
-      <p class="text-sm text-gray-400 mb-4">对指定 IP 地址进行带宽限制，限制该 IP 的响应速度</p>
+      <h2 class="text-lg font-bold mb-4">{{ t('page.43d49aecfab7') }}</h2>
+      <p class="text-sm text-gray-400 mb-4">{{ t('page.d1024f385935') }}</p>
 
       <!-- 新增 -->
       <div class="flex items-center gap-3 mb-4">
         <input
           v-model="newIp"
           type="text"
-          placeholder="IP 地址，如 192.168.1.100"
+          :placeholder="t('page.700a69ecd25b')"
           class="input flex-1"
           @keyup.enter="addIpThrottle"
         />
@@ -331,18 +332,18 @@ onMounted(loadConfig)
           />
           <span class="text-sm text-gray-400 whitespace-nowrap">KB/s</span>
         </div>
-        <button @click="addIpThrottle" class="btn btn-sm btn-primary whitespace-nowrap">添加</button>
+        <button @click="addIpThrottle" class="btn btn-sm btn-primary whitespace-nowrap">{{ t('common.add') }}</button>
       </div>
 
       <!-- 列表 -->
-      <div v-if="loading" class="text-center py-4 text-gray-400">加载中...</div>
-      <div v-else-if="ipLimits.length === 0" class="text-center py-6 text-gray-500">暂无 IP 限速规则</div>
+      <div v-if="loading" class="text-center py-4 text-gray-400">{{ t('common.loading') }}</div>
+      <div v-else-if="ipLimits.length === 0" class="text-center py-6 text-gray-500">{{ t('page.87efbedca0d7') }}</div>
       <table v-else class="w-full">
         <thead>
           <tr class="text-left text-sm text-gray-400 border-b border-gray-700">
-            <th class="pb-2">IP 地址</th>
-            <th class="pb-2">限速</th>
-            <th class="pb-2 text-right">操作</th>
+            <th class="pb-2">{{ t('settings.ip.address') }}</th>
+            <th class="pb-2">{{ t('dashboard.throttled') }}</th>
+            <th class="pb-2 text-right">{{ t('settings.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -372,12 +373,12 @@ onMounted(loadConfig)
             <td class="py-2 text-right">
               <div class="flex items-center justify-end gap-2">
                 <template v-if="item.editing">
-                  <button @click="saveEditIp(item)" class="btn btn-sm btn-primary">保存</button>
-                  <button @click="cancelEditIp(item)" class="btn btn-sm btn-secondary">取消</button>
+                  <button @click="saveEditIp(item)" class="btn btn-sm btn-primary">{{ t('common.save') }}</button>
+                  <button @click="cancelEditIp(item)" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
                 </template>
                 <template v-else>
-                  <button @click="startEditIp(item)" class="btn btn-sm btn-primary">编辑</button>
-                  <button @click="removeIpThrottle(item.ip)" class="btn btn-sm btn-danger">移除</button>
+                  <button @click="startEditIp(item)" class="btn btn-sm btn-primary">{{ t('common.edit') }}</button>
+                  <button @click="removeIpThrottle(item.ip)" class="btn btn-sm btn-danger">{{ t('page.6135d4159e89') }}</button>
                 </template>
               </div>
             </td>
@@ -388,15 +389,15 @@ onMounted(loadConfig)
 
     <!-- 路径限速 -->
     <div class="card">
-      <h2 class="text-lg font-bold mb-4">路径带宽限速</h2>
-      <p class="text-sm text-gray-400 mb-4">对指定 URL 路径进行带宽限制，路径末尾加 * 支持前缀匹配</p>
+      <h2 class="text-lg font-bold mb-4">{{ t('page.cd4b279dbc8e') }}</h2>
+      <p class="text-sm text-gray-400 mb-4">{{ t('page.d49704ce424b') }}</p>
 
       <!-- 新增 -->
       <div class="flex items-center gap-3 mb-4">
         <input
           v-model="newPath"
           type="text"
-          placeholder="URL 路径，如 /download/* 或 /api/export"
+          :placeholder="t('page.922a870f158e')"
           class="input flex-1"
           @keyup.enter="addPathThrottle"
         />
@@ -408,18 +409,18 @@ onMounted(loadConfig)
           />
           <span class="text-sm text-gray-400 whitespace-nowrap">KB/s</span>
         </div>
-        <button @click="addPathThrottle" class="btn btn-sm btn-primary whitespace-nowrap">添加</button>
+        <button @click="addPathThrottle" class="btn btn-sm btn-primary whitespace-nowrap">{{ t('common.add') }}</button>
       </div>
 
       <!-- 列表 -->
-      <div v-if="loading" class="text-center py-4 text-gray-400">加载中...</div>
-      <div v-else-if="pathLimits.length === 0" class="text-center py-6 text-gray-500">暂无路径限速规则</div>
+      <div v-if="loading" class="text-center py-4 text-gray-400">{{ t('common.loading') }}</div>
+      <div v-else-if="pathLimits.length === 0" class="text-center py-6 text-gray-500">{{ t('page.6dfc476dab10') }}</div>
       <table v-else class="w-full">
         <thead>
           <tr class="text-left text-sm text-gray-400 border-b border-gray-700">
-            <th class="pb-2">路径</th>
-            <th class="pb-2">限速</th>
-            <th class="pb-2 text-right">操作</th>
+            <th class="pb-2">{{ t('ui.path') }}</th>
+            <th class="pb-2">{{ t('dashboard.throttled') }}</th>
+            <th class="pb-2 text-right">{{ t('settings.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -449,12 +450,12 @@ onMounted(loadConfig)
             <td class="py-2 text-right">
               <div class="flex items-center justify-end gap-2">
                 <template v-if="item.editing">
-                  <button @click="saveEditPath(item)" class="btn btn-sm btn-primary">保存</button>
-                  <button @click="cancelEditPath(item)" class="btn btn-sm btn-secondary">取消</button>
+                  <button @click="saveEditPath(item)" class="btn btn-sm btn-primary">{{ t('common.save') }}</button>
+                  <button @click="cancelEditPath(item)" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
                 </template>
                 <template v-else>
-                  <button @click="startEditPath(item)" class="btn btn-sm btn-primary">编辑</button>
-                  <button @click="removePathThrottle(item.path)" class="btn btn-sm btn-danger">移除</button>
+                  <button @click="startEditPath(item)" class="btn btn-sm btn-primary">{{ t('common.edit') }}</button>
+                  <button @click="removePathThrottle(item.path)" class="btn btn-sm btn-danger">{{ t('page.6135d4159e89') }}</button>
                 </template>
               </div>
             </td>

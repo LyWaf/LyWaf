@@ -67,7 +67,7 @@ onUnmounted(() => {
 // ========== 登录 ==========
 const handleLogin = async () => {
   if (!username.value || !password.value) {
-    showError('请输入用户名和密码')
+    showError(t('login.credentialsRequired'))
     return
   }
   if (cooldownSeconds.value > 0) {
@@ -91,16 +91,16 @@ const handleLogin = async () => {
       if (res.retryAfterSeconds && res.retryAfterSeconds > 0) {
         startCooldown(res.retryAfterSeconds)
       }
-      showError(res.message || '登录失败')
+      showError(res.message || t('login.failed'))
     }
   } catch (e: any) {
     // axios 将 4xx 作为 error 抛出，从 response.data 中读取
     const data = e?.response?.data
     if (data?.retryAfterSeconds && data.retryAfterSeconds > 0) {
       startCooldown(data.retryAfterSeconds)
-      showError(data.message || '登录失败次数过多，请稍后再试')
+      showError(data.message || t('ui.too.many.failed.sign.in.attempts.try.again.later'))
     } else {
-      showError(data?.message || '登录失败，请检查网络连接')
+      showError(data?.message || t('ui.sign.in.failed.check.your.network.connection'))
     }
   } finally {
     loading.value = false

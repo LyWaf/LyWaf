@@ -12,6 +12,7 @@ public class CustomHeaderPlugin : LyWafPluginBase
     private readonly PluginMetadata _metadata = new()
     {
         Id = "custom-header",
+        LocalizationResourcePrefix = "LyWaf.Plugins.Examples.CustomHeader.Localization",
         Name = "自定义响应头",
         Version = "1.0.0",
         Description = "为所有响应添加自定义 HTTP 头",

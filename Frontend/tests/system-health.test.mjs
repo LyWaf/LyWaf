@@ -18,6 +18,7 @@ test('system health merges nonadjacent cluster cells without dropping destinatio
     require(name) {
       if (name === 'vue') return { ref: value => ({ value }), computed: fn => ({ get value() { return fn() } }), onMounted() {} }
       if (name === '@/api') return { managementTaskApi: {} }
+      if (name === '@/i18n') return { t: key => key, formatDateTime: value => String(value) }
       throw new Error(`Unexpected import: ${name}`)
     },
   })

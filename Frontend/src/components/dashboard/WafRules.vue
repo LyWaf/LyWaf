@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, onMounted } from 'vue'
 import { wafApi, dashboardApi } from '@/api'
 import { useToast } from '@/composables/useToast'
@@ -23,7 +24,7 @@ const { showSuccess, showError } = useToast()
 
 const rules = ref<RuleItem[]>([])
 const typeLabel = props.ruleType === 'args' ? 'Args' : 'Post'
-const title = `WAF ${typeLabel} 检测`
+const title = t('page.35d3df2f956c', { p0: typeLabel })
 
 onMounted(async () => {
   try {
@@ -54,7 +55,7 @@ const openAddDialog = () => {
 const submitRule = async () => {
   const pattern = dialogPattern.value.trim()
   if (!pattern) {
-    showError('请输入规则表达式')
+    showError(t('page.204801c813fa'))
     return
   }
 
@@ -65,13 +66,13 @@ const submitRule = async () => {
       : await wafApi.addPostRule(pattern)
     if (res.success) {
       rules.value.push({ id: Date.now().toString(), pattern, source: 'custom' })
-      showSuccess(`${typeLabel} 规则已添加`)
+      showSuccess(t('page.8758c0a28cf4', { p0: typeLabel }))
       showDialog.value = false
     } else {
-      showError((res as any).message || '添加失败')
+      showError((res as any).message || t('dashboard.failed.to.add'))
     }
   } catch {
-    showError('添加失败')
+    showError(t('dashboard.failed.to.add'))
   } finally {
     dialogLoading.value = false
   }
@@ -94,10 +95,10 @@ const doDelete = async () => {
       : await wafApi.removePostRule(deleteTarget.value.pattern)
     if (res.success) {
       rules.value = rules.value.filter(r => r.id !== deleteTarget.value!.id)
-      showSuccess('规则已删除')
+      showSuccess(t('page.04e366e33981'))
     }
   } catch {
-    showError('删除失败')
+    showError(t('settings.deletion.failed'))
   } finally {
     showDeleteConfirm.value = false
     deleteTarget.value = null
@@ -111,14 +112,14 @@ const doDelete = async () => {
     <div class="flex items-center justify-between mb-4 pb-3 border-b border-dark-border">
       <div class="flex items-center gap-3">
         <h2 class="text-base font-semibold text-gray-100">{{ title }}</h2>
-        <span class="text-xs text-gray-500">共 {{ rules.length }} 条规则</span>
+        <span class="text-xs text-gray-500">{{ t('page.76e547a8fa54') }} {{ rules.length }} {{ t('page.65ca3e7654a7') }}</span>
       </div>
       <div class="flex items-center gap-3">
         <button @click="openAddDialog" class="btn btn-sm btn-primary flex items-center gap-1.5">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
           </svg>
-          添加
+          {{ t('common.add') }}
         </button>
         <button
           @click="emit('toggle')"
@@ -150,11 +151,11 @@ const doDelete = async () => {
             <td class="px-5 py-2 w-14">
               <span v-if="rule.source === 'file'"
                 class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-cyan-500/15 text-cyan-400 whitespace-nowrap">
-                内置
+                {{ t('settings.built.in') }}
               </span>
               <span v-else
                 class="px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-500/15 text-green-400 whitespace-nowrap">
-                自定义
+                {{ t('page.4eafa9e925b3') }}
               </span>
             </td>
             <td class="py-2 pr-4">
@@ -166,14 +167,14 @@ const doDelete = async () => {
                 @click="confirmDelete(rule)"
                 class="text-xs text-red-400 hover:text-red-300 px-2 py-0.5 rounded hover:bg-red-500/10 transition-colors"
               >
-                移除
+                {{ t('page.6135d4159e89') }}
               </button>
             </td>
           </tr>
         </tbody>
       </table>
       <div v-if="rules.length === 0" class="text-center py-8 text-gray-500 text-sm">
-        暂无 {{ typeLabel }} 检测规则
+        {{ t('page.b336a174cd1f') }} {{ typeLabel }} {{ t('page.1288057a5655') }}
       </div>
     </div>
   </div>
@@ -184,24 +185,24 @@ const doDelete = async () => {
       <div class="absolute inset-0 bg-black/60" @click="showDialog = false"></div>
       <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-[460px] max-w-[90vw]">
         <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
-          <h3 class="text-lg font-semibold text-gray-100">添加 {{ typeLabel }} 检测规则</h3>
+          <h3 class="text-lg font-semibold text-gray-100">{{ t('common.add') }} {{ typeLabel }} {{ t('page.1288057a5655') }}</h3>
           <button @click="showDialog = false" class="text-gray-400 hover:text-gray-200 text-xl leading-none">&times;</button>
         </div>
         <div class="px-6 py-5">
-          <label class="block text-sm text-gray-400 mb-1">正则表达式 <span class="text-red-400">*</span></label>
+          <label class="block text-sm text-gray-400 mb-1">{{ t('page.af33e62808ca') }} <span class="text-red-400">*</span></label>
           <input
             v-model="dialogPattern"
             type="text"
             class="input font-mono"
-            placeholder="例如 (union|select|insert|update|delete)"
+            :placeholder="t('page.d7c2556bef63')"
             @keydown.enter="submitRule"
           />
-          <p class="text-xs text-gray-500 mt-2">用于检测请求中 {{ ruleType === 'args' ? 'URL 参数' : 'POST 数据' }} 的恶意内容</p>
+          <p class="text-xs text-gray-500 mt-2">{{ t('waf.inspectSource', { source: ruleType === 'args' ? t('page.7cffb7812fcc') : t('page.e8d40fcde9f1') }) }}</p>
         </div>
         <div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border">
-          <button @click="showDialog = false" class="btn btn-secondary">取消</button>
+          <button @click="showDialog = false" class="btn btn-secondary">{{ t('common.cancel') }}</button>
           <button @click="submitRule" :disabled="dialogLoading" class="btn btn-primary">
-            {{ dialogLoading ? '提交中...' : '确定添加' }}
+            {{ dialogLoading ? t('settings.submitting') : t('page.1945909fd7f7') }}
           </button>
         </div>
       </div>
@@ -214,13 +215,13 @@ const doDelete = async () => {
       <div class="absolute inset-0 bg-black/60" @click="showDeleteConfirm = false"></div>
       <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-[400px] max-w-[90vw]">
         <div class="px-6 py-5">
-          <h3 class="text-lg font-semibold text-gray-100 mb-2">确认删除</h3>
-          <p class="text-gray-400">确定要删除此规则吗？</p>
+          <h3 class="text-lg font-semibold text-gray-100 mb-2">{{ t('settings.confirm.deletion') }}</h3>
+          <p class="text-gray-400">{{ t('page.7cd709e90316') }}</p>
           <code v-if="deleteTarget" class="block mt-2 text-sm text-red-400 bg-dark-card-hover p-2 rounded break-all">{{ deleteTarget.pattern }}</code>
         </div>
         <div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border">
-          <button @click="showDeleteConfirm = false" class="btn btn-secondary">取消</button>
-          <button @click="doDelete" class="btn btn-danger">确定删除</button>
+          <button @click="showDeleteConfirm = false" class="btn btn-secondary">{{ t('common.cancel') }}</button>
+          <button @click="doDelete" class="btn btn-danger">{{ t('page.357af24bee32') }}</button>
         </div>
       </div>
     </div>

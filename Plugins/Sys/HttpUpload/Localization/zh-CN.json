@@ -1,4 +1,6 @@
 {
+  "metadata.name": "HTTP 上传",
+  "metadata.description": "通过 HMAC-SHA256 签名上传文件，可选安全解压 ZIP",
   "fields.Enabled": "启用",
   "fields.Path": "请求路径",
   "fields.Hosts": "允许的域名",
