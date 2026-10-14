@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import Sidebar from './Sidebar.vue'
 import Topbar from './Topbar.vue'
 import { ref, watch } from 'vue'
@@ -11,7 +12,7 @@ watch(() => route.fullPath, () => { navigationOpen.value = false })
 <template>
   <div class="flex h-screen bg-dark-bg overflow-hidden" @keydown.esc="navigationOpen = false">
     <!-- 侧边栏 -->
-    <button v-if="navigationOpen" class="fixed inset-0 bg-black/60 z-40 md:hidden" aria-label="关闭导航" @click="navigationOpen = false" />
+    <button v-if="navigationOpen" class="fixed inset-0 bg-black/60 z-40 md:hidden" :aria-label="t('common.close.navigation')" @click="navigationOpen = false" />
     <Sidebar :class="navigationOpen ? 'flex' : 'hidden md:flex'" />
 
     <!-- 主内容区 -->
@@ -26,7 +27,7 @@ watch(() => route.fullPath, () => { navigationOpen.value = false })
       
       <!-- 页脚 -->
       <footer class="text-center py-4 text-gray-500 text-sm border-t border-dark-border">
-        <p>LyWaf 网关防火墙 · {{ new Date().getFullYear() }}</p>
+        <p>{{ t('common.productName') }} · {{ new Date().getFullYear() }}</p>
       </footer>
     </div>
   </div>

@@ -1,0 +1,20 @@
+{
+  "fields.Enabled": "启用",
+  "fields.Path": "请求路径",
+  "fields.Hosts": "允许的域名",
+  "fields.RequireHttps": "要求 HTTPS",
+  "fields.Key": "签名密钥",
+  "fields.SignatureWindowSeconds": "签名有效期（秒）",
+  "fields.NonceDirectory": "防重放记录目录",
+  "fields.Directory": "目录",
+  "fields.AllowZip": "允许 ZIP 解压",
+  "fields.MaxUploadBytes": "最大上传大小（字节）",
+  "fields.MaxExtractedBytes": "最大解压大小（字节）",
+  "fields.MaxEntries": "最大文件条目数",
+  "plugins.http-upload.Directory.label": "上传根目录",
+  "plugins.http-upload.Directory.description": "上传和解压仅允许写入该绝对目录及其子目录。",
+  "plugins.http-upload.Hosts.description": "填写域名，不含协议和端口；星号 * 表示允许所有域名。",
+  "plugins.http-upload.Key.description": "至少 32 个字符；只写不回显，留空保留已配置的密钥。",
+  "plugins.http-upload.NonceDirectory.description": "持久化防重放记录，不应放在公开静态目录中。",
+  "plugins.http-upload.SignatureWindowSeconds.description": "接受的时间戳与服务器时间最大偏差。"
+}

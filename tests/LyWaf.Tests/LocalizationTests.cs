@@ -12,6 +12,18 @@ namespace LyWaf.Tests;
 
 public sealed class LocalizationTests
 {
+    [Fact]
+    public void PluginResourcesAreLoadedFromTheirAssemblyAndNotTheHostCatalog()
+    {
+        var upload = PluginLocalization.Load(new HttpUploadPlugin());
+        var auth = PluginLocalization.Load(new LyWaf.Plugins.Sys.SiteAuth.SiteAuthPlugin());
+        Assert.Equal("Upload root directory", upload["en-US"]["plugins.http-upload.Directory.label"]);
+        Assert.Equal("Cookie name", auth["en-US"]["fields.CookieName"]);
+        Assert.False(TextLocalizer.HasKey("fields.CookieName"));
+        Assert.False(upload["en-US"].ContainsKey("fields.CookieName"));
+        var field = PluginConfigurationSchema.Describe(typeof(HttpUploadOptions)).Single(field => field.Path == "Directory");
+        Assert.NotEqual(field.Label, PluginLocalization.Localize(field, upload).Label);
+    }
     [Theory]
     [InlineData(null, "zh-CN")]
     [InlineData("en-GB,en;q=0.8", "en-US")]

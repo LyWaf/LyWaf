@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, translateText } from '@/i18n'
 interface Column {
   key: string
   label: string
@@ -13,7 +14,7 @@ interface Props {
 }
 
 withDefaults(defineProps<Props>(), {
-  emptyText: '暂无数据',
+  emptyText: '',
 })
 </script>
 
@@ -31,7 +32,7 @@ withDefaults(defineProps<Props>(), {
               col.align === 'center' ? 'text-center' : col.align === 'right' ? 'text-right' : 'text-left'
             ]"
           >
-            {{ col.label }}
+            {{ translateText(col.label) }}
           </th>
         </tr>
       </thead>
@@ -56,7 +57,7 @@ withDefaults(defineProps<Props>(), {
         </tr>
         <tr v-if="data.length === 0">
           <td :colspan="columns.length" class="px-4 py-8 text-center text-gray-500">
-            {{ emptyText }}
+            {{ emptyText ? translateText(emptyText) : t('common.noData') }}
           </td>
         </tr>
       </tbody>

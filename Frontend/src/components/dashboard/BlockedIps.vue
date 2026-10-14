@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, formatDuration } from '@/i18n'
 import { ref, watch, computed, onMounted, onUnmounted } from 'vue'
 import Section from '@/components/common/Section.vue'
 import { ipApi } from '@/api'
@@ -30,10 +31,10 @@ watch(() => props.initialData, (newData) => {
 // 类型标签
 const typeLabel = (type: string) => {
   switch (type) {
-    case 'blocked': return '封禁'
-    case 'captcha': return '验证码'
-    case 'throttled': return '限速'
-    case 'log': return '日志'
+    case 'blocked': return t('dashboard.blocked')
+    case 'captcha': return t('dashboard.captcha')
+    case 'throttled': return t('dashboard.throttled')
+    case 'log': return t('dashboard.logging')
     default: return type
   }
 }
@@ -51,18 +52,10 @@ const typeClass = (type: string) => {
 
 // 格式化剩余时间
 const formatRemainingTime = (seconds?: number) => {
-  if (seconds === undefined || seconds === null) return '永久'
-  if (seconds <= 0) return '已过期'
+  if (seconds === undefined || seconds === null) return t('dashboard.permanent')
+  if (seconds <= 0) return t('dashboard.expired')
 
-  const days = Math.floor(seconds / 86400)
-  const hours = Math.floor((seconds % 86400) / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  const secs = Math.floor(seconds % 60)
-
-  if (days > 0) return `${days}天${hours}时`
-  if (hours > 0) return `${hours}时${minutes}分`
-  if (minutes > 0) return `${minutes}分${secs}秒`
-  return `${secs}秒`
+  return formatDuration(seconds)
 }
 
 // HTTP 方法颜色
@@ -99,47 +92,47 @@ const showDialog = ref(false)
 const blockForm = ref({
   ip: '',
   actionType: 'blocked' as ActionType,
-  reason: '手动封禁',
+  reason: t('dashboard.manual.block'),
   duration: 3600,
   speedLimit: 100,
 })
 const blockLoading = ref(false)
 
-const actionTypeOptions: { value: ActionType; label: string }[] = [
-  { value: 'blocked', label: '封禁' },
-  { value: 'captcha', label: '验证码' },
-  { value: 'throttled', label: '限速' },
-  { value: 'log', label: '日志记录' },
-]
+const actionTypeOptions = computed<{ value: ActionType; label: string }[]>(() => [
+  { value: 'blocked', label: t('dashboard.blocked') },
+  { value: 'captcha', label: t('dashboard.captcha') },
+  { value: 'throttled', label: t('dashboard.throttled') },
+  { value: 'log', label: t('dashboard.request.logging') },
+])
 
 const dialogTitle = computed(() => {
   switch (blockForm.value.actionType) {
-    case 'captcha': return '添加验证码验证'
-    case 'throttled': return '添加带宽限速'
-    case 'log': return '添加请求日志记录'
-    default: return '手动封禁 IP'
+    case 'captcha': return t('dashboard.require.captcha')
+    case 'throttled': return t('dashboard.add.bandwidth.limit')
+    case 'log': return t('dashboard.log.requests')
+    default: return t('dashboard.block.ip.manually')
   }
 })
 
 const submitBtnText = computed(() => {
-  if (blockLoading.value) return '提交中...'
+  if (blockLoading.value) return t('dashboard.submitting')
   switch (blockForm.value.actionType) {
-    case 'captcha': return '确定'
-    case 'throttled': return '确定'
-    case 'log': return '开始记录'
-    default: return '确定封禁'
+    case 'captcha': return t('dashboard.confirm')
+    case 'throttled': return t('dashboard.confirm')
+    case 'log': return t('dashboard.start.logging')
+    default: return t('dashboard.confirm.block')
   }
 })
 
 const openBlockDialog = () => {
-  blockForm.value = { ip: '', actionType: 'blocked', reason: '手动封禁', duration: 3600, speedLimit: 100 }
+  blockForm.value = { ip: '', actionType: 'blocked', reason: t('dashboard.manual.block'), duration: 3600, speedLimit: 100 }
   showDialog.value = true
 }
 
 const submitBlock = async () => {
   const { ip, actionType, reason, duration, speedLimit } = blockForm.value
   if (!ip.trim()) {
-    showError('请输入 IP 地址')
+    showError(t('dashboard.enter.an.ip.address'))
     return
   }
 
@@ -151,14 +144,14 @@ const submitBlock = async () => {
         blockedIps.value.push({
           ip: ip.trim(),
           type: 'log',
-          reason: '请求日志记录中',
+          reason: t('dashboard.recording.requests'),
           remainingSeconds: duration > 0 ? duration : undefined,
         })
-        showSuccess(`已开始记录: ${ip.trim()}`)
+        showSuccess(t('dashboard.loggingStarted', { ip: ip.trim() }))
         showDialog.value = false
         emit('refresh')
       } else {
-        showError((res as any).message || '添加失败')
+        showError((res as any).message || t('dashboard.failed.to.add'))
       }
     } else {
       const res = await ipApi.blockIp(
@@ -169,24 +162,24 @@ const submitBlock = async () => {
         actionType === 'throttled' ? speedLimit : undefined,
       )
       if (res.success) {
-        let displayReason = reason || '手动封禁'
-        if (actionType === 'captcha') displayReason = `验证码待验证: ${reason || '手动验证码'}`
-        if (actionType === 'throttled') displayReason = `带宽限速: ${speedLimit}KB/s`
+        let displayReason = reason || t('dashboard.manual.block')
+        if (actionType === 'captcha') displayReason = t('dashboard.captchaReason', { reason: reason || t('dashboard.manual.captcha') })
+        if (actionType === 'throttled') displayReason = t('dashboard.bandwidth', { speed: speedLimit })
         blockedIps.value.push({
           ip: ip.trim(),
           type: actionType,
           reason: displayReason,
           remainingSeconds: duration || undefined,
         })
-        showSuccess((res as any).message || '操作成功')
+        showSuccess((res as any).message || t('dashboard.operation.successful'))
         showDialog.value = false
         emit('refresh')
       } else {
-        showError((res as any).message || '操作失败')
+        showError((res as any).message || t('dashboard.operation.failed'))
       }
     }
   } catch {
-    showError('操作失败')
+    showError(t('dashboard.operation.failed'))
   } finally {
     blockLoading.value = false
   }
@@ -307,14 +300,14 @@ const replayRequest = async (entry: IpLogEntry) => {
       index: entry.index,
       status: response.status,
       statusText: response.statusText,
-      body: responseBody.length > 10000 ? responseBody.substring(0, 10000) + '\n[... 截断 ...]' : responseBody,
+      body: responseBody.length > 10000 ? responseBody.substring(0, 10000) + '\n' + t('dashboard.truncated') : responseBody,
     }
   } catch (err: any) {
     replayResult.value = {
       index: entry.index,
       status: 0,
       statusText: 'Error',
-      body: `请求失败: ${err.message || '网络错误'}`,
+      body: t('dashboard.requestFailed', { error: err.message || t('dashboard.network.error') }),
     }
   } finally {
     replayLoading.value = null
@@ -385,9 +378,9 @@ const copyCurl = async (format: CurlFormat) => {
   const curl = buildCurl(entry, format)
   try {
     await navigator.clipboard.writeText(curl)
-    showSuccess(`已复制 cURL（${format === 'bash' ? 'Bash' : format === 'cmd' ? 'CMD' : 'PowerShell'}）`)
+    showSuccess(t('dashboard.copiedCurl', { format: format === 'bash' ? 'Bash' : format === 'cmd' ? 'CMD' : 'PowerShell' }))
   } catch {
-    showError('复制失败')
+    showError(t('dashboard.copy.failed'))
   }
   closeContextMenu()
 }
@@ -400,72 +393,72 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 // ======================== 其他操作 ========================
 
 const deleteLogFile = async (ip: string) => {
-  if (!confirm(`确定要删除 ${ip} 的日志文件吗？`)) return
+  if (!confirm(t('dashboard.deleteLogConfirm', { ip }))) return
 
   try {
     const res = await ipApi.deleteIpLogFile(ip)
     if (res.success) {
-      showSuccess(`已删除 ${ip} 的日志文件`)
+      showSuccess(t('dashboard.logDeleted', { ip }))
       emit('refresh')
     }
   } catch {
-    showError('删除失败')
+    showError(t('dashboard.delete.failed'))
   }
 }
 
 const unblockIp = async (ip: string, type: string) => {
   if (type === 'log') {
-    if (!confirm(`确定要停止记录 ${ip} 的请求日志吗？`)) return
+    if (!confirm(t('dashboard.stopLogConfirm', { ip }))) return
 
     try {
       const res = await ipApi.removeIpLog(ip)
       if (res.success) {
         blockedIps.value = blockedIps.value.filter(i => !(i.ip === ip && i.type === 'log'))
-        showSuccess(`已停止记录: ${ip}`)
+        showSuccess(t('dashboard.logStopped', { ip }))
         emit('refresh')
       }
     } catch {
-      showError('停止失败')
+      showError(t('dashboard.failed.to.stop'))
     }
     return
   }
 
-  if (!confirm(`确定要解封 ${ip} 吗？`)) return
+  if (!confirm(t('dashboard.unblockConfirm', { ip }))) return
 
   try {
     const res = await ipApi.unblockIp(ip)
     if (res.success) {
       blockedIps.value = blockedIps.value.filter(i => i.ip !== ip)
-      showSuccess(`已解封: ${ip}`)
+      showSuccess(t('dashboard.unblocked', { ip }))
       emit('refresh')
     }
   } catch {
-    showError('解封失败')
+    showError(t('dashboard.failed.to.unblock'))
   }
 }
 
 const clearAll = async () => {
-  if (!confirm('确定要清空所有封禁/监控的 IP 吗？')) return
+  if (!confirm(t('dashboard.clear.all.blocked.monitored.ips'))) return
 
   try {
     const res = await ipApi.clearBlockedIps()
     if (res.success) {
       blockedIps.value = []
-      showSuccess('已清空列表')
+      showSuccess(t('dashboard.list.cleared'))
       emit('refresh')
     }
   } catch {
-    showError('清空失败')
+    showError(t('dashboard.failed.to.clear'))
   }
 }
 </script>
 
 <template>
-  <Section id="blocked-ips" :title="`当前封禁/受限的 IP (${blockedIps.length})`">
+  <Section id="blocked-ips" :title="t('dashboard.blockedTitle', { count: blockedIps.length })">
     <template #actions>
       <div class="flex gap-2">
-        <button @click="openBlockDialog" class="btn btn-sm btn-primary">+ 手动添加</button>
-        <button @click="clearAll" class="btn btn-sm btn-danger">清空全部</button>
+        <button @click="openBlockDialog" class="btn btn-sm btn-primary"> {{ t('dashboard..add.manually') }} </button>
+        <button @click="clearAll" class="btn btn-sm btn-danger"> {{ t('dashboard.clear.all') }} </button>
       </div>
     </template>
 
@@ -473,15 +466,15 @@ const clearAll = async () => {
       <div
         v-for="item in blockedIps"
         :key="`${item.type}-${item.ip}`"
-        class="flex items-center justify-between p-4 bg-dark-card-hover rounded-lg"
+        class="flex flex-wrap gap-3 items-center justify-between p-4 bg-dark-card-hover rounded-lg"
       >
-        <div class="flex items-center gap-6">
+        <div class="flex flex-wrap min-w-0 items-center gap-6">
           <div>
-            <span class="text-gray-400 text-sm">IP 地址</span>
+            <span class="text-gray-400 text-sm"> {{ t('dashboard.ip.address') }} </span>
             <div class="text-red-400 font-mono">{{ item.ip }}</div>
           </div>
           <div>
-            <span class="text-gray-400 text-sm">类型</span>
+            <span class="text-gray-400 text-sm"> {{ t('dashboard.type') }} </span>
             <div>
               <span :class="typeClass(item.type)" class="inline-block px-2 py-0.5 rounded text-xs font-medium">
                 {{ typeLabel(item.type) }}
@@ -489,31 +482,29 @@ const clearAll = async () => {
             </div>
           </div>
           <div v-if="item.reason">
-            <span class="text-gray-400 text-sm">原因</span>
-            <div class="text-gray-300 text-sm">{{ item.reason }}</div>
+            <span class="text-gray-400 text-sm"> {{ t('dashboard.reason') }} </span>
+            <div class="text-gray-300 text-sm break-words">{{ item.reason }}</div>
           </div>
           <div>
-            <span class="text-gray-400 text-sm">剩余时间</span>
+            <span class="text-gray-400 text-sm"> {{ t('dashboard.time.remaining') }} </span>
             <div class="text-yellow-400">{{ formatRemainingTime(item.remainingSeconds) }}</div>
           </div>
         </div>
         <div class="flex items-center gap-2">
           <template v-if="item.type === 'log'">
-            <button @click="viewLog(item.ip)" class="btn btn-sm btn-secondary">查看日志</button>
-            <button @click="deleteLogFile(item.ip)" class="btn btn-sm btn-secondary">清空日志</button>
+            <button @click="viewLog(item.ip)" class="btn btn-sm btn-secondary"> {{ t('dashboard.view.logs') }} </button>
+            <button @click="deleteLogFile(item.ip)" class="btn btn-sm btn-secondary"> {{ t('dashboard.clear.logs') }} </button>
           </template>
           <button
             @click="unblockIp(item.ip, item.type)"
             class="btn btn-sm btn-secondary"
           >
-            {{ item.type === 'log' ? '停止' : '解封' }}
+            {{ item.type === 'log' ? t('dashboard.stop') : t('dashboard.unblock') }}
           </button>
         </div>
       </div>
 
-      <div v-if="blockedIps.length === 0" class="text-gray-500 text-center py-8">
-        暂无封禁/监控的 IP
-      </div>
+      <div v-if="blockedIps.length === 0" class="text-gray-500 text-center py-8"> {{ t('dashboard.no.blocked.monitored.ips') }} </div>
     </div>
   </Section>
 
@@ -529,7 +520,7 @@ const clearAll = async () => {
         <div class="px-6 py-5 space-y-4">
           <!-- 操作类型下拉 -->
           <div>
-            <label class="block text-sm text-gray-400 mb-1">操作类型</label>
+            <label class="block text-sm text-gray-400 mb-1"> {{ t('dashboard.action') }} </label>
             <select v-model="blockForm.actionType" class="input">
               <option v-for="opt in actionTypeOptions" :key="opt.value" :value="opt.value">
                 {{ opt.label }}
@@ -538,30 +529,30 @@ const clearAll = async () => {
           </div>
           <!-- IP 地址 -->
           <div>
-            <label class="block text-sm text-gray-400 mb-1">IP 地址 <span class="text-red-400">*</span></label>
+            <label class="block text-sm text-gray-400 mb-1"> {{ t('dashboard.ip.address') }} <span class="text-red-400">*</span></label>
             <input
               v-model="blockForm.ip"
               type="text"
               class="input"
-              placeholder="例如 192.168.1.100"
+              :placeholder="t('dashboard.e.g.192.168.1.100')"
               @keydown.enter="submitBlock"
             />
           </div>
           <!-- 封禁/验证码: 原因 -->
           <div v-if="blockForm.actionType === 'blocked' || blockForm.actionType === 'captcha'">
             <label class="block text-sm text-gray-400 mb-1">
-              {{ blockForm.actionType === 'captcha' ? '规则名称' : '封禁原因' }}
+              {{ blockForm.actionType === 'captcha' ? t('dashboard.rule.name') : t('dashboard.block.reason') }}
             </label>
             <input
               v-model="blockForm.reason"
               type="text"
               class="input"
-              :placeholder="blockForm.actionType === 'captcha' ? '手动验证码' : '手动封禁'"
+              :placeholder="blockForm.actionType === 'captcha' ? t('dashboard.manual.captcha') : t('dashboard.manual.block')"
             />
           </div>
           <!-- 限速: 速度 -->
           <div v-if="blockForm.actionType === 'throttled'">
-            <label class="block text-sm text-gray-400 mb-1">限速速度（KB/s）</label>
+            <label class="block text-sm text-gray-400 mb-1"> {{ t('dashboard.bandwidth.limit.kb.s') }} </label>
             <input
               v-model.number="blockForm.speedLimit"
               type="number"
@@ -572,7 +563,7 @@ const clearAll = async () => {
           </div>
           <!-- 时长（所有类型都显示） -->
           <div>
-            <label class="block text-sm text-gray-400 mb-1">时长（秒，0 表示永久）</label>
+            <label class="block text-sm text-gray-400 mb-1"> {{ t('dashboard.duration.seconds.0.for.permanent') }} </label>
             <input
               v-model.number="blockForm.duration"
               type="number"
@@ -581,16 +572,14 @@ const clearAll = async () => {
               placeholder="3600"
             />
             <span class="text-xs text-gray-500 mt-1 block">
-              {{ blockForm.duration > 0 ? formatRemainingTime(blockForm.duration) : '永久' }}
+              {{ blockForm.duration > 0 ? formatRemainingTime(blockForm.duration) : t('dashboard.permanent') }}
             </span>
           </div>
           <!-- 日志模式提示 -->
-          <p v-if="blockForm.actionType === 'log'" class="text-xs text-gray-500">
-            该 IP 的所有请求内容（请求头、请求体）将被完整记录到文件中。每个请求最多记录 200KB 数据。
-          </p>
+          <p v-if="blockForm.actionType === 'log'" class="text-xs text-gray-500"> {{ t('dashboard.request.headers.and.bodies.for.this.ip.are.recorded.up.to.200.kb.per.request') }} </p>
         </div>
         <div class="flex justify-end gap-3 px-6 py-4 border-t border-dark-border">
-          <button @click="showDialog = false" class="btn btn-secondary">取消</button>
+          <button @click="showDialog = false" class="btn btn-secondary"> {{ t('dashboard.cancel') }} </button>
           <button @click="submitBlock" :disabled="blockLoading" class="btn btn-primary">
             {{ submitBtnText }}
           </button>
@@ -607,11 +596,10 @@ const clearAll = async () => {
         <!-- 头部 -->
         <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border shrink-0">
           <div class="flex items-center gap-4">
-            <h3 class="text-lg font-semibold text-gray-100">
-              请求日志 - <span class="text-blue-400 font-mono">{{ logViewIp }}</span>
+            <h3 class="text-lg font-semibold text-gray-100"> {{ t('dashboard.request.logs') }} <span class="text-blue-400 font-mono">{{ logViewIp }}</span>
             </h3>
             <span v-if="logTotal > 0" class="text-xs text-gray-500">
-              共 {{ logTotal }} 条 · {{ formatFileSize(logFileSize) }}
+              {{ t('dashboard.entries', { count: logTotal }) }} · {{ formatFileSize(logFileSize) }}
             </span>
           </div>
           <button @click="showLogViewDialog = false" class="text-gray-400 hover:text-gray-200 text-xl leading-none">&times;</button>
@@ -622,13 +610,11 @@ const clearAll = async () => {
           <!-- 加载中 -->
           <div v-if="logViewLoading" class="flex items-center justify-center py-12">
             <div class="animate-spin w-6 h-6 border-2 border-gray-500 border-t-primary-400 rounded-full"></div>
-            <span class="ml-3 text-gray-400 text-sm">加载中...</span>
+            <span class="ml-3 text-gray-400 text-sm"> {{ t('dashboard.loading') }} </span>
           </div>
 
           <!-- 无数据 -->
-          <div v-else-if="logEntries.length === 0" class="text-gray-500 text-center py-12">
-            暂无日志条目
-          </div>
+          <div v-else-if="logEntries.length === 0" class="text-gray-500 text-center py-12"> {{ t('dashboard.no.log.entries') }} </div>
 
           <!-- 日志条目列表 -->
           <div v-else class="divide-y divide-dark-border">
@@ -665,7 +651,7 @@ const clearAll = async () => {
                   class="btn btn-sm text-xs px-2 py-1 shrink-0"
                   :class="replayLoading === entry.index ? 'bg-gray-600 text-gray-400 cursor-wait' : 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'"
                 >
-                  {{ replayLoading === entry.index ? '重放中...' : '重放' }}
+                  {{ replayLoading === entry.index ? t('dashboard.replaying') : t('dashboard.replay') }}
                 </button>
               </div>
 
@@ -676,37 +662,35 @@ const clearAll = async () => {
                   <div class="text-xs text-gray-200 font-mono">{{ entry.requestLine }}</div>
                   <div v-if="entry.host" class="text-xs text-gray-400 font-mono mt-1">Host: {{ entry.host }}</div>
                   <div v-if="entry.statusCode || entry.duration" class="flex items-center gap-3 mt-2 pt-2 border-t border-dark-border">
-                    <span v-if="entry.statusCode" class="text-xs font-mono">
-                      状态码: <span :class="statusCodeClass(entry.statusCode)" class="font-bold">{{ entry.statusCode }}</span>
+                    <span v-if="entry.statusCode" class="text-xs font-mono"> {{ t('dashboard.status.code') }} <span :class="statusCodeClass(entry.statusCode)" class="font-bold">{{ entry.statusCode }}</span>
                     </span>
-                    <span v-if="entry.duration" class="text-xs font-mono text-gray-400">
-                      耗时: <span class="text-gray-300">{{ entry.duration }}</span>
+                    <span v-if="entry.duration" class="text-xs font-mono text-gray-400"> {{ t('dashboard.duration') }} <span class="text-gray-300">{{ entry.duration }}</span>
                     </span>
                   </div>
                 </div>
 
                 <!-- 请求头 -->
                 <div v-if="entry.headers" class="bg-dark-bg rounded-lg p-3">
-                  <div class="text-xs text-gray-500 mb-1">请求头</div>
+                  <div class="text-xs text-gray-500 mb-1"> {{ t('dashboard.request.headers') }} </div>
                   <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[200px] overflow-auto">{{ entry.headers }}</pre>
                 </div>
 
                 <!-- 请求体 -->
                 <div v-if="entry.requestBody" class="bg-dark-bg rounded-lg p-3">
-                  <div class="text-xs text-gray-500 mb-1">请求体</div>
+                  <div class="text-xs text-gray-500 mb-1"> {{ t('dashboard.request.body') }} </div>
                   <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[300px] overflow-auto">{{ entry.requestBody }}</pre>
                 </div>
 
                 <!-- 响应体 -->
                 <div v-if="entry.responseBody" class="bg-dark-bg rounded-lg p-3">
-                  <div class="text-xs text-gray-500 mb-1">响应内容</div>
+                  <div class="text-xs text-gray-500 mb-1"> {{ t('dashboard.response.body') }} </div>
                   <pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap break-all max-h-[300px] overflow-auto">{{ entry.responseBody }}</pre>
                 </div>
 
                 <!-- 重放结果 -->
                 <div v-if="replayResult && replayResult.index === entry.index" class="bg-dark-bg rounded-lg p-3 border border-purple-500/30">
                   <div class="flex items-center gap-2 mb-2">
-                    <span class="text-xs text-purple-400 font-semibold">重放响应</span>
+                    <span class="text-xs text-purple-400 font-semibold"> {{ t('dashboard.replay.response') }} </span>
                     <span
                       class="text-xs font-mono px-1.5 py-0.5 rounded"
                       :class="replayResult.status >= 200 && replayResult.status < 300 ? 'bg-green-500/20 text-green-400' : replayResult.status >= 400 ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'"
@@ -726,19 +710,19 @@ const clearAll = async () => {
           <div class="flex items-center gap-2">
             <!-- 分页控件 -->
             <template v-if="totalPages > 1">
-              <button @click="gotoPage(1)" :disabled="currentPage === 1" class="btn btn-sm btn-secondary text-xs px-2">首页</button>
-              <button @click="gotoPage(currentPage - 1)" :disabled="currentPage === 1" class="btn btn-sm btn-secondary text-xs px-2">上一页</button>
+              <button @click="gotoPage(1)" :disabled="currentPage === 1" class="btn btn-sm btn-secondary text-xs px-2"> {{ t('dashboard.first') }} </button>
+              <button @click="gotoPage(currentPage - 1)" :disabled="currentPage === 1" class="btn btn-sm btn-secondary text-xs px-2"> {{ t('dashboard.previous') }} </button>
               <span class="text-xs text-gray-400 px-2">
-                第 {{ currentPage }} / {{ totalPages }} 页
+                {{ t('dashboard.pages', { page: currentPage, total: totalPages }) }}
               </span>
-              <button @click="gotoPage(currentPage + 1)" :disabled="currentPage === totalPages" class="btn btn-sm btn-secondary text-xs px-2">下一页</button>
-              <button @click="gotoPage(totalPages)" :disabled="currentPage === totalPages" class="btn btn-sm btn-secondary text-xs px-2">末页</button>
+              <button @click="gotoPage(currentPage + 1)" :disabled="currentPage === totalPages" class="btn btn-sm btn-secondary text-xs px-2"> {{ t('dashboard.next') }} </button>
+              <button @click="gotoPage(totalPages)" :disabled="currentPage === totalPages" class="btn btn-sm btn-secondary text-xs px-2"> {{ t('dashboard.last') }} </button>
             </template>
-            <span v-else-if="logTotal > 0" class="text-xs text-gray-500">共 {{ logTotal }} 条</span>
+            <span v-else-if="logTotal > 0" class="text-xs text-gray-500">{{ t('dashboard.entries', { count: logTotal }) }}</span>
           </div>
           <div class="flex items-center gap-2">
-            <button @click="viewLog(logViewIp)" class="btn btn-secondary btn-sm">刷新</button>
-            <button @click="showLogViewDialog = false" class="btn btn-secondary btn-sm">关闭</button>
+            <button @click="viewLog(logViewIp)" class="btn btn-secondary btn-sm"> {{ t('dashboard.refresh') }} </button>
+            <button @click="showLogViewDialog = false" class="btn btn-secondary btn-sm"> {{ t('dashboard.close') }} </button>
           </div>
         </div>
       </div>
@@ -753,7 +737,7 @@ const clearAll = async () => {
       :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
       @click.stop
     >
-      <div class="px-3 py-1.5 text-xs text-gray-500 select-none">复制为 cURL</div>
+      <div class="px-3 py-1.5 text-xs text-gray-500 select-none"> {{ t('dashboard.copy.as.curl') }} </div>
       <button
         @click="copyCurl('bash')"
         class="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-dark-card-hover flex items-center gap-2"

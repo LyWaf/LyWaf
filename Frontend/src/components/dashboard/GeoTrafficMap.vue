@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t, locale, formatNumber } from '@/i18n'
+import { geoLabel } from '@/utils/geoLabel'
 import { ref, onMounted, onUnmounted, watch, computed, shallowRef, nextTick } from 'vue'
 import * as echarts from 'echarts/core'
 import { MapChart } from 'echarts/charts'
@@ -63,7 +65,7 @@ async function registerMapData(name: string, jsonFile: string) {
     registeredMaps.add(name)
     return true
   } catch (e) {
-    console.error(`加载地图数据失败 [${name}]:`, e)
+    console.error(`Failed to load map [${name}]:`, e)
     return false
   }
 }
@@ -121,9 +123,10 @@ function buildOption(): echarts.EChartsCoreOption {
   return {
     tooltip: {
       trigger: 'item',
+      renderMode: 'richText',
       formatter: (params: any) => {
         const val = params.value || 0
-        return `<b>${params.name}</b><br/>${isIntercepts ? '拦截' : '访问'}: ${val.toLocaleString()}`
+        return `${geoLabel(params.name)}\n${isIntercepts ? t('dashboard.blocks') : t('dashboard.visits')}: ${formatNumber(val)}`
       },
       backgroundColor: 'rgba(20, 25, 35, 0.95)',
       borderColor: '#2d3748',
@@ -134,7 +137,7 @@ function buildOption(): echarts.EChartsCoreOption {
       max: maxVal || 100,
       left: 16,
       bottom: 16,
-      text: ['高', '低'],
+      text: [t('dashboard.high'), t('dashboard.low')],
       calculable: true,
       inRange: {
         color: isIntercepts
@@ -146,13 +149,13 @@ function buildOption(): echarts.EChartsCoreOption {
       itemHeight: 100,
     },
     series: [{
-      name: isIntercepts ? '拦截量' : '访问量',
+      name: isIntercepts ? t('dashboard.blocks') : t('dashboard.visits'),
       type: 'map',
       map: isChina ? 'china' : 'world',
       roam: true,
       zoom: isChina ? 1.2 : 1,
       emphasis: {
-        label: { show: true, color: '#f1f5f9', fontSize: 12 },
+        label: { show: true, color: '#f1f5f9', fontSize: 12, formatter: (params: any) => geoLabel(params.name) },
         itemStyle: { areaColor: '#f59e0b' },
       },
       select: {
@@ -176,7 +179,7 @@ function updateChart() {
   chart.value.setOption(buildOption(), true)
 }
 
-watch([mapMode, dataMode], async () => {
+watch([mapMode, dataMode, locale], async () => {
   const ok = await ensureCurrentMap()
   if (ok) {
     mapReady.value = true
@@ -216,11 +219,11 @@ onUnmounted(() => {
 <template>
   <div class="card">
     <!-- 头部 -->
-    <div class="flex items-center justify-between mb-4 pb-3 border-b border-dark-border">
+    <div class="flex flex-wrap gap-3 items-center justify-between mb-4 pb-3 border-b border-dark-border">
       <div class="flex items-center gap-3">
-        <h2 class="text-base font-semibold text-gray-100">地理流量分布</h2>
+        <h2 class="text-base font-semibold text-gray-100"> {{ t('dashboard.traffic.by.location') }} </h2>
         <span class="text-xs text-gray-500">
-          {{ dataMode === 'visits' ? '总访问' : '总拦截' }}: {{ totalCount.toLocaleString() }}
+          {{ dataMode === 'visits' ? t('dashboard.total.visits') : t('dashboard.total.blocks') }}: {{ totalCount.toLocaleString() }}
         </span>
       </div>
       <div class="flex items-center gap-2">
@@ -232,14 +235,14 @@ onUnmounted(() => {
               mapMode === 'world'
                 ? 'bg-blue-600 text-white'
                 : 'bg-dark-card text-gray-400 hover:text-gray-200']"
-          >世界</button>
+          > {{ t('dashboard.world') }} </button>
           <button
             @click="mapMode = 'china'"
             :class="['px-3 py-1 text-xs transition-colors',
               mapMode === 'china'
                 ? 'bg-blue-600 text-white'
                 : 'bg-dark-card text-gray-400 hover:text-gray-200']"
-          >中国</button>
+          > {{ t('dashboard.china') }} </button>
         </div>
         <!-- 数据模式切换 -->
         <div class="flex rounded-md overflow-hidden border border-dark-border">
@@ -249,27 +252,27 @@ onUnmounted(() => {
               dataMode === 'visits'
                 ? 'bg-blue-600 text-white'
                 : 'bg-dark-card text-gray-400 hover:text-gray-200']"
-          >访问</button>
+          > {{ t('dashboard.visits') }} </button>
           <button
             @click="dataMode = 'intercepts'"
             :class="['px-3 py-1 text-xs transition-colors',
               dataMode === 'intercepts'
                 ? 'bg-blue-600 text-white'
                 : 'bg-dark-card text-gray-400 hover:text-gray-200']"
-          >仅拦截</button>
+          > {{ t('dashboard.blocked.only') }} </button>
         </div>
       </div>
     </div>
 
     <!-- 内容区：地图 + 排行 -->
-    <div class="flex gap-4">
+    <div class="flex flex-col lg:flex-row gap-4">
       <!-- 地图 -->
-      <div class="flex-1 min-h-[420px]" ref="chartRef"></div>
+      <div class="flex-1 min-w-0 min-h-[420px]" ref="chartRef"></div>
 
       <!-- 排行榜 -->
-      <div class="w-56 shrink-0 flex flex-col">
+      <div class="w-full lg:w-56 shrink-0 flex flex-col">
         <h3 class="text-sm text-gray-400 mb-3">
-          {{ mapMode === 'china' ? '省份排行' : '国家/地区排行' }}
+          {{ mapMode === 'china' ? t('dashboard.provinces') : t('dashboard.countries.regions') }}
         </h3>
         <div class="flex-1 space-y-1.5 max-h-[390px] overflow-y-auto pr-1">
           <div
@@ -285,12 +288,10 @@ onUnmounted(() => {
                   : 'bg-dark-bg text-gray-500'
               ]"
             >{{ index + 1 }}</span>
-            <span class="flex-1 text-gray-300 truncate text-xs">{{ item.name }}</span>
+            <span class="flex-1 text-gray-300 truncate text-xs">{{ geoLabel(item.name) }}</span>
             <span class="text-gray-500 font-mono text-xs shrink-0">{{ item.value.toLocaleString() }}</span>
           </div>
-          <div v-if="currentData.length === 0" class="text-gray-500 text-xs text-center py-10">
-            暂无数据
-          </div>
+          <div v-if="currentData.length === 0" class="text-gray-500 text-xs text-center py-10"> {{ t('dashboard.no.data') }} </div>
         </div>
       </div>
     </div>

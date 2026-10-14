@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 interface Props {
   label: string
   enabled: boolean
@@ -26,7 +27,7 @@ const emit = defineEmits<{
   >
     <span class="text-gray-200">{{ label }}</span>
     <div class="flex items-center gap-2">
-      <span v-if="loading" class="text-gray-400 text-sm">切换中...</span>
+      <span v-if="loading" class="text-gray-400 text-sm">{{ t('common.switching') }}</span>
       <span 
         :class="[
           'px-2 py-0.5 rounded text-xs font-medium',
@@ -35,7 +36,7 @@ const emit = defineEmits<{
             : 'bg-gray-500/20 text-gray-400'
         ]"
       >
-        {{ enabled ? '已启用' : '已禁用' }}
+        {{ enabled ? t('common.enabled') : t('common.disabled') }}
       </span>
     </div>
   </div>

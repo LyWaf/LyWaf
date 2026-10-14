@@ -21,6 +21,18 @@ function runtime(saved = null) {
 }
 
 const read = language => JSON.parse(readFileSync(new URL(`../../Localization/${language}.json`, import.meta.url), 'utf8'))
+const pluginRead = (plugin, language) => JSON.parse(readFileSync(new URL(`../../Plugins/Sys/${plugin}/Localization/${language}.json`, import.meta.url), 'utf8'))
+
+test('dashboard durations change language without fetching data again', () => {
+  const { api } = runtime('en-US')
+  assert.equal(api.formatDuration(75239), '20 h 53 min')
+  assert.equal(api.formatDuration(59), '59 s')
+  assert.equal(api.formatDuration(undefined), '-')
+  assert.equal(api.formatDuration(NaN), '-')
+  api.setLocale('zh-CN')
+  assert.equal(api.formatDuration(75239), '20 小时 53 分')
+  assert.equal(api.formatDuration(0), '0 秒')
+})
 test('shared language catalogs have matching keys and interpolation parameters', () => {
   const zh = read('zh-CN'), en = read('en-US')
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort())
@@ -30,7 +42,7 @@ test('shared language catalogs have matching keys and interpolation parameters',
   }
 })
 test('upload configuration display names cover every field without renaming keys', () => {
-  const zh = read('zh-CN'), en = read('en-US')
+  const zh = pluginRead('HttpUpload', 'zh-CN'), en = pluginRead('HttpUpload', 'en-US')
   for (const field of ['Enabled','Path','Hosts','RequireHttps','Key','SignatureWindowSeconds','NonceDirectory','Directory','AllowZip','MaxUploadBytes','MaxExtractedBytes','MaxEntries']) {
     assert.ok(zh[`fields.${field}`], field)
     assert.ok(en[`fields.${field}`], field)
@@ -45,7 +57,8 @@ test('language changes update labels, persist preference and preserve unknown va
   assert.equal(document.documentElement.lang, 'en-US')
   assert.equal(stored(), 'en-US')
   assert.equal(api.fieldLabel('Enabled'), 'Enabled')
-  assert.equal(api.fieldLabel('Directory', undefined, 'http-upload'), read('en-US')['plugins.http-upload.Directory.label'])
+  api.registerPluginMessages('http-upload', { 'zh-CN': pluginRead('HttpUpload', 'zh-CN'), 'en-US': pluginRead('HttpUpload', 'en-US') })
+  assert.equal(api.fieldLabel('Directory', undefined, 'http-upload'), pluginRead('HttpUpload', 'en-US')['plugins.http-upload.Directory.label'])
   assert.equal(api.fieldLabel('CustomField', 'Custom label'), 'Custom label')
   assert.equal(api.translateText('/data/中文'), '/data/中文')
   assert.ok(api.t('login.wait', { seconds: 12 }).includes('12'))
@@ -53,6 +66,18 @@ test('language changes update labels, persist preference and preserve unknown va
 test('site authentication and OAuth2 configuration fields have translations', () => {
   const source = readFileSync(new URL('../../Plugins/Sys/SiteAuth/SiteAuthMiddleware.cs', import.meta.url), 'utf8').split('public sealed record SiteIdentity')[0]
   for (const match of source.matchAll(/public\s+[\w<>]+\s+(\w+)\s*\{\s*get;/g)) {
-    for (const language of ['zh-CN', 'en-US']) assert.ok(read(language)[`fields.${match[1]}`], `${language}: ${match[1]}`)
+    for (const language of ['zh-CN', 'en-US']) assert.ok(pluginRead('SiteAuth', language)[`fields.${match[1]}`], `${language}: ${match[1]}`)
   }
+})
+test('plugin catalogs are isolated, replaced on reload, and cannot overwrite host messages', () => {
+  const { api } = runtime('en-US')
+  api.registerPluginMessages('one', { 'zh-CN': { 'fields.Custom': 'One', 'common.save': 'Override' } })
+  api.registerPluginMessages('two', { 'en-US': { 'fields.Custom': 'Two' } })
+  assert.equal(api.fieldLabel('Custom', undefined, 'one'), 'One')
+  assert.equal(api.fieldLabel('Custom', undefined, 'two'), 'Two')
+  assert.equal(api.t('common.save'), 'Save')
+  api.registerPluginMessages('one', {})
+  assert.equal(api.fieldLabel('Custom', undefined, 'one'), 'Custom')
+  assert.equal(read('zh-CN')['fields.CookieName'], undefined)
+  for (const plugin of ['HttpUpload', 'SiteAuth']) assert.deepEqual(Object.keys(pluginRead(plugin, 'zh-CN')).sort(), Object.keys(pluginRead(plugin, 'en-US')).sort())
 })

@@ -31,5 +31,5 @@ test('date and time changes are drafts until confirmation', () => {
   assert.equal(picker.open.value, false)
   picker.clear({ stopPropagation() {} })
   assert.equal(events[1][1], '')
-  assert.match(descriptor.template.content, />确定<\/button>/)
+  assert.match(descriptor.template.content, /@click="confirm"/)
 })

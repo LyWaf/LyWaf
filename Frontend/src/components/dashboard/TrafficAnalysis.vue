@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t, formatDateTime } from '@/i18n'
+import { computed } from 'vue'
 import type { TrafficStats } from '@/types'
 
 interface Props {
@@ -20,23 +22,23 @@ const formatRate = (rate: number) => {
   return rate.toFixed(2) + '%'
 }
 
-const cards = [
-  { key: 'totalRequests', label: '请求次数', icon: '👤', color: 'text-primary-500', tooltip: '统计周期内的总请求次数' },
-  { key: 'pageViews', label: '访问次数（PV）', icon: '📄', color: 'text-primary-500', tooltip: '页面浏览量统计' },
-  { key: 'uniqueVisitors', label: '独立访客（UV）', icon: '👥', color: 'text-yellow-500', tooltip: '根据 Cookie 统计的独立访客数' },
-  { key: 'uniqueIps', label: '独立 IP', icon: '🌐', color: 'text-blue-500', tooltip: '不同来源 IP 地址数量' },
-  { key: 'interceptCount', label: '拦截次数', icon: '🛡️', color: 'text-blue-400', tooltip: '被防护规则拦截的请求数' },
-  { key: 'attackIps', label: '攻击 IP', icon: '⚠️', color: 'text-red-500', tooltip: '触发防护规则的独立 IP 数' },
-] as const
+const cards = computed(() => [
+  { key: 'totalRequests', label: t('dashboard.requests'), icon: '👤', color: 'text-primary-500', tooltip: t('dashboard.total.requests.in.the.reporting.period') },
+  { key: 'pageViews', label: t('dashboard.page.views.pv'), icon: '📄', color: 'text-primary-500', tooltip: t('dashboard.page.view.count') },
+  { key: 'uniqueVisitors', label: t('dashboard.unique.visitors.uv'), icon: '👥', color: 'text-yellow-500', tooltip: t('dashboard.unique.visitors.identified.by.cookies') },
+  { key: 'uniqueIps', label: t('dashboard.unique.ips'), icon: '🌐', color: 'text-blue-500', tooltip: t('dashboard.distinct.source.ip.addresses') },
+  { key: 'interceptCount', label: t('dashboard.blocked.requests'), icon: '🛡️', color: 'text-blue-400', tooltip: t('dashboard.requests.blocked.by.protection.rules') },
+  { key: 'attackIps', label: t('dashboard.attack.ips'), icon: '⚠️', color: 'text-red-500', tooltip: t('dashboard.distinct.ips.triggering.protection.rules') },
+] as const)
 
-const errorCards = [
-  { key: 'error4xxCount', label: '4xx 错误数', color: 'text-yellow-500', isRate: false, tooltip: '客户端错误响应数量' },
-  { key: 'error4xxRate', label: '4xx 错误率', color: 'text-yellow-500', isRate: true, tooltip: '4xx 错误占总请求的比例' },
-  { key: 'intercept4xxCount', label: '4xx 拦截数', color: 'text-yellow-500', isRate: false, tooltip: '被拦截的 4xx 请求数量' },
-  { key: 'intercept4xxRate', label: '4xx 拦截率', color: 'text-yellow-500', isRate: true, tooltip: '4xx 拦截占总请求的比例' },
-  { key: 'error5xxCount', label: '5xx 错误数', color: 'text-red-500', isRate: false, tooltip: '服务端错误响应数量' },
-  { key: 'error5xxRate', label: '5xx 错误率', color: 'text-red-500', isRate: true, tooltip: '5xx 错误占总请求的比例' },
-] as const
+const errorCards = computed(() => [
+  { key: 'error4xxCount', label: t('dashboard.4xx.errors'), color: 'text-yellow-500', isRate: false, tooltip: t('dashboard.client.error.responses') },
+  { key: 'error4xxRate', label: t('dashboard.4xx.error.rate'), color: 'text-yellow-500', isRate: true, tooltip: t('dashboard.4xx.errors.as.a.percentage.of.all.requests') },
+  { key: 'intercept4xxCount', label: t('dashboard.4xx.blocks'), color: 'text-yellow-500', isRate: false, tooltip: t('dashboard.blocked.4xx.requests') },
+  { key: 'intercept4xxRate', label: t('dashboard.4xx.block.rate'), color: 'text-yellow-500', isRate: true, tooltip: t('dashboard.4xx.blocks.as.a.percentage.of.all.requests') },
+  { key: 'error5xxCount', label: t('dashboard.5xx.errors'), color: 'text-red-500', isRate: false, tooltip: t('dashboard.server.error.responses') },
+  { key: 'error5xxRate', label: t('dashboard.5xx.error.rate'), color: 'text-red-500', isRate: true, tooltip: t('dashboard.5xx.errors.as.a.percentage.of.all.requests') },
+] as const)
 
 const getValue = (traffic: TrafficStats | null, key: string): number => {
   if (!traffic) return 0
@@ -87,10 +89,8 @@ const getValue = (traffic: TrafficStats | null, key: string): number => {
     
     <!-- 统计时间和重置按钮 -->
     <div class="flex items-center gap-4 text-sm text-gray-500">
-      <span>统计开始: {{ traffic?.startTime || '-' }}</span>
-      <button @click="emit('reset')" class="btn btn-sm btn-secondary">
-        重置统计
-      </button>
+      <span> {{ t('dashboard.statistics.since') }} {{ traffic?.startTime ? formatDateTime(traffic.startTime) : '-' }}</span>
+      <button @click="emit('reset')" class="btn btn-sm btn-secondary"> {{ t('dashboard.reset.statistics') }} </button>
     </div>
   </div>
 </template>

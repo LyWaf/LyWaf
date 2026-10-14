@@ -1,0 +1,20 @@
+{
+  "fields.Enabled": "Enabled",
+  "fields.Path": "Request path",
+  "fields.Hosts": "Allowed hosts",
+  "fields.RequireHttps": "Require HTTPS",
+  "fields.Key": "Signing key",
+  "fields.SignatureWindowSeconds": "Signature window (seconds)",
+  "fields.NonceDirectory": "Replay-protection directory",
+  "fields.Directory": "Directory",
+  "fields.AllowZip": "Allow ZIP extraction",
+  "fields.MaxUploadBytes": "Maximum upload size (bytes)",
+  "fields.MaxExtractedBytes": "Maximum extracted size (bytes)",
+  "fields.MaxEntries": "Maximum file entries",
+  "plugins.http-upload.Directory.label": "Upload root directory",
+  "plugins.http-upload.Directory.description": "Uploads and extraction are restricted to this absolute directory and its children.",
+  "plugins.http-upload.Hosts.description": "Host names without scheme or port. Use * to allow all hosts.",
+  "plugins.http-upload.Key.description": "At least 32 characters. Write-only; leave blank to retain the configured key.",
+  "plugins.http-upload.NonceDirectory.description": "Persistent replay-protection records. Keep outside public static directories.",
+  "plugins.http-upload.SignatureWindowSeconds.description": "Maximum accepted timestamp difference from the server clock."
+}

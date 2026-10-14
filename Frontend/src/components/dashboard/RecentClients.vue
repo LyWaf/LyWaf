@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, locale, formatDateTime } from '@/i18n'
 import Section from '@/components/common/Section.vue'
 
 interface RecentClient {
@@ -18,16 +19,18 @@ const getRelativeTime = (timeStr: string) => {
   const now = new Date()
   const diff = Math.floor((now.getTime() - time.getTime()) / 1000)
   
-  if (diff < 60) return `${diff} 秒前`
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
-  return time.toLocaleTimeString()
+  if (!Number.isFinite(diff)) return '-'
+  const relative = new Intl.RelativeTimeFormat(locale.value, { numeric: 'auto' })
+  if (diff < 60) return relative.format(-Math.max(0, diff), 'second')
+  if (diff < 3600) return relative.format(-Math.floor(diff / 60), 'minute')
+  return formatDateTime(time)
 }
 </script>
 
 <template>
-  <Section id="recent-clients" title="最近 5 分钟访问">
+  <Section id="recent-clients" :title="t('dashboard.visits.in.the.last.5.minutes')">
     <template #actions>
-      <span class="text-sm text-gray-400">{{ clients.length }} 个客户端</span>
+      <span class="text-sm text-gray-400">{{ t('dashboard.clients', { count: clients.length }) }}</span>
     </template>
     
     <div class="space-y-2 max-h-[300px] overflow-y-auto">
@@ -43,9 +46,7 @@ const getRelativeTime = (timeStr: string) => {
         <span class="text-gray-400 text-sm">{{ getRelativeTime(client.lastAccessTime) }}</span>
       </div>
       
-      <div v-if="clients.length === 0" class="text-gray-500 text-center py-8">
-        最近 5 分钟内暂无访问记录
-      </div>
+      <div v-if="clients.length === 0" class="text-gray-500 text-center py-8"> {{ t('dashboard.no.visits.in.the.last.5.minutes') }} </div>
     </div>
   </Section>
 </template>

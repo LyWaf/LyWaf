@@ -125,6 +125,8 @@ public class PluginMetadata
     /// 例如: DefaultOptions = new ImageProcessOptions()
     /// </summary>
     public object? DefaultOptions { get; init; }
+    /// <summary>Embedded JSON resource prefix; defaults to the plugin namespace plus .Localization.</summary>
+    public string? LocalizationResourcePrefix { get; init; }
 }
 
 /// <summary>

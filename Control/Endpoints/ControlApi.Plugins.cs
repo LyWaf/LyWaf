@@ -40,7 +40,8 @@ public static partial class ControlApi
     private sealed record PluginPackageResponse(bool Success, string Id, string Version, bool RequiresRestart, string Message);
     private sealed record PluginConfigResponse(bool Success, string PluginId, Dictionary<string, string> Config,
         Dictionary<string, string> Defaults, Dictionary<string, string> Labels, Dictionary<string, string> FieldDefaults,
-        IReadOnlyList<PluginConfigurationField> Schema, bool SupportsScopedConfiguration, string Version);
+        IReadOnlyList<PluginConfigurationField> Schema, bool SupportsScopedConfiguration, string Version,
+        Dictionary<string, Dictionary<string, string>> Localization);
     private sealed record PluginConfigValidationResponse(bool Success, Dictionary<string, string[]> Errors);
 
     private static Dictionary<string, string[]> PreparePluginConfiguration(ILyWafPlugin plugin,
@@ -258,14 +259,16 @@ public static partial class ControlApi
                 ? ExtractListElementDefaults(defaultOptions.GetType())
                 : new Dictionary<string, string>();
 
-            var schema = defaultOptions == null ? [] : PluginConfigurationSchema.Describe(defaultOptions.GetType());
+            var localization = PluginLocalization.Load(plugin);
+            var schema = defaultOptions == null ? [] : PluginConfigurationSchema.Describe(defaultOptions.GetType())
+                .Select(field => PluginLocalization.Localize(field, localization)).ToArray();
             if (defaultOptions != null)
             {
                 foreach (var values in new[] { current, defaults, fieldDefaults })
                     foreach (var key in values.Keys.Where(k => PluginConfigurationSchema.SensitivePath(defaultOptions.GetType(), k)).ToArray())
                         values.Remove(key);
             }
-            return Results.Json(new { success = true, pluginId, config = current, defaults, labels, fieldDefaults, schema,
+            return Results.Json(new { success = true, pluginId, config = current, defaults, labels, fieldDefaults, schema, localization,
                 supportsScopedConfiguration = plugin.Metadata.SupportsScopedConfiguration, version = publisher.Version() });
             }
             finally { ConfigurationMutationGate.Patch.Release(); }

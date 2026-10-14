@@ -33,7 +33,7 @@ public static class PluginConfigurationSchema
                 var metadata = property.GetCustomAttribute<PluginConfigurationAttribute>();
                 var labelKey = metadata?.LabelKey ?? (LyWaf.Localization.TextLocalizer.HasKey("fields." + Key(property)) ? "fields." + Key(property) : null);
                 fields.Add(new(path, valueType.Name,
-                    labelKey != null ? LyWaf.Localization.TextLocalizer.Get(labelKey) : property.GetCustomAttribute<DescriptionAttribute>()?.Description ?? Key(property),
+                    labelKey != null && LyWaf.Localization.TextLocalizer.HasKey(labelKey) ? LyWaf.Localization.TextLocalizer.Get(labelKey) : property.GetCustomAttribute<DescriptionAttribute>()?.Description ?? Key(property),
                     property.IsDefined(typeof(RequiredAttribute)), range?.Minimum.ToString(), range?.Maximum.ToString(),
                     secret, property.GetCustomAttribute<PluginConfigurationAttribute>()?.RequiresRestart ?? false,
                     metadata?.Scopes ?? PluginConfigurationScope.All, labelKey, metadata?.DescriptionKey));

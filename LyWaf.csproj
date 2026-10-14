@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Localization\*.json" LogicalName="LyWaf.Localization.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Plugins\**\Localization\*.json" />
   </ItemGroup>
 
   <ItemGroup>

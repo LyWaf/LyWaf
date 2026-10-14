@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import LanguageSelect from '@/components/common/LanguageSelect.vue'
-import { t } from '@/i18n'
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { t, locale, translateText } from '@/i18n'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import ListToolbar from '@/components/common/ListToolbar.vue'
 import { useRouter } from 'vue-router'
 import { settingsApi, authApi } from '@/api'
@@ -17,12 +17,12 @@ const { can } = useAuth()
 
 // ==================== Tab 切换 ====================
 const activeTab = ref<'certs' | 'console' | 'logs' | 'runtime'>('certs')
-const tabs = [
-  { key: 'certs' as const, label: '证书管理', icon: '🔒' },
-  { key: 'console' as const, label: '控制台管理', icon: '🖥️' },
-  { key: 'logs' as const, label: '系统日志', icon: '📋' },
-  { key: 'runtime' as const, label: '运行日志', icon: '🕐' },
-]
+const tabs = computed(() => [
+  { key: 'certs' as const, label: t('settings.certificate.management'), icon: '🔒' },
+  { key: 'console' as const, label: t('settings.console.management'), icon: '🖥️' },
+  { key: 'logs' as const, label: t('settings.system.logs'), icon: '📋' },
+  { key: 'runtime' as const, label: t('settings.runtime.logs'), icon: '🕐' },
+])
 
 // ==================== 证书管理 ====================
 const certsLoading = ref(false)
@@ -61,7 +61,7 @@ const loadCerts = async () => {
       await loadCerts()
     }
   } catch {
-    if (request === certRequest) showError('加载证书列表失败')
+    if (request === certRequest) showError(t('settings.failed.to.load.certificates'))
   } finally {
     if (request === certRequest) certsLoading.value = false
   }
@@ -69,22 +69,22 @@ const loadCerts = async () => {
 
 const handleUploadCert = async () => {
   if (!uploadForm.value.domain || !uploadForm.value.pemContent || !uploadForm.value.keyContent) {
-    showError('请填写所有字段')
+    showError(t('settings.complete.all.fields'))
     return
   }
   uploading.value = true
   try {
     const res = await settingsApi.uploadCert(uploadForm.value) as unknown as { success: boolean; message?: string }
     if (res?.success) {
-      showSuccess('证书上传成功，需重载配置生效')
+      showSuccess(t('settings.certificate.uploaded.reload.configuration.to.apply'))
       showUploadDialog.value = false
       uploadForm.value = { domain: '', pemContent: '', keyContent: '' }
       loadCerts()
     } else {
-      showError(res?.message || '上传失败')
+      showError(res?.message || t('settings.upload.failed'))
     }
   } catch {
-    showError('上传证书失败')
+    showError(t('settings.failed.to.upload.certificate'))
   } finally {
     uploading.value = false
   }
@@ -101,21 +101,21 @@ const executeDeleteCert = async () => {
   try {
     const res = await settingsApi.deleteCert(deletingCert.value.pemFile) as unknown as { success: boolean; message?: string }
     if (res?.success) {
-      showSuccess('证书已删除，需重载配置生效')
+      showSuccess(t('settings.certificate.deleted.reload.configuration.to.apply'))
       showDeleteConfirm.value = false
       deletingCert.value = null
       loadCerts()
     } else {
-      showError(res?.message || '删除失败')
+      showError(res?.message || t('settings.deletion.failed'))
     }
   } catch {
-    showError('删除证书失败')
+    showError(t('settings.failed.to.delete.certificate'))
   } finally {
     deleting.value = false
   }
 }
 
-const certTypeLabel = (type: string) => type === 'acme' ? '免费证书' : '上传证书'
+const certTypeLabel = (type: string) => type === 'acme' ? t('settings.free.certificate') : t('settings.upload.certificate')
 const certTypeColor = (type: string) => type === 'acme' ? 'bg-green-500/15 text-green-400' : 'bg-blue-500/15 text-blue-400'
 
 // ---- ACME 申请/续期 ----
@@ -139,22 +139,22 @@ const openAcmeDialog = async () => {
 
 const handleAcmeApply = async () => {
   if (!acmeForm.value.domain || !acmeForm.value.email) {
-    showError('请填写域名和邮箱')
+    showError(t('settings.enter.a.domain.and.email.address'))
     return
   }
   acmeApplying.value = true
-  acmeStatus.value = '正在提交签发任务...'
+  acmeStatus.value = t('settings.submitting.certificate.issuance.task')
   try {
     const res = await settingsApi.acmeApply(acmeForm.value)
     if (res?.success) {
-      showSuccess('证书签发任务已提交')
+      showSuccess(t('settings.certificate.issuance.task.submitted'))
       showAcmeDialog.value = false
       await router.push({ path: '/management-tasks', query: { task: res.data.id } })
     } else {
-      showError(res?.errorMessage || '证书申请失败')
+      showError(res?.errorMessage || t('settings.certificate.request.failed'))
     }
   } catch {
-    showError('证书申请失败，请检查域名是否正确解析到本服务器')
+    showError(t('settings.certificate.request.failed.check.that.the.domain.resolves.to.this.server'))
   } finally {
     acmeApplying.value = false
     acmeStatus.value = ''
@@ -167,13 +167,13 @@ const handleRenewCert = async (cert: CertDetail) => {
   try {
     const res = await settingsApi.acmeRenew({ domain: cert.domain })
     if (res?.success) {
-      showSuccess('证书续期任务已提交')
+      showSuccess(t('settings.certificate.renewal.task.submitted'))
       await router.push({ path: '/management-tasks', query: { task: res.data.id } })
     } else {
-      showError(res?.errorMessage || '证书续期失败')
+      showError(res?.errorMessage || t('settings.certificate.renewal.failed'))
     }
   } catch {
-    showError('证书续期失败')
+    showError(t('settings.certificate.renewal.failed'))
   } finally {
     renewing.value = false
     renewingCert.value = null
@@ -214,27 +214,27 @@ const loadRoles = async () => {
       await loadRoles()
     }
   } catch {
-    if (current === roleRequest) showError('读取角色列表失败')
+    if (current === roleRequest) showError(t('settings.failed.to.load.roles'))
   } finally {
     if (current === roleRequest) roleListLoading.value = false
   }
 }
 const roleForm = ref({ name: '', permissions: ['read'] })
 const roleBusy = ref(false)
-const permissionLabels: Record<string, string> = { read: '读取', write: '业务写入', 'users.manage': '管理用户', 'system.manage': '管理系统' }
+const permissionLabels = computed<Record<string, string>>(() => ({ read: t('settings.read'), write: t('settings.write'), 'users.manage': t('settings.manage.users'), 'system.manage': t('settings.manage.system') }))
 const saveManagementRole = async () => {
   roleBusy.value = true
   try {
     await authApi.saveRole(roleForm.value)
     roleForm.value = { name: '', permissions: ['read'] }
     await loadManagementUsers()
-    showSuccess('角色已保存，关联用户需重新登录')
-  } catch (error: any) { showError(error?.message || '保存角色失败') }
+    showSuccess(t('settings.role.saved.affected.users.must.sign.in.again'))
+  } catch (error: any) { showError(error?.message || t('settings.failed.to.save.role')) }
   finally { roleBusy.value = false }
 }
 const deleteManagementRole = async (name: string) => {
   try { await authApi.deleteRole(name); await loadManagementUsers() }
-  catch (error: any) { showError(error?.message || '删除角色失败') }
+  catch (error: any) { showError(error?.message || t('settings.failed.to.delete.role')) }
 }
 
 const loadManagementUsers = async () => {
@@ -254,15 +254,15 @@ const createManagementUser = async () => {
     await authApi.createUser(userForm.value)
     userForm.value = { username: '', password: '', role: 'auditor' }
     await loadManagementUsers()
-    showSuccess('管理用户已创建')
-  } catch (error: any) { showError(error?.response?.data?.message || '创建用户失败') }
+    showSuccess(t('settings.management.user.created'))
+  } catch (error: any) { showError(error?.response?.data?.message || t('settings.failed.to.create.user')) }
 }
 
 const toggleManagementUser = async (user: ManagementUser) => {
   try {
     await authApi.setUserDisabled(user.id, !user.disabled)
     await loadManagementUsers()
-  } catch (error: any) { showError(error?.response?.data?.message || '修改用户状态失败') }
+  } catch (error: any) { showError(error?.response?.data?.message || t('settings.failed.to.change.user.status')) }
 }
 
 const changeManagementUserRole = async (user: ManagementUser) => {
@@ -270,7 +270,7 @@ const changeManagementUserRole = async (user: ManagementUser) => {
     await authApi.setUserRole(user.id, user.role)
     await loadManagementUsers()
   } catch (error: any) {
-    showError(error?.response?.data?.message || '修改角色失败')
+    showError(error?.response?.data?.message || t('settings.failed.to.change.role'))
     await loadManagementUsers()
   }
 }
@@ -279,14 +279,14 @@ const resetManagementUserPassword = async (user: ManagementUser) => {
   try {
     const res = await authApi.resetUserPassword(user.id)
     generatedPassword.value = res.password
-  } catch { showError('重置密码失败') }
+  } catch { showError(t('settings.failed.to.reset.password')) }
 }
 
 const revokeManagementUserSessions = async (user: ManagementUser) => {
   try {
     await authApi.revokeUserSessions(user.id)
-    showSuccess('该用户的现有会话已撤销')
-  } catch { showError('撤销会话失败') }
+    showSuccess(t('settings.existing.sessions.for.this.user.have.been.revoked'))
+  } catch { showError(t('settings.failed.to.revoke.sessions')) }
 }
 
 const loadConsole = async () => {
@@ -298,7 +298,7 @@ const loadConsole = async () => {
       await loadManagementUsers()
     }
   } catch {
-    showError('加载控制台信息失败')
+    showError(t('settings.failed.to.load.console.information'))
   } finally {
     consoleLoading.value = false
   }
@@ -306,29 +306,29 @@ const loadConsole = async () => {
 
 const handleChangePassword = async () => {
   if (!passwordForm.value.currentPassword || !passwordForm.value.newPassword) {
-    showError('请填写当前密码和新密码')
+    showError(t('settings.enter.your.current.and.new.passwords'))
     return
   }
   if (passwordForm.value.newPassword.length < 6) {
-    showError('新密码长度至少6位')
+    showError(t('settings.the.new.password.must.contain.at.least.6.characters'))
     return
   }
   if (passwordForm.value.newPassword !== passwordForm.value.confirmPassword) {
-    showError('两次输入的新密码不一致')
+    showError(t('settings.the.new.passwords.do.not.match'))
     return
   }
   changingPassword.value = true
   try {
     const res = await authApi.changePassword(passwordForm.value.currentPassword, passwordForm.value.newPassword) as unknown as { success: boolean; message?: string }
     if (res?.success) {
-      showSuccess('密码修改成功')
+      showSuccess(t('settings.password.changed'))
       showPasswordDialog.value = false
       passwordForm.value = { currentPassword: '', newPassword: '', confirmPassword: '' }
     } else {
-      showError(res?.message || '修改密码失败')
+      showError(res?.message || t('settings.failed.to.change.password'))
     }
   } catch {
-    showError('修改密码失败')
+    showError(t('settings.failed.to.change.password'))
   } finally {
     changingPassword.value = false
   }
@@ -351,7 +351,7 @@ const loadLogs = async () => {
       logsTotal.value = res.total
     }
   } catch {
-    showError('加载审计日志失败')
+    showError(t('settings.failed.to.load.audit.logs'))
   } finally {
     logsLoading.value = false
   }
@@ -382,7 +382,7 @@ const loadRuntimeLogs = async () => {
       runtimeTotal.value = res.total
     }
   } catch {
-    showError('加载运行日志失败')
+    showError(t('settings.failed.to.load.runtime.logs'))
   } finally {
     runtimeLoading.value = false
   }
@@ -398,23 +398,22 @@ const goRuntimePage = (page: number) => {
 
 const formatDuration = (seconds: number): string => {
   if (seconds <= 0) return '-'
-  if (seconds < 60) return `${seconds} 秒`
+  if (seconds < 60) return t('duration.seconds', { count: seconds })
   if (seconds < 3600) {
     const m = Math.floor(seconds / 60)
     const s = seconds % 60
-    return s > 0 ? `${m} 分 ${s} 秒` : `${m} 分钟`
+    return t('duration.minutesSeconds', { minutes: m, seconds: s })
   }
   const h = Math.floor(seconds / 3600)
   const m = Math.floor((seconds % 3600) / 60)
-  if (h < 24) return m > 0 ? `${h} 小时 ${m} 分` : `${h} 小时`
+  if (h < 24) return t('duration.hoursMinutes', { hours: h, minutes: m })
   const d = Math.floor(h / 24)
   const rh = h % 24
-  return rh > 0 ? `${d} 天 ${rh} 小时` : `${d} 天`
+  return t('duration.daysHours', { days: d, hours: rh })
 }
 
 const formatNum = (n: number): string => {
-  if (n >= 10000) return (n / 10000).toFixed(1) + '万'
-  return n.toLocaleString()
+  return new Intl.NumberFormat(locale.value, { notation: n >= 10000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(n)
 }
 
 const exitReasonBg = (reason: string): string => {
@@ -442,9 +441,9 @@ onMounted(() => {
   <div class="space-y-4">
     <!-- 页面标题 -->
     <div class="card">
-      <div class="flex items-center gap-3">
+      <div class="flex flex-wrap items-center gap-3">
         <h2 class="text-lg font-semibold text-gray-100">{{ t('nav.general') }}</h2>
-        <span class="text-xs text-gray-500">证书管理、控制台管理、系统操作日志、运行日志</span>
+        <span class="text-xs text-gray-500">{{ t('settings.certificates.console.audit.logs.and.runtime.logs') }}</span>
       </div>
     </div>
 
@@ -455,12 +454,12 @@ onMounted(() => {
 
     <!-- Tab 栏 -->
     <div class="card !p-0">
-      <div class="flex border-b border-dark-border">
+      <div class="flex overflow-x-auto border-b border-dark-border">
         <button
           v-for="tab in tabs" :key="tab.key"
           @click="switchTab(tab.key)"
           :class="[
-            'px-6 py-3 text-sm font-medium transition-colors border-b-2 -mb-px',
+            'shrink-0 px-4 md:px-6 py-3 text-sm font-medium transition-colors border-b-2 -mb-px',
             activeTab === tab.key
               ? 'border-primary-500 text-primary-400'
               : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-600'
@@ -474,43 +473,43 @@ onMounted(() => {
       <!-- ==================== Tab 1: 证书管理 ==================== -->
       <div v-if="activeTab === 'certs'" class="p-5">
         <!-- 操作栏 -->
-        <div class="flex items-center justify-between mb-4">
-          <span class="text-sm text-gray-400">共 {{ certTotal }} 个证书</span>
-          <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <span class="text-sm text-gray-400">{{ t('settings.certificateCount', { count: certTotal }) }}</span>
+          <div class="flex flex-wrap items-center gap-2">
             <button @click="openAcmeDialog" class="btn btn-sm btn-success flex items-center gap-1.5">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
               </svg>
-              申请免费证书
+              {{ t('settings.request.free.certificate') }}
             </button>
             <button @click="showUploadDialog = true" class="btn btn-sm btn-primary flex items-center gap-1.5">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
               </svg>
-              上传证书
+              {{ t('settings.upload.certificate') }}
             </button>
           </div>
         </div>
 
         <div v-if="acmeAccounts.length" class="mb-5 overflow-x-auto border-y border-dark-border">
-          <table class="w-full text-xs">
-            <thead><tr class="text-left text-gray-500"><th class="py-2 font-medium">ACME 服务</th><th class="py-2 font-medium">账户</th><th class="py-2 font-medium">联系邮箱</th></tr></thead>
+          <table class="min-w-[640px] [&_th]:pr-4 [&_td]:pr-4 w-full text-xs">
+            <thead><tr class="text-left text-gray-500"><th class="py-2 font-medium">{{ t('settings.acme.service') }}</th><th class="py-2 font-medium">{{ t('settings.account') }}</th><th class="py-2 font-medium">{{ t('settings.contact.email') }}</th></tr></thead>
             <tbody><tr v-for="account in acmeAccounts" :key="account.directoryUrl" class="border-t border-dark-border/50">
               <td class="py-2 text-gray-300 font-mono">{{ account.directoryUrl }}</td>
-              <td class="py-2" :class="account.accountKeyExists ? 'text-green-400' : 'text-yellow-400'">{{ account.accountKeyExists ? '已建立' : '未建立' }}</td>
+              <td class="py-2" :class="account.accountKeyExists ? 'text-green-400' : 'text-yellow-400'">{{ account.accountKeyExists ? t('settings.created') : t('settings.not.created') }}</td>
               <td class="py-2 text-gray-400">{{ account.email || '-' }}</td>
             </tr></tbody>
           </table>
         </div>
 
         <div v-if="runtimeCertificates.length" class="mb-5 overflow-x-auto border-y border-dark-border">
-          <table class="w-full text-xs">
-            <thead><tr class="text-left text-gray-500"><th class="py-2 font-medium">运行时证书</th><th class="py-2 font-medium">来源</th><th class="py-2 font-medium">状态</th><th class="py-2 font-medium">剩余</th></tr></thead>
+          <table class="min-w-[640px] [&_th]:pr-4 [&_td]:pr-4 w-full text-xs">
+            <thead><tr class="text-left text-gray-500"><th class="py-2 font-medium">{{ t('settings.runtime.certificate') }}</th><th class="py-2 font-medium">{{ t('settings.source') }}</th><th class="py-2 font-medium">{{ t('settings.status') }}</th><th class="py-2 font-medium">{{ t('settings.remaining') }}</th></tr></thead>
             <tbody><tr v-for="cert in runtimeCertificates" :key="cert.domain" class="border-t border-dark-border/50">
               <td class="py-2 text-gray-300 font-mono">{{ cert.domain }}</td>
               <td class="py-2 text-gray-400">{{ cert.source }}</td>
               <td class="py-2" :class="cert.status === 'valid' ? 'text-green-400' : cert.status === 'revoked' ? 'text-red-400' : 'text-yellow-400'">{{ cert.status }}</td>
-              <td class="py-2 text-gray-400">{{ cert.daysRemaining }} 天</td>
+              <td class="py-2 text-gray-400">{{ t('duration.days', { count: cert.daysRemaining }) }}</td>
             </tr></tbody>
           </table>
         </div>
@@ -523,21 +522,21 @@ onMounted(() => {
 
         <!-- 空状态 -->
         <div v-else-if="certs.length === 0" class="text-center py-12 text-gray-500">
-          <p class="text-lg mb-2">暂无证书</p>
-          <p class="text-sm">点击「上传证书」添加 SSL/TLS 证书</p>
+          <p class="text-lg mb-2">{{ t('settings.no.certificates') }}</p>
+          <p class="text-sm">{{ t('settings.no.ssl.tls.certificates.configured') }}</p>
         </div>
 
         <!-- 证书表格 -->
         <div v-else class="overflow-x-auto">
-          <table class="w-full text-sm">
+          <table class="min-w-[640px] [&_th]:pr-4 [&_td]:pr-4 w-full text-sm">
             <thead>
               <tr class="text-left text-gray-400 border-b border-dark-border">
-                <th class="pb-3 font-medium">域名</th>
-                <th class="pb-3 font-medium">类型</th>
-                <th class="pb-3 font-medium">颁发机构</th>
-                <th class="pb-3 font-medium">到期时间</th>
-                <th class="pb-3 font-medium">文件</th>
-                <th class="pb-3 font-medium text-right">操作</th>
+                <th class="pb-3 font-medium">{{ t('settings.domain') }}</th>
+                <th class="pb-3 font-medium">{{ t('settings.type') }}</th>
+                <th class="pb-3 font-medium">{{ t('settings.issuer') }}</th>
+                <th class="pb-3 font-medium">{{ t('settings.expires.at') }}</th>
+                <th class="pb-3 font-medium">{{ t('settings.file') }}</th>
+                <th class="pb-3 font-medium text-right">{{ t('settings.actions') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -558,13 +557,13 @@ onMounted(() => {
                     :disabled="renewing && renewingCert?.domain === cert.domain"
                     class="text-green-400 hover:text-green-300 text-xs px-2 py-1 rounded hover:bg-green-500/10 transition-colors"
                   >
-                    {{ renewing && renewingCert?.domain === cert.domain ? '续期中...' : '续期' }}
+                    {{ renewing && renewingCert?.domain === cert.domain ? t('settings.renewing') : t('settings.renew') }}
                   </button>
                   <button
                     @click="confirmDeleteCert(cert)"
                     class="text-red-400 hover:text-red-300 text-xs px-2 py-1 rounded hover:bg-red-500/10 transition-colors"
                   >
-                    删除
+                    {{ t('common.delete') }}
                   </button>
                 </td>
               </tr>
@@ -584,61 +583,61 @@ onMounted(() => {
           <!-- 用户信息卡片 -->
           <div>
             <div class="flex items-center justify-between mb-3">
-              <h3 class="text-sm font-medium text-gray-300">用户信息</h3>
+              <h3 class="text-sm font-medium text-gray-300">{{ t('settings.user.information') }}</h3>
               <button @click="showPasswordDialog = true; passwordForm = { currentPassword: '', newPassword: '', confirmPassword: '' }" class="btn btn-sm btn-primary">
-                修改密码
+                {{ t('settings.change.password') }}
               </button>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div class="bg-dark-card rounded-lg p-4 border border-dark-border">
-                <div class="text-xs text-gray-500 mb-1">用户名</div>
+                <div class="text-xs text-gray-500 mb-1">{{ t('login.username') }}</div>
                 <div class="text-gray-200 font-medium">{{ consoleInfo.username }}</div>
               </div>
               <div class="bg-dark-card rounded-lg p-4 border border-dark-border">
-                <div class="text-xs text-gray-500 mb-1">上次登录</div>
-                <div class="text-gray-200">{{ consoleInfo.lastLoginAt || '无记录' }}</div>
+                <div class="text-xs text-gray-500 mb-1">{{ t('settings.last.sign.in') }}</div>
+                <div class="text-gray-200">{{ consoleInfo.lastLoginAt || t('settings.no.record') }}</div>
               </div>
               <div class="bg-dark-card rounded-lg p-4 border border-dark-border">
-                <div class="text-xs text-gray-500 mb-1">控制台监听</div>
+                <div class="text-xs text-gray-500 mb-1">{{ t('settings.console.listener') }}</div>
                 <div class="text-gray-200 font-mono text-sm">{{ consoleInfo.controlListen.host }}:{{ consoleInfo.controlListen.port }}</div>
               </div>
             </div>
           </div>
 
           <div v-if="can('users.manage')" class="border-t border-dark-border pt-6">
-            <h3 class="mb-3 text-sm font-medium text-gray-300">管理用户</h3>
-            <form class="flex gap-3 mb-3" @submit.prevent="userPage = 1; loadManagementUsers().catch(() => showError('读取用户失败'))">
-              <input v-model="userSearch" class="input" aria-label="搜索管理用户" placeholder="搜索用户名或角色" maxlength="200" />
-              <button class="btn btn-secondary">搜索</button>
+            <h3 class="mb-3 text-sm font-medium text-gray-300">{{ t('settings.manage.users') }}</h3>
+            <form class="flex gap-3 mb-3" @submit.prevent="userPage = 1; loadManagementUsers().catch(() => showError(t('settings.failed.to.load.users')))">
+              <input v-model="userSearch" class="input" :aria-label="t('settings.search.management.users')" :placeholder="t('settings.search.username.or.role')" maxlength="200" />
+              <button class="btn btn-secondary">{{ t('common.search') }}</button>
             </form>
             <div class="mb-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_150px_auto]">
-              <input v-model="userForm.username" class="input" placeholder="用户名" />
-              <input v-model="userForm.password" class="input" type="password" placeholder="初始密码（至少 8 位）" />
+              <input v-model="userForm.username" class="input" :placeholder="t('login.username')" />
+              <input v-model="userForm.password" class="input" type="password" :placeholder="t('settings.initial.password.at.least.8.characters')" />
               <select v-model="userForm.role" class="input"><option v-for="role in managementRoles" :key="role.name" :value="role.name">{{ role.name }}</option></select>
-              <button class="btn btn-primary" :disabled="!userForm.username || userForm.password.length < 8" @click="createManagementUser">添加用户</button>
+              <button class="btn btn-primary" :disabled="!userForm.username || userForm.password.length < 8" @click="createManagementUser">{{ t('settings.add.user') }}</button>
             </div>
             <div v-if="generatedPassword" class="mb-4 flex items-center justify-between border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
-              <span>临时密码（仅显示一次）：<strong class="font-mono">{{ generatedPassword }}</strong></span>
-              <button class="text-amber-200 hover:text-white" @click="generatedPassword = ''">关闭</button>
+              <span>{{ t('settings.temporary.password.shown.once') }}<strong class="font-mono">{{ generatedPassword }}</strong></span>
+              <button class="text-amber-200 hover:text-white" @click="generatedPassword = ''">{{ t('common.close') }}</button>
             </div>
             <div class="overflow-x-auto border border-dark-border">
-              <table class="w-full text-sm">
-                <thead class="bg-dark-card"><tr class="text-left text-gray-400"><th class="p-3">用户</th><th class="p-3">角色</th><th class="p-3">状态</th><th class="p-3">最后登录</th><th class="p-3 text-right">操作</th></tr></thead>
+              <table class="min-w-[640px] [&_th]:pr-4 [&_td]:pr-4 w-full text-sm">
+                <thead class="bg-dark-card"><tr class="text-left text-gray-400"><th class="p-3">{{ t('settings.user') }}</th><th class="p-3">{{ t('settings.role') }}</th><th class="p-3">{{ t('settings.status') }}</th><th class="p-3">{{ t('settings.last.sign.in2') }}</th><th class="p-3 text-right">{{ t('settings.actions') }}</th></tr></thead>
                 <tbody>
                   <tr v-for="user in managementUsers" :key="user.id" class="border-t border-dark-border">
                     <td class="p-3 text-gray-200">{{ user.username }}</td>
                     <td class="p-3"><select v-model="user.role" class="input py-1 text-xs" @change="changeManagementUserRole(user)"><option v-for="role in managementRoles" :key="role.name" :value="role.name">{{ role.name }}</option></select></td>
-                    <td class="p-3" :class="user.disabled ? 'text-red-400' : 'text-green-400'">{{ user.disabled ? '已禁用' : '正常' }}</td>
-                    <td class="p-3 text-xs text-gray-400">{{ user.lastLoginAt || '尚未登录' }}</td>
-                    <td class="p-3 text-right space-x-3"><button class="text-primary-400" @click="revokeManagementUserSessions(user)">撤销会话</button><button class="text-amber-400" @click="resetManagementUserPassword(user)">重置密码</button><button :class="user.disabled ? 'text-green-400' : 'text-red-400'" @click="toggleManagementUser(user)">{{ user.disabled ? '启用' : '禁用' }}</button></td>
+                    <td class="p-3" :class="user.disabled ? 'text-red-400' : 'text-green-400'">{{ user.disabled ? t('common.disabled') : t('settings.healthy') }}</td>
+                    <td class="p-3 text-xs text-gray-400">{{ user.lastLoginAt || t('settings.never.signed.in') }}</td>
+                    <td class="p-3 text-right space-x-3"><button class="text-primary-400" @click="revokeManagementUserSessions(user)">{{ t('settings.revoke.sessions') }}</button><button class="text-amber-400" @click="resetManagementUserPassword(user)">{{ t('settings.reset.password') }}</button><button :class="user.disabled ? 'text-green-400' : 'text-red-400'" @click="toggleManagementUser(user)">{{ user.disabled ? t('fields.Enabled') : t('settings.disable') }}</button></td>
                   </tr>
                 </tbody>
               </table>
             </div>
-            <nav class="flex justify-end items-center gap-3 mt-3 text-sm" aria-label="管理用户分页">
-              <span class="text-gray-400">共 {{ userTotal }} 人 · 第 {{ userPage }} 页</span>
-              <button class="btn btn-secondary" :disabled="userPage <= 1" @click="userPage--; loadManagementUsers().catch(() => showError('读取用户失败'))">上一页</button>
-              <button class="btn btn-secondary" :disabled="userPage * 20 >= userTotal" @click="userPage++; loadManagementUsers().catch(() => showError('读取用户失败'))">下一页</button>
+            <nav class="flex justify-end items-center gap-3 mt-3 text-sm" :aria-label="t('settings.management.user.pagination')">
+              <span class="text-gray-400">{{ t('common.pagination', { count: userTotal, page: userPage }) }}</span>
+              <button class="btn btn-secondary" :disabled="userPage <= 1" @click="userPage--; loadManagementUsers().catch(() => showError(t('settings.failed.to.load.users')))">{{ t('common.previous') }}</button>
+              <button class="btn btn-secondary" :disabled="userPage * 20 >= userTotal" @click="userPage++; loadManagementUsers().catch(() => showError(t('settings.failed.to.load.users')))">{{ t('common.next') }}</button>
             </nav>
           </div>
         </div>
@@ -646,23 +645,23 @@ onMounted(() => {
 
       <ManagementMfa v-if="activeTab === 'console'" />
       <section v-if="activeTab === 'console' && can('users.manage')" class="border-t border-dark-border p-5">
-        <h3 class="mb-3 text-sm font-medium text-gray-300">业务角色</h3>
+        <h3 class="mb-3 text-sm font-medium text-gray-300">{{ t('settings.business.roles') }}</h3>
         <form class="flex flex-wrap items-center gap-3 mb-4" @submit.prevent="saveManagementRole">
-          <input v-model="roleForm.name" aria-label="角色名称" class="input" placeholder="角色名称" required minlength="3" maxlength="48" />
+          <input v-model="roleForm.name" :aria-label="t('settings.role.name')" class="input" :placeholder="t('settings.role.name')" required minlength="3" maxlength="48" />
           <label v-for="(label, permission) in permissionLabels" :key="permission" class="flex gap-2 items-center text-sm text-gray-300">
             <input type="checkbox" v-model="roleForm.permissions" :value="permission" />{{ label }}
           </label>
-          <button type="submit" class="btn btn-primary" :disabled="roleBusy">保存角色</button>
+          <button type="submit" class="btn btn-primary" :disabled="roleBusy">{{ t('settings.save.role') }}</button>
         </form>
         <ListToolbar v-model:page="rolePage" v-model:search="roleSearch" :total="roleTotal" :busy="roleListLoading" @refresh="loadRoles" />
         <div v-for="role in visibleRoles" :key="role.name" class="flex flex-wrap gap-3 items-center border-t border-dark-border py-3 text-sm">
           <strong class="text-gray-200">{{ role.name }}</strong>
           <span class="flex-1 text-gray-400">{{ role.permissions.map(p => permissionLabels[p] || p).join('、') }}</span>
           <template v-if="!role.builtIn">
-            <button class="text-primary-400" @click="roleForm = { name: role.name, permissions: [...role.permissions] }">编辑</button>
-            <button class="text-red-400" @click="deleteManagementRole(role.name)">删除</button>
+            <button class="text-primary-400" @click="roleForm = { name: role.name, permissions: [...role.permissions] }">{{ t('common.edit') }}</button>
+            <button class="text-red-400" @click="deleteManagementRole(role.name)">{{ t('common.delete') }}</button>
           </template>
-          <span v-else class="text-gray-500">内置</span>
+          <span v-else class="text-gray-500">{{ t('settings.built.in') }}</span>
         </div>
       </section>
 
@@ -675,20 +674,20 @@ onMounted(() => {
 
         <!-- 空状态 -->
         <div v-else-if="logs.length === 0" class="text-center py-12 text-gray-500">
-          <p class="text-lg mb-2">暂无操作日志</p>
-          <p class="text-sm">系统操作日志将在此显示</p>
+          <p class="text-lg mb-2">{{ t('settings.no.audit.logs') }}</p>
+          <p class="text-sm">{{ t('settings.no.system.activity.recorded') }}</p>
         </div>
 
         <!-- 日志表格 -->
         <div v-else>
           <div class="overflow-x-auto">
-            <table class="w-full text-sm">
+            <table class="min-w-[640px] [&_th]:pr-4 [&_td]:pr-4 w-full text-sm">
               <thead>
                 <tr class="text-left text-gray-400 border-b border-dark-border">
-                  <th class="pb-3 font-medium">用户名</th>
-                  <th class="pb-3 font-medium">操作内容</th>
-                  <th class="pb-3 font-medium">IP 地址</th>
-                  <th class="pb-3 font-medium">时间</th>
+                  <th class="pb-3 font-medium">{{ t('login.username') }}</th>
+                  <th class="pb-3 font-medium">{{ t('settings.activity') }}</th>
+                  <th class="pb-3 font-medium">{{ t('settings.ip.address') }}</th>
+                  <th class="pb-3 font-medium">{{ t('settings.time') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -704,14 +703,14 @@ onMounted(() => {
 
           <!-- 分页 -->
           <div class="flex items-center justify-between mt-4 pt-4 border-t border-dark-border">
-            <span class="text-xs text-gray-500">共 {{ logsTotal }} 条记录</span>
+            <span class="text-xs text-gray-500">{{ t('common.total', { count: logsTotal }) }}</span>
             <div class="flex items-center gap-2">
               <button
                 @click="goPage(logsPage - 1)"
                 :disabled="logsPage <= 1"
                 :class="['px-3 py-1 text-xs rounded transition-colors', logsPage <= 1 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200']"
               >
-                上一页
+                {{ t('common.previous') }}
               </button>
               <span class="text-xs text-gray-400">{{ logsPage }} / {{ totalPages() }}</span>
               <button
@@ -719,7 +718,7 @@ onMounted(() => {
                 :disabled="logsPage >= totalPages()"
                 :class="['px-3 py-1 text-xs rounded transition-colors', logsPage >= totalPages() ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200']"
               >
-                下一页
+                {{ t('common.next') }}
               </button>
             </div>
           </div>
@@ -730,12 +729,12 @@ onMounted(() => {
       <div v-if="activeTab === 'runtime'" class="p-5">
         <!-- 操作栏 -->
         <div class="flex items-center justify-between mb-4">
-          <span class="text-sm text-gray-400">共 {{ runtimeTotal }} 条运行记录</span>
+          <span class="text-sm text-gray-400">{{ t('common.total', { count: runtimeTotal }) }}</span>
           <button @click="loadRuntimeLogs" class="btn btn-sm btn-primary flex items-center gap-1.5">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            刷新
+            {{ t('common.refresh') }}
           </button>
         </div>
 
@@ -746,37 +745,37 @@ onMounted(() => {
 
         <!-- 空状态 -->
         <div v-else-if="runtimeLogs.length === 0" class="text-center py-12 text-gray-500">
-          <p class="text-lg mb-2">暂无运行记录</p>
-          <p class="text-sm">进程启动和停止记录将在此显示</p>
+          <p class="text-lg mb-2">{{ t('settings.no.runtime.records') }}</p>
+          <p class="text-sm">{{ t('settings.no.process.start.or.stop.events.recorded') }}</p>
         </div>
 
         <!-- 运行日志表格 -->
         <div v-else>
           <div class="overflow-x-auto">
-            <table class="w-full text-sm">
+            <table class="min-w-[640px] [&_th]:pr-4 [&_td]:pr-4 w-full text-sm">
               <thead>
                 <tr class="text-left text-gray-400 border-b border-dark-border">
-                  <th class="pb-3 font-medium min-w-[140px]">启动时间</th>
-                  <th class="pb-3 font-medium min-w-[140px]">停止时间</th>
-                  <th class="pb-3 font-medium min-w-[80px]">状态</th>
-                  <th class="pb-3 font-medium min-w-[100px]">运行时长</th>
-                  <th class="pb-3 font-medium text-right min-w-[90px]">峰值内存</th>
-                  <th class="pb-3 font-medium text-right min-w-[80px]">当次请求</th>
-                  <th class="pb-3 font-medium text-right min-w-[80px] pr-6">当次拦截</th>
+                  <th class="pb-3 font-medium min-w-[140px]">{{ t('settings.started.at') }}</th>
+                  <th class="pb-3 font-medium min-w-[140px]">{{ t('settings.stopped.at') }}</th>
+                  <th class="pb-3 font-medium min-w-[80px]">{{ t('settings.status') }}</th>
+                  <th class="pb-3 font-medium min-w-[100px]">{{ t('settings.uptime') }}</th>
+                  <th class="pb-3 font-medium text-right min-w-[90px]">{{ t('settings.peak.memory') }}</th>
+                  <th class="pb-3 font-medium text-right min-w-[80px]">{{ t('settings.requests') }}</th>
+                  <th class="pb-3 font-medium text-right min-w-[80px] pr-6">{{ t('settings.blocked.requests') }}</th>
                   <th class="pb-3 font-medium min-w-[70px] pl-6">PID</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="entry in runtimeLogs" :key="entry.id" class="border-b border-dark-border/50 hover:bg-white/[0.02]">
-                  <td class="py-3 text-gray-200 font-mono text-xs whitespace-nowrap">{{ new Date(entry.startTime).toLocaleString() }}</td>
-                  <td class="py-3 text-gray-400 font-mono text-xs whitespace-nowrap">{{ entry.stopTime ? new Date(entry.stopTime).toLocaleString() : '-' }}</td>
+                  <td class="py-3 text-gray-200 font-mono text-xs whitespace-nowrap">{{ new Date(entry.startTime).toLocaleString(locale) }}</td>
+                  <td class="py-3 text-gray-400 font-mono text-xs whitespace-nowrap">{{ entry.stopTime ? new Date(entry.stopTime).toLocaleString(locale) : '-' }}</td>
                   <td class="py-3">
                     <span :class="['px-2 py-0.5 rounded text-xs border', exitReasonBg(entry.exitReason)]">
-                      {{ entry.exitReason || '运行中' }}
+                      {{ translateText(entry.exitReason || t('common.running')) }}
                     </span>
                   </td>
                   <td class="py-3 text-gray-300 text-sm whitespace-nowrap">
-                    {{ entry.stopTime ? formatDuration(entry.durationSeconds) : '运行中...' }}
+                    {{ entry.stopTime ? formatDuration(entry.durationSeconds) : t('settings.running') }}
                   </td>
                   <td class="py-3 text-gray-400 text-sm text-right whitespace-nowrap">
                     <template v-if="entry.peakMemoryMb > 0">
@@ -799,14 +798,14 @@ onMounted(() => {
 
           <!-- 分页 -->
           <div class="flex items-center justify-between mt-4 pt-4 border-t border-dark-border">
-            <span class="text-xs text-gray-500">共 {{ runtimeTotal }} 条记录</span>
+            <span class="text-xs text-gray-500">{{ t('common.total', { count: runtimeTotal }) }}</span>
             <div class="flex items-center gap-2">
               <button
                 @click="goRuntimePage(runtimePage - 1)"
                 :disabled="runtimePage <= 1"
                 :class="['px-3 py-1 text-xs rounded transition-colors', runtimePage <= 1 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200']"
               >
-                上一页
+                {{ t('common.previous') }}
               </button>
               <span class="text-xs text-gray-400">{{ runtimePage }} / {{ runtimeTotalPages() }}</span>
               <button
@@ -814,7 +813,7 @@ onMounted(() => {
                 :disabled="runtimePage >= runtimeTotalPages()"
                 :class="['px-3 py-1 text-xs rounded transition-colors', runtimePage >= runtimeTotalPages() ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:bg-white/5 hover:text-gray-200']"
               >
-                下一页
+                {{ t('common.next') }}
               </button>
             </div>
           </div>
@@ -827,15 +826,15 @@ onMounted(() => {
       <div v-if="showUploadDialog" class="fixed inset-0 z-[100] flex items-center justify-center">
         <div class="absolute inset-0 bg-black/60" @click="showUploadDialog = false"></div>
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
-          <h3 class="text-lg font-semibold text-gray-100 mb-4">上传证书</h3>
+          <h3 class="text-lg font-semibold text-gray-100 mb-4">{{ t('settings.upload.certificate') }}</h3>
 
           <div class="space-y-4">
             <div>
-              <label class="block text-xs text-gray-400 mb-1">域名</label>
-              <input v-model="uploadForm.domain" type="text" class="input w-full" placeholder="example.com 或 *.example.com" />
+              <label class="block text-xs text-gray-400 mb-1">{{ t('settings.domain') }}</label>
+              <input v-model="uploadForm.domain" type="text" class="input w-full" :placeholder="t('settings.example.com.or.example.com')" />
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">证书内容 (PEM)</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('settings.certificate.pem') }}</label>
               <textarea
                 v-model="uploadForm.pemContent"
                 class="input w-full font-mono text-xs"
@@ -844,7 +843,7 @@ onMounted(() => {
               ></textarea>
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">密钥内容 (KEY)</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('settings.private.key.key') }}</label>
               <textarea
                 v-model="uploadForm.keyContent"
                 class="input w-full font-mono text-xs"
@@ -855,13 +854,13 @@ onMounted(() => {
           </div>
 
           <div class="flex items-center justify-end gap-3 mt-6">
-            <button @click="showUploadDialog = false" class="btn btn-sm text-gray-400 hover:text-gray-200">取消</button>
+            <button @click="showUploadDialog = false" class="btn btn-sm text-gray-400 hover:text-gray-200">{{ t('common.cancel') }}</button>
             <button
               @click="handleUploadCert"
               :disabled="uploading"
               class="btn btn-sm btn-primary"
             >
-              {{ uploading ? '上传中...' : '上传' }}
+              {{ uploading ? t('settings.uploading') : t('settings.upload') }}
             </button>
           </div>
         </div>
@@ -873,21 +872,21 @@ onMounted(() => {
       <div v-if="showAcmeDialog" class="fixed inset-0 z-[100] flex items-center justify-center">
         <div class="absolute inset-0 bg-black/60" @click="!acmeApplying && (showAcmeDialog = false)"></div>
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6">
-          <h3 class="text-lg font-semibold text-gray-100 mb-4">申请免费证书</h3>
+          <h3 class="text-lg font-semibold text-gray-100 mb-4">{{ t('settings.request.free.certificate') }}</h3>
           <p class="text-xs text-gray-500 mb-4">
-            使用 Let's Encrypt 免费申请 SSL 证书。域名必须已解析到本服务器，且 80 端口可访问。
+            {{ t('settings.request.a.free.ssl.certificate.from.let.s.encrypt.the.domain.must.resolve.to.this.server.and.port.80.must.be.r') }}
           </p>
           <div class="space-y-4">
             <div>
-              <label class="block text-xs text-gray-400 mb-1">域名</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('settings.domain') }}</label>
               <input v-model="acmeForm.domain" type="text" class="input w-full"
                      placeholder="example.com" :disabled="acmeApplying" />
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">联系邮箱</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('settings.contact.email') }}</label>
               <input v-model="acmeForm.email" type="email" class="input w-full"
                      placeholder="admin@example.com" :disabled="acmeApplying" />
-              <p class="text-xs text-gray-600 mt-1">用于 Let's Encrypt 账户注册和证书到期通知</p>
+              <p class="text-xs text-gray-600 mt-1">{{ t('settings.for.let.s.encrypt.registration.and.certificate.expiry.notices') }}</p>
             </div>
           </div>
           <div v-if="acmeApplying" class="mt-4 flex items-center gap-2 text-sm text-yellow-400">
@@ -895,13 +894,13 @@ onMounted(() => {
             {{ acmeStatus }}
           </div>
           <div class="flex items-center justify-end gap-3 mt-6">
-            <button @click="showAcmeDialog = false" :disabled="acmeApplying" class="btn btn-sm text-gray-400 hover:text-gray-200">取消</button>
+            <button @click="showAcmeDialog = false" :disabled="acmeApplying" class="btn btn-sm text-gray-400 hover:text-gray-200">{{ t('common.cancel') }}</button>
             <button
               @click="handleAcmeApply"
               :disabled="acmeApplying"
               class="btn btn-sm btn-success"
             >
-              {{ acmeApplying ? '申请中...' : '申请证书' }}
+              {{ acmeApplying ? t('settings.requesting') : t('settings.request.certificate') }}
             </button>
           </div>
         </div>
@@ -913,44 +912,44 @@ onMounted(() => {
       <div v-if="showPasswordDialog" class="fixed inset-0 z-[100] flex items-center justify-center">
         <div class="absolute inset-0 bg-black/60" @click="showPasswordDialog = false"></div>
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-sm mx-4 p-6">
-          <h3 class="text-lg font-semibold text-gray-100 mb-4">修改密码</h3>
+          <h3 class="text-lg font-semibold text-gray-100 mb-4">{{ t('settings.change.password') }}</h3>
           <div class="space-y-3">
             <div>
-              <label class="block text-xs text-gray-400 mb-1">当前密码</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('settings.current.password') }}</label>
               <input
                 v-model="passwordForm.currentPassword"
                 type="password"
                 class="input w-full"
-                placeholder="请输入当前密码"
+                :placeholder="t('settings.enter.current.password')"
               />
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">新密码</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('settings.new.password') }}</label>
               <input
                 v-model="passwordForm.newPassword"
                 type="password"
                 class="input w-full"
-                placeholder="至少6位"
+                :placeholder="t('settings.at.least.6.characters')"
               />
             </div>
             <div>
-              <label class="block text-xs text-gray-400 mb-1">确认新密码</label>
+              <label class="block text-xs text-gray-400 mb-1">{{ t('settings.confirm.new.password') }}</label>
               <input
                 v-model="passwordForm.confirmPassword"
                 type="password"
                 class="input w-full"
-                placeholder="再次输入新密码"
+                :placeholder="t('settings.re.enter.new.password')"
               />
             </div>
           </div>
           <div class="flex items-center justify-end gap-3 mt-6">
-            <button @click="showPasswordDialog = false" class="btn btn-sm text-gray-400 hover:text-gray-200">取消</button>
+            <button @click="showPasswordDialog = false" class="btn btn-sm text-gray-400 hover:text-gray-200">{{ t('common.cancel') }}</button>
             <button
               @click="handleChangePassword"
               :disabled="changingPassword"
               class="btn btn-sm btn-primary"
             >
-              {{ changingPassword ? '提交中...' : '确认修改' }}
+              {{ changingPassword ? t('settings.submitting') : t('settings.confirm.change') }}
             </button>
           </div>
         </div>
@@ -962,18 +961,18 @@ onMounted(() => {
       <div v-if="showDeleteConfirm" class="fixed inset-0 z-[100] flex items-center justify-center">
         <div class="absolute inset-0 bg-black/60" @click="showDeleteConfirm = false"></div>
         <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl w-full max-w-sm mx-4 p-6">
-          <h3 class="text-lg font-semibold text-gray-100 mb-3">确认删除</h3>
+          <h3 class="text-lg font-semibold text-gray-100 mb-3">{{ t('settings.confirm.deletion') }}</h3>
           <p class="text-sm text-gray-400 mb-5">
-            确定要删除域名 <span class="text-gray-200 font-mono">{{ deletingCert?.domain }}</span> 的证书吗？此操作不可撤销。
+            {{ t('settings.deleteCertificateConfirm', { domain: deletingCert?.domain || '' }) }}
           </p>
           <div class="flex items-center justify-end gap-3">
-            <button @click="showDeleteConfirm = false" class="btn btn-sm text-gray-400 hover:text-gray-200">取消</button>
+            <button @click="showDeleteConfirm = false" class="btn btn-sm text-gray-400 hover:text-gray-200">{{ t('common.cancel') }}</button>
             <button
               @click="executeDeleteCert"
               :disabled="deleting"
               class="btn btn-sm bg-red-500/20 text-red-400 hover:bg-red-500/30"
             >
-              {{ deleting ? '删除中...' : '确认删除' }}
+              {{ deleting ? t('settings.deleting') : t('settings.confirm.deletion') }}
             </button>
           </div>
         </div>

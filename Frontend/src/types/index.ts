@@ -40,6 +40,7 @@ export interface FeatureStatus {
 // 系统状态
 export interface SystemStatus {
   uptime: string
+  uptimeSeconds?: number
   memory: number
   totalConnections: number
   httpConnections: number

@@ -942,6 +942,7 @@ export interface DashboardResponse {
   geoTraffic: GeoTrafficStats
   system: {
     uptime: string
+    uptimeSeconds?: number
     memory: number
     totalConnections: number
     httpConnections: number
@@ -1041,6 +1042,7 @@ export interface PluginsResponse {
 }
 
 export interface PluginConfigResponse {
+  localization?: Record<string, Record<string, string>>
   version: string
   supportsScopedConfiguration?: boolean
   success: boolean

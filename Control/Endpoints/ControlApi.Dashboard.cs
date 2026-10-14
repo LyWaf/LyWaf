@@ -133,6 +133,7 @@ public static partial class ControlApi
                     system = new
                     {
                         uptime = uptimeStr,
+                        uptimeSeconds = (long)uptime.TotalSeconds,
                         memory = process.WorkingSet64 / (1024 * 1024),
                         totalConnections = ConnectionTracker.GetActiveCount(),
                         httpConnections = ConnectionTracker.GetHttpCount(),

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/i18n'
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 
 const props = defineProps<{
@@ -202,9 +203,9 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 <template>
   <div class="dtp-wrapper">
     <!-- 输入框 -->
-    <div ref="inputRef" class="dtp-input" role="button" tabindex="0" :aria-label="placeholder || '选择时间'" :aria-expanded="open" @click="toggle" @keydown.enter.prevent="toggle" @keydown.space.prevent="toggle" @keydown.esc="open = false">
+    <div ref="inputRef" class="dtp-input" role="button" tabindex="0" :aria-label="placeholder || t('common.select.date.and.time')" :aria-expanded="open" @click="toggle" @keydown.enter.prevent="toggle" @keydown.space.prevent="toggle" @keydown.esc="open = false">
       <span :class="displayValue ? 'text-gray-200' : 'text-gray-500'">
-        {{ displayValue || placeholder || '选择时间' }}
+        {{ displayValue || placeholder || t('common.select.date.and.time') }}
       </span>
       <div class="dtp-input-icons">
         <svg v-if="displayValue" class="dtp-clear" @click="clear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -218,17 +219,17 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 
     <!-- 弹出面板 -->
     <Teleport to="body">
-      <div v-if="open" ref="pickerRef" class="dtp-panel" role="dialog" :aria-label="placeholder || '选择时间'" :style="panelStyle" @keydown.esc="open = false">
+      <div v-if="open" ref="pickerRef" class="dtp-panel" role="dialog" :aria-label="placeholder || t('common.select.date.and.time')" :style="panelStyle" @keydown.esc="open = false">
         <div class="dtp-body">
           <!-- 左侧日历 -->
           <div class="dtp-calendar">
             <!-- 头部导航 -->
             <div class="dtp-nav">
-              <button @click="prevYear" class="dtp-nav-btn" title="上一年">&laquo;</button>
-              <button @click="prevMonth" class="dtp-nav-btn" title="上月">&lsaquo;</button>
+              <button @click="prevYear" class="dtp-nav-btn" :title="t('common.previous.year')">&laquo;</button>
+              <button @click="prevMonth" class="dtp-nav-btn" :title="t('common.previous.month')">&lsaquo;</button>
               <span class="dtp-nav-title">{{ monthNames[month] }} {{ year }}</span>
-              <button @click="nextMonth" class="dtp-nav-btn" title="下月">&rsaquo;</button>
-              <button @click="nextYear" class="dtp-nav-btn" title="下一年">&raquo;</button>
+              <button @click="nextMonth" class="dtp-nav-btn" :title="t('common.next.month')">&rsaquo;</button>
+              <button @click="nextYear" class="dtp-nav-btn" :title="t('common.next.year')">&raquo;</button>
             </div>
 
             <!-- 星期头 -->
@@ -284,9 +285,9 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside))
 
         <!-- 底部操作 -->
         <div class="dtp-footer">
-          <button type="button" class="dtp-footer-btn dtp-now" @click="clear">清除</button>
-          <button type="button" class="dtp-footer-btn dtp-now" @click="setNow">现在</button>
-          <button type="button" class="dtp-footer-btn dtp-ok" @click="confirm">确定</button>
+          <button type="button" class="dtp-footer-btn dtp-now" @click="clear">{{ t('common.clear') }}</button>
+          <button type="button" class="dtp-footer-btn dtp-now" @click="setNow">{{ t('common.now') }}</button>
+          <button type="button" class="dtp-footer-btn dtp-ok" @click="confirm">{{ t('common.confirm') }}</button>
         </div>
       </div>
     </Teleport>

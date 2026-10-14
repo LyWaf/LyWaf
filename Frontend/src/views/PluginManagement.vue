@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { fieldLabel, fieldDescription, t } from '@/i18n'
+import { fieldLabel, fieldDescription, registerPluginMessages, t } from '@/i18n'
 import { refreshPluginMenus } from '@/composables/usePluginMenus'
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { pluginApi } from '@/api'
@@ -351,6 +351,7 @@ const openEditConfig = async (plugin: PluginItem) => {
       supportsScopedConfig.value = res.supportsScopedConfiguration === true
       editConfigVersion.value = res.version
       const lbls = res.labels || {}
+      registerPluginMessages(plugin.id, res.localization)
       const fDefs = res.fieldDefaults || {}
       editConfigLabels.value = lbls
       editConfigFieldDefaults.value = fDefs
@@ -927,7 +928,7 @@ onMounted(loadPlugins)
             <div v-if="item.type === 'simple'" class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
               <label class="w-full sm:w-2/5 text-sm text-gray-300 whitespace-normal break-words flex-shrink-0" :title="item.key">
                 {{ fieldLabel(item.key, editConfigLabels[item.key], editConfigPlugin?.id, editConfigSchema[item.key]?.labelKey) }}
-                <span v-if="editConfigSchema[item.key]?.descriptionKey" class="block text-xs text-gray-500 whitespace-normal mt-1">{{ fieldDescription(editConfigSchema[item.key]?.descriptionKey) }}</span>
+                <span v-if="editConfigSchema[item.key]?.descriptionKey" class="block text-xs text-gray-500 whitespace-normal mt-1">{{ fieldDescription(editConfigSchema[item.key]?.descriptionKey, editConfigPlugin?.id) }}</span>
               </label>
               <div class="w-full sm:w-auto min-w-0 flex-1 flex items-center gap-2">
                 <button v-if="isBoolValue((item as SimpleItem).defaultValue || (item as SimpleItem).value)"

@@ -34,7 +34,7 @@ const handleLogout = () => {
 
 <template>
   <header class="h-14 shrink-0 bg-dark-bg-secondary border-b border-dark-border px-3 md:px-6 flex items-center justify-between gap-2 sticky top-0 z-40 min-w-0">
-    <button class="md:hidden shrink-0 w-9 h-9 bg-dark-card border border-dark-border rounded" title="导航菜单" aria-label="导航菜单" :aria-expanded="navigationOpen" @click="$emit('toggleNavigation')">&#9776;</button>
+    <button class="md:hidden shrink-0 w-9 h-9 bg-dark-card border border-dark-border rounded" :title="t('common.navigation')" :aria-label="t('common.navigation')" :aria-expanded="navigationOpen" @click="$emit('toggleNavigation')">&#9776;</button>
     <!-- 面包屑 -->
     <nav class="flex items-center gap-2 text-sm min-w-0">
       <template v-for="(item, index) in breadcrumbs" :key="item.path">

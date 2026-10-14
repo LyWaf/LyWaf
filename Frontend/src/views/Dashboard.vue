@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, formatDuration } from '@/i18n'
 import { ref, onMounted, onUnmounted } from 'vue'
 import StatCard from '@/components/common/StatCard.vue'
 import TrafficAnalysis from '@/components/dashboard/TrafficAnalysis.vue'
@@ -54,6 +55,7 @@ const loadData = async () => {
       // 更新系统状态
       system.value = {
         uptime: data.system.uptime,
+        uptimeSeconds: data.system.uptimeSeconds ?? Math.max(0, (Date.now() - new Date(data.system.processStartTime).getTime()) / 1000),
         memory: data.system.memory,
         totalConnections: data.system.totalConnections,
         httpConnections: data.system.httpConnections ?? 0,
@@ -73,7 +75,7 @@ const loadData = async () => {
       blockedIps.value = data.blockedIps || []
     }
   } catch (error) {
-    console.error('加载数据失败:', error)
+    console.error(t('dashboard.failed.to.load.data'), error)
   } finally {
     loading.value = false
   }
@@ -81,14 +83,14 @@ const loadData = async () => {
 
 // 重置流量统计
 const resetTraffic = async () => {
-  if (!confirm('确定要重置流量统计吗？')) return
+  if (!confirm(t('dashboard.reset.traffic.statistics'))) return
 
   try {
     await trafficApi.reset()
-    showSuccess('流量统计已重置')
+    showSuccess(t('dashboard.traffic.statistics.reset'))
     loadData()
   } catch (error) {
-    showError('重置失败')
+    showError(t('dashboard.reset.failed'))
   }
 }
 </script>
@@ -101,23 +103,23 @@ const resetTraffic = async () => {
     <!-- 概览卡片 -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       <StatCard
-        label="运行时间"
-        :value="system.uptime"
+        :label="t('dashboard.uptime')"
+        :value="formatDuration(system.uptimeSeconds)"
         icon="⏱️"
         color="blue"
-        tooltip="服务启动后的运行时长"
+        :tooltip="t('dashboard.time.since.the.service.started')"
       />
       <StatCard
-        label="内存使用"
+        :label="t('dashboard.memory.usage')"
         :value="`${system.memory} MB`"
         icon="💾"
         color="green"
-        tooltip="当前进程内存占用"
+        :tooltip="t('dashboard.memory.used.by.the.current.process')"
       />
-      <div class="card group" title="当前活跃连接数（区分 HTTP 与 WebSocket）">
+      <div class="card group" :title="t('dashboard.active.http.and.websocket.connections')">
         <div class="flex items-center gap-2 text-gray-400 text-sm mb-3">
           <span class="text-base">🔗</span>
-          <span>当前连接</span>
+          <span> {{ t('dashboard.active.connections') }} </span>
         </div>
         <div class="flex items-baseline gap-3">
           <div class="flex items-baseline gap-1">
@@ -132,11 +134,11 @@ const resetTraffic = async () => {
         </div>
       </div>
       <StatCard
-        label="封禁 IP"
+        :label="t('dashboard.blocked.ips')"
         :value="system.blockedIpCount"
         icon="🚫"
         color="red"
-        tooltip="当前被封禁的 IP 数量"
+        :tooltip="t('dashboard.currently.blocked.ip.addresses')"
       />
     </div>
 
