@@ -26,6 +26,8 @@ public static class TextLocalizer
     public static string Get(string key) => Catalogs[Normalize(CultureInfo.CurrentUICulture.Name)].GetValueOrDefault(key)
         ?? Catalogs["zh-CN"].GetValueOrDefault(key) ?? key;
     public static string Display(string text) => DisplayKeys.TryGetValue(text, out var key) ? Get(key) : text;
+    public static string Format(string key, params object[] arguments) =>
+        string.Format(CultureInfo.CurrentUICulture, Get(key), arguments);
 
     public static string ResolveLanguage(string? header, string? fallback = "zh-CN")
     {

@@ -12,6 +12,41 @@ namespace LyWaf.Tests;
 
 public sealed class LocalizationTests
 {
+    [Theory]
+    [InlineData("用户名或密码错误", "Invalid username or password")]
+    [InlineData("用户已禁用", "This user is disabled")]
+    [InlineData("请求已过期，请刷新页面后重试", "The request has expired; refresh the page and try again")]
+    [InlineData("请输入有效的动态码或恢复码", "Enter a valid authentication or recovery code")]
+    [InlineData("备份范围无效", "Invalid backup scope")]
+    [InlineData("备份格式或版本无效", "Invalid backup format or version")]
+    [InlineData("配置备份上传不能超过 32 MiB", "Configuration backup uploads must not exceed 32 MiB")]
+    public void LegacyEndpointMessagesFollowRequestCulture(string chinese, string english)
+    {
+        var previous = CultureInfo.CurrentUICulture;
+        try
+        {
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("en-US");
+            Assert.Equal(english, TextLocalizer.Display(chinese));
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("zh-CN");
+            Assert.Equal(chinese, TextLocalizer.Display(chinese));
+        }
+        finally { CultureInfo.CurrentUICulture = previous; }
+    }
+
+    [Theory]
+    [InlineData("en-US", "Too many failed login attempts; try again in 42 seconds")]
+    [InlineData("zh-CN", "登录失败次数过多，请 42 秒后再试")]
+    public void ParameterizedAuthenticationMessageUsesSelectedLanguage(string language, string expected)
+    {
+        var previous = CultureInfo.CurrentUICulture;
+        try
+        {
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo(language);
+            Assert.Equal(expected, TextLocalizer.Format("api.auth.locked", 42));
+        }
+        finally { CultureInfo.CurrentUICulture = previous; }
+    }
+
     [Fact]
     public void BuiltInPluginMetadataHasPluginOwnedBilingualResources()
     {

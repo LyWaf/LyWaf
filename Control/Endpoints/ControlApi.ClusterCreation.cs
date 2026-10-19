@@ -20,7 +20,7 @@ public static partial class ControlApi
             if (!Validator.TryValidateObject(request, new ValidationContext(request), errors, true))
                 return Results.BadRequest(new { success = false, message = string.Join("; ", errors.Select(e => e.ErrorMessage)) });
             if (!TryNormalizeClusterAddress(request.Address, out var uri))
-                return Results.BadRequest(new { success = false, message = "请输入有效的 HTTP/HTTPS 上游地址，不可使用通配监听地址" });
+                return Results.BadRequest(new { success = false, message = LyWaf.Localization.TextLocalizer.Get("api.cluster.invalidAddress") });
             var candidate = new ClusterConfig { ClusterId = request.Id, LoadBalancingPolicy = request.Policy,
                 Destinations = new Dictionary<string, DestinationConfig> { ["dest1"] = new() { Address = uri.AbsoluteUri } } };
             var validation = await validator.ValidateClusterAsync(candidate);

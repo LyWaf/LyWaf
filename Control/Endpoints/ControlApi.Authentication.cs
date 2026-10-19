@@ -22,7 +22,7 @@ public static partial class ControlApi
 
             if (request == null || string.IsNullOrEmpty(request.Username) || string.IsNullOrEmpty(request.PasswordHash))
             {
-                return Results.Json(new { success = false, message = "用户名和密码不能为空" }, statusCode: 400);
+                return Results.Json(new { success = false, message = LyWaf.Localization.TextLocalizer.Get("api.auth.credentialsRequired") }, statusCode: 400);
             }
             var result = authService.Login(request.Username, request.PasswordHash, request.Timestamp, request.SecondFactor);
             var clientIp = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
@@ -34,7 +34,7 @@ public static partial class ControlApi
                 return Results.Json(new
                 {
                     success = false,
-                    message = result.Message ?? "用户名或密码错误",
+                    message = LyWaf.Localization.TextLocalizer.Display(result.Message ?? "用户名或密码错误"),
                     retryAfterSeconds = result.RetryAfterSeconds
                 }, statusCode: 401);
             }
@@ -181,7 +181,7 @@ public static partial class ControlApi
                         }
                         // 验证失败，返回具体错误
                         context.Response.StatusCode = 401;
-                        var message = result.Message ?? "用户名或密码错误";
+                        var message = LyWaf.Localization.TextLocalizer.Display(result.Message ?? "用户名或密码错误");
                         await context.Response.WriteAsJsonAsync(ManagementApiContract.CreateError(context,
                             "invalid_credentials", message, new { result.RetryAfterSeconds }));
                         return;
@@ -202,12 +202,12 @@ public static partial class ControlApi
             var authService = ctx.RequestServices.GetRequiredService<IAuthService>();
             var authHeader = ctx.Request.Headers.Authorization.FirstOrDefault();
             if (authHeader?.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) != true)
-                return Results.Json(new { success = false, message = "刷新令牌需要 Bearer 会话" }, statusCode: 401);
+                return Results.Json(new { success = false, message = LyWaf.Localization.TextLocalizer.Get("api.auth.bearerRequired") }, statusCode: 401);
             var token = authHeader["Bearer ".Length..];
             var result = authService.RefreshToken(token);
             if (!result.Success)
             {
-                return Results.Json(new { success = false, message = "刷新令牌失败" }, statusCode: 401);
+                return Results.Json(new { success = false, message = LyWaf.Localization.TextLocalizer.Get("api.auth.refreshFailed") }, statusCode: 401);
             }
             return Results.Json(new TokenRefreshResponse(true, result.Token, result.ExpiresAt));
         }).Produces<TokenRefreshResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
@@ -224,16 +224,16 @@ public static partial class ControlApi
 
             if (request == null || string.IsNullOrEmpty(request.CurrentPassword) || string.IsNullOrEmpty(request.NewPassword))
             {
-                return Results.Json(new { success = false, message = "密码不能为空" }, statusCode: 400);
+                return Results.Json(new { success = false, message = LyWaf.Localization.TextLocalizer.Get("api.auth.passwordRequired") }, statusCode: 400);
             }
             if (request.NewPassword.Length < 6)
             {
-                return Results.Json(new { success = false, message = "新密码长度至少6位" }, statusCode: 400);
+                return Results.Json(new { success = false, message = LyWaf.Localization.TextLocalizer.Get("api.auth.passwordLength") }, statusCode: 400);
             }
             var ok = authService.ChangePassword(ctx.Items["Username"]?.ToString() ?? "", request.CurrentPassword, request.NewPassword);
             if (!ok)
             {
-                return Results.Json(new { success = false, message = "当前密码错误" }, statusCode: 400);
+                return Results.Json(new { success = false, message = LyWaf.Localization.TextLocalizer.Get("api.auth.currentPasswordWrong") }, statusCode: 400);
             }
             var audit = ctx.RequestServices.GetRequiredService<IAuditLogService>();
             audit.Log(ctx.Items["Username"]?.ToString() ?? "unknown", "修改密码", ctx.Connection.RemoteIpAddress?.ToString() ?? "");

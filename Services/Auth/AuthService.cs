@@ -399,7 +399,7 @@ public partial class AuthService : IAuthService
             return new AuthResult
             {
                 Success = false,
-                Message = $"登录失败次数过多，请 {lockoutSeconds} 秒后再试",
+                Message = LyWaf.Localization.TextLocalizer.Format("api.auth.locked", lockoutSeconds),
                 RetryAfterSeconds = lockoutSeconds
             };
         }
@@ -447,7 +447,7 @@ public partial class AuthService : IAuthService
                 return new AuthResult
                 {
                     Success = false,
-                    Message = $"登录失败次数过多，请 {newLockout} 秒后再试",
+                    Message = LyWaf.Localization.TextLocalizer.Format("api.auth.locked", newLockout),
                     RetryAfterSeconds = newLockout
                 };
             }
@@ -502,7 +502,7 @@ public partial class AuthService : IAuthService
             return new AuthResult
             {
                 Success = false,
-                Message = $"登录失败次数过多，请 {lockoutSeconds} 秒后再试",
+                Message = LyWaf.Localization.TextLocalizer.Format("api.auth.locked", lockoutSeconds),
                 RetryAfterSeconds = lockoutSeconds
             };
         }

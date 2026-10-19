@@ -40,18 +40,18 @@ public static partial class ControlApi
             try
             {
                 var scope = context.Request.Query["scope"].ToString();
-                if (scope is not "" and not "configuration" and not "statistics" and not "instance") return Results.BadRequest(new { success = false, message = "备份范围无效" });
+                if (scope is not "" and not "configuration" and not "statistics" and not "instance") return Results.BadRequest(new { success = false, message = LyWaf.Localization.TextLocalizer.Get("api.backup.invalidScope") });
                 var id = await backups.UploadAsync(context.Request.Body, context.RequestAborted, scope == "statistics", scope == "instance");
                 audit.Log(GetIdentityName(context), $"上传配置备份: {id}", context.Connection.RemoteIpAddress?.ToString() ?? "");
                 return Results.Ok(new BackupUploadResponse(true, id));
             }
-            catch (InvalidDataException ex) { return Results.BadRequest(new { success = false, message = ex.Message }); }
-            catch (IOException) { return Results.BadRequest(new { success = false, message = "备份上传不完整或不可写" }); }
+            catch (InvalidDataException ex) { return Results.BadRequest(new { success = false, message = LyWaf.Localization.TextLocalizer.Display(ex.Message) }); }
+            catch (IOException) { return Results.BadRequest(new { success = false, message = LyWaf.Localization.TextLocalizer.Get("api.backup.uploadFailed") }); }
         }).Produces<BackupUploadResponse>();
         group.MapPost("", (BackupRequest request, HttpContext context, ConfigurationBackupService backups, IAuditLogService audit) =>
         {
             var actor = GetIdentityName(context);
-            if (request.Scope is not "configuration" and not "statistics" and not "instance") return (IResult)Results.BadRequest(new { success = false, message = "备份范围无效" });
+            if (request.Scope is not "configuration" and not "statistics" and not "instance") return (IResult)Results.BadRequest(new { success = false, message = LyWaf.Localization.TextLocalizer.Get("api.backup.invalidScope") });
             var job = request.Scope == "instance" ? backups.CreateInstance(request.Password, actor) : request.Scope == "statistics" ? backups.CreateStatistics(request.Password, actor) : backups.Create(request.Password, actor);
             audit.Log(actor, $"创建配置备份任务: {job.Id}", context.Connection.RemoteIpAddress?.ToString() ?? "");
             return Results.Accepted($"/api/v1/tasks/{job.Id}", new { success = true, data = job });

@@ -3,11 +3,54 @@ using LyWaf.Policy;
 using LyWaf.Services.Metrics;
 using LyWaf.Services.Retry;
 using Xunit;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Yarp.ReverseProxy.Forwarder;
 
 namespace LyWaf.Tests;
 
 public sealed class RetryFailureTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ForwarderHandlesRealTransportCancellation(bool callerCancelled)
+    {
+        using var services = new ServiceCollection().AddLogging().AddHttpForwarder().BuildServiceProvider();
+        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var abort = new CancellationTokenSource();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var metrics = new PrometheusMetrics(new StaticOptionsMonitor<MetricsOptions>(new()));
+        var circuit = new CircuitBreakerState("test", CircuitBreakerPolicy.FromMetadata(null), metrics);
+        using var client = new HttpMessageInvoker(new CircuitBreakerHandler("test", circuit, metrics)
+        {
+            InnerHandler = new RetryHandler("test", RetryPolicy.Disabled, metrics, circuit)
+            {
+                InnerHandler = new SocketsHttpHandler { UseProxy = false }
+            }
+        });
+        var context = new DefaultHttpContext();
+        context.Request.Method = "GET";
+        context.Request.Scheme = "http";
+        context.Request.Host = new HostString("localhost");
+        context.Request.Path = "/";
+        context.Request.Protocol = "HTTP/1.1";
+        context.RequestAborted = abort.Token;
+        using var body = new MemoryStream();
+        context.Response.Body = body;
+        var pending = services.GetRequiredService<IHttpForwarder>().SendAsync(context,
+            $"http://127.0.0.1:{port}/", client,
+            new ForwarderRequestConfig { ActivityTimeout = TimeSpan.FromMilliseconds(500) }, HttpTransformer.Default);
+        using var connection = await listener.AcceptTcpClientAsync(limit.Token);
+        // Keep the upstream silent to exercise cancellation inside SocketsHttpHandler.
+        if (callerCancelled) abort.Cancel();
+        var result = await pending.AsTask().WaitAsync(limit.Token);
+        Assert.Equal(callerCancelled ? ForwarderError.RequestCanceled : ForwarderError.RequestTimedOut, result);
+        if (!callerCancelled) Assert.Equal(StatusCodes.Status504GatewayTimeout, context.Response.StatusCode);
+    }
+
     [Fact]
     public async Task CancelledProbeReturns504InsteadOfPropagatingCancellation()
     {
@@ -65,7 +108,10 @@ public sealed class RetryFailureTests
         Assert.Equal(HttpStatusCode.GatewayTimeout, response.StatusCode);
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.SendAsync(request, cancelled.Token));
+        var pending = client.SendAsync(request, cancelled.Token);
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.True(pending.IsCanceled);
+        Assert.Equal(cancelled.Token, exception.CancellationToken);
     }
 
     [Fact]

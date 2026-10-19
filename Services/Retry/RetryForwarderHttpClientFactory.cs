@@ -31,19 +31,29 @@ internal sealed class CircuitBreakerHandler(
     CircuitBreakerState state,
     PrometheusMetrics metrics) : DelegatingHandler
 {
-    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        => SendHandledAsync(request, cancellationToken).Unwrap();
+
+    private async Task<Task<HttpResponseMessage>> SendHandledAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        if (!await state.EnterAsync(cancellationToken))
+        try
         {
-            metrics.RecordRetry(clusterId, request.RequestUri?.Authority, "circuit_rejected", 1);
-            return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            if (!await state.EnterAsync(cancellationToken))
             {
-                RequestMessage = request,
-                ReasonPhrase = "LyWaf circuit breaker capacity exceeded"
-            };
+                metrics.RecordRetry(clusterId, request.RequestUri?.Authority, "circuit_rejected", 1);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    RequestMessage = request,
+                    ReasonPhrase = "LyWaf circuit breaker capacity exceeded"
+                });
+            }
+            try { return Task.FromResult(await base.SendAsync(request, cancellationToken)); }
+            finally { state.Exit(); }
         }
-        try { return await base.SendAsync(request, cancellationToken); }
-        finally { state.Exit(); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromCanceled<HttpResponseMessage>(cancellationToken);
+        }
     }
 }
 
@@ -55,16 +65,24 @@ internal sealed class RetryHandler(
 {
     private readonly RetryBudget _budget = new();
 
-    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        => SendHandledAsync(request, cancellationToken).Unwrap();
+
+    // Preserve cancellation for YARP without rethrowing an expected cancellation in user code.
+    private async Task<Task<HttpResponseMessage>> SendHandledAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        try { return await SendWithRetriesAsync(request, cancellationToken); }
+        try { return Task.FromResult(await SendWithRetriesAsync(request, cancellationToken)); }
         catch (HttpRequestException) when (HealthProbeRequestOptions.Contains(request) || !cancellationToken.IsCancellationRequested)
         {
-            return FailureResponse(request, HttpStatusCode.BadGateway);
+            return Task.FromResult(FailureResponse(request, HttpStatusCode.BadGateway));
         }
         catch (OperationCanceledException) when (HealthProbeRequestOptions.Contains(request) || !cancellationToken.IsCancellationRequested)
         {
-            return FailureResponse(request, HttpStatusCode.GatewayTimeout);
+            return Task.FromResult(FailureResponse(request, HttpStatusCode.GatewayTimeout));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromCanceled<HttpResponseMessage>(cancellationToken);
         }
     }
 
