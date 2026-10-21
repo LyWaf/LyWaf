@@ -12,6 +12,41 @@ namespace LyWaf.Tests;
 public sealed class ConfigVersionServiceTests
 {
     [Fact]
+    public async Task ConditionalWriteRejectsStaleBaselineWithoutCreatingVersions()
+    {
+        var original = SharedData.ConfigFilePath;
+        var directory = Path.Combine(Path.GetTempPath(), "lywaf-conditional-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "config.yaml");
+        SharedData.ConfigFilePath = path;
+        try
+        {
+            await File.WriteAllTextAsync(path, "Feature: old\n");
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(path)));
+            var service = new ConfigVersionService(new HttpContextAccessor());
+            await service.WriteMainIfUnchangedAsync(path, "Feature: first\n", "first", hash);
+            var versions = await service.GetVersionsAsync();
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                service.WriteMainIfUnchangedAsync(path, "Feature: stale\n", "stale", hash));
+            Assert.Equal("Feature: first\n", await File.ReadAllTextAsync(path));
+            Assert.Equal(versions.Count, (await service.GetVersionsAsync()).Count);
+
+            var currentHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(path)));
+            var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(async i =>
+            {
+                try { await service.WriteMainIfUnchangedAsync(path, $"Feature: candidate{i}\n", "competing", currentHash); return true; }
+                catch (InvalidOperationException) { return false; }
+            }));
+            Assert.Single(results, succeeded => succeeded);
+        }
+        finally
+        {
+            SharedData.ConfigFilePath = original;
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
     public async Task WriteRejectAndRollbackPreserveLastValidConfiguration()
     {
         var originalConfigPath = SharedData.ConfigFilePath;

@@ -1237,6 +1237,8 @@ public class Program
             LyWaf.Services.Backup.InstanceStateCoordinator.ApplyBeforeStartup(instanceDirectory,
                 LyWaf.Services.Backup.InstanceStatePaths.FromConfiguration(builder.Configuration));
 
+        LyWaf.Services.NodeCommunication.NodeSetupConfiguration.AddNodeSetup(builder.Configuration, builder.Services,
+            Path.Combine(instanceDirectory, ".lywaf-node-setup"));
         var statisticsPath = Path.GetFullPath(builder.Configuration.GetValue<string>("DuckDb:DatabasePath") ?? "bin/lywaf_stats.duckdb");
         var restoreDirectory = Path.GetDirectoryName(Path.GetFullPath(SharedData.ConfigFilePath))!;
         var statisticsEnabled = builder.Configuration.GetValue("DuckDb:Enabled", true);
@@ -1265,7 +1267,9 @@ public class Program
                 "Stream 配置包含非法上游、CIDR、协议组合或资源限制")
             .ValidateOnStart();
         builder.Services.Configure<ABTestOptions>(builder.Configuration.GetSection("ABTest"));
-        builder.Services.Configure<GlobalOptions>(builder.Configuration.GetSection("Global"));
+        builder.Services.AddOptions<GlobalOptions>().Bind(builder.Configuration.GetSection("Global"))
+            .Validate(RequestUtil.IsValidProxyConfiguration, "Global.TrustedProxies/TrustedNetworks contains an invalid IP or CIDR")
+            .ValidateOnStart();
         builder.Services.Configure<LyWaf.Services.LyLog.LyLogOptions>(builder.Configuration.GetSection("LyLog"));
         builder.Services.Configure<LyWaf.Services.ErrorTemplate.ErrorTemplateOptions>(builder.Configuration.GetSection("ErrorTemplate"));
         builder.Services.Configure<MetricsOptions>(builder.Configuration.GetSection("Metrics"));
@@ -1320,7 +1324,7 @@ public class Program
         builder.Services.AddSingleton<LyWaf.Services.AntiBot.IAntiBotAnalyzer, LyWaf.Services.AntiBot.AntiBotAnalyzer>();
         builder.Services.AddSingleton<LyWaf.Services.AntiBot.IAntiBotChallengeService, LyWaf.Services.AntiBot.AntiBotChallengeService>();
         builder.Services.AddSingleton<IStatisticService, StatisticService>();
-        builder.Services.AddSingleton<ICaptchaService, CaptchaService>();
+        builder.Services.AddLyWafCaptcha(builder.Configuration);
         builder.Services.AddSingleton<ICcRuleChecker, CcRuleChecker>();
         builder.Services.AddSingleton<IAccessControlService, AccessControlService>();
         builder.Services.AddSingleton<IIpGroupService, IpGroupService>();
@@ -1648,6 +1652,11 @@ public class Program
         });
         app.Lifetime.ApplicationStopped.Register(() =>
         {
+            var backgroundTasks = app.Services.GetServices<IHostedService>()
+                .OfType<BackgroundService>().Select(service => service.ExecuteTask).Where(task => task != null).ToArray();
+            _logger.Info("Hosted service shutdown audit: running={Running}, cancelled={Cancelled}, faulted={Faulted}",
+                backgroundTasks.Count(task => !task!.IsCompleted), backgroundTasks.Count(task => task!.IsCanceled),
+                backgroundTasks.Count(task => task!.IsFaulted));
             _logger.Info("托管服务已停止，释放静态资源...");
             SharedData.DisposeAll();
         });

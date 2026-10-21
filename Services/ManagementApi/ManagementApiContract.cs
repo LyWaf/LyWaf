@@ -47,15 +47,16 @@ public static class ManagementApiContract
             }
 
             var versioned = TryRewriteVersionedPath(context.Request.Path, out var rewritten);
+            var nodeV2 = context.Request.Path.StartsWithSegments("/api/v2/node-agent");
             if (versioned) context.Request.Path = rewritten;
 
             var settings = context.RequestServices.GetRequiredService<IOptionsMonitor<ManagementApiOptions>>().CurrentValue;
             var write = HttpMethods.IsPost(context.Request.Method) || HttpMethods.IsPut(context.Request.Method) ||
                         HttpMethods.IsPatch(context.Request.Method) || HttpMethods.IsDelete(context.Request.Method);
             var identity = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-            context.Response.Headers["X-LyWaf-Api-Version"] = CurrentVersion;
+            context.Response.Headers["X-LyWaf-Api-Version"] = nodeV2 ? "2" : CurrentVersion;
             context.Response.Headers["X-Request-Id"] = context.TraceIdentifier;
-            if (!versioned)
+            if (!versioned && !nodeV2)
             {
                 context.Response.Headers["Deprecation"] = "true";
                 context.Response.Headers["Sunset"] = "Thu, 03 Sep 2027 00:00:00 GMT";
@@ -156,14 +157,16 @@ public static class ManagementApiContract
             var methods = endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods;
             if (methods == null || methods.Count == 0) continue;
 
-            var publicPath = VersionPrefix + ManagementOpenApiModels.Path(endpoint.RoutePattern)[4..];
+            var publicPath = raw.StartsWith("/api/v2/node-agent/", StringComparison.Ordinal) ? raw
+                : VersionPrefix + ManagementOpenApiModels.Path(endpoint.RoutePattern)[4..];
             var operations = paths.TryGetValue(publicPath, out var existing)
                 ? (SortedDictionary<string, object>)existing
                 : new SortedDictionary<string, object>(StringComparer.Ordinal);
             foreach (var method in methods.OrderBy(x => x, StringComparer.Ordinal))
             {
                 var runtimeAgent = raw.StartsWith("/api/runtime-state/agent/", StringComparison.OrdinalIgnoreCase);
-                var nodeAgent = runtimeAgent || raw.StartsWith("/api/distribution/agent/", StringComparison.OrdinalIgnoreCase);
+                var nodeAgent = runtimeAgent || raw.StartsWith("/api/distribution/agent/", StringComparison.OrdinalIgnoreCase)
+                    || raw.StartsWith("/api/v2/node-agent/", StringComparison.Ordinal);
                 var responses = new Dictionary<string, object>
                 {
                         ["200"] = new { description = "请求成功（未声明响应模型）" },

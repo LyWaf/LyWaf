@@ -10,13 +10,14 @@ namespace LyWaf.Services.RuntimeState;
 /// <summary>
 /// 进程内运行状态主存储。变更先同步进入内存，再通过有界队列异步追加到日志；启动恢复逐行解析，不整文件加载。
 /// </summary>
-public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
+public sealed partial class RuntimeStateStore : BackgroundService, IRuntimeStateStore
 {
     private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly IOptionsMonitor<RuntimeStateOptions> _options;
-    private readonly ConcurrentDictionary<string, RuntimeStateMutation> _entries = new(StringComparer.Ordinal);
+    private ConcurrentDictionary<string, RuntimeStateMutation> _entries = new(StringComparer.Ordinal);
     private readonly Channel<RuntimeStateMutation> _journalQueue;
+    private string _counterComponentId;
     private long _sequence;
     private long _persisted;
     private long _dropped;
@@ -31,6 +32,13 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
     public RuntimeStateStore(IOptionsMonitor<RuntimeStateOptions> options)
     {
         _options = options;
+        if (!ValidCapacityOptions(options.CurrentValue)) throw new ArgumentException("Invalid runtime capacity limits", nameof(options));
+        using (RuntimeStateDiskBudget.Reserve(options.CurrentValue, 0)) { }
+        foreach (var journal in new[] { JournalPath, CcGenerationPath })
+            if (File.Exists(journal) && new FileInfo(journal).Length > options.CurrentValue.MaxJournalDiskBytes)
+                throw new RuntimeStateCapacityException("journal-disk-recovery");
+        // A fresh component prevents post-crash increments from being hidden by a peer's pre-crash maximum.
+        _counterComponentId = JsonSerializer.Serialize(new[] { NodeId, Guid.NewGuid().ToString("N") });
         var capacity = Math.Clamp(options.CurrentValue.QueueCapacity, 100, 1_000_000);
         _journalQueue = Channel.CreateBounded<RuntimeStateMutation>(new BoundedChannelOptions(capacity)
         {
@@ -38,11 +46,15 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
             SingleReader = true,
             SingleWriter = false
         });
+        RecoverCcGenerations();
         Recover();
     }
 
     public void Set<T>(string domain, string key, T value, TimeSpan? timeToLive = null)
+    { lock (_ccGenerationGate) SetCore(domain, key, value, timeToLive); }
+    private void SetCore<T>(string domain, string key, T value, TimeSpan? timeToLive)
     {
+        RejectGenericGenerationWrite(domain);
         ValidateIdentity(domain, key);
         var json = JsonSerializer.SerializeToElement(value, JsonOptions);
         if (Encoding.UTF8.GetByteCount(json.GetRawText()) > _options.CurrentValue.MaxValueBytes)
@@ -65,7 +77,10 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
     }
 
     public bool TryTake<T>(string domain, string key, out T? value)
+    { lock (_ccGenerationGate) return TryTakeCore(domain, key, out value); }
+    private bool TryTakeCore<T>(string domain, string key, out T? value)
     {
+        RejectGenericGenerationWrite(domain);
         value = default;
         var identity = Identity(domain, key);
         while (true)
@@ -78,6 +93,7 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
             if (parsed is null) return false;
             var tombstone = new RuntimeStateMutation(domain, key, NodeId, NextSequence(), DateTimeOffset.UtcNow,
                 DateTimeOffset.UtcNow.AddHours(24), true, null);
+            ChargeEntry(tombstone);
             if (!_entries.TryUpdate(identity, tombstone, current)) continue;
             value = parsed;
             Enqueue(tombstone);
@@ -88,7 +104,10 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
     }
 
     public bool Remove(string domain, string key)
+    { lock (_ccGenerationGate) return RemoveCore(domain, key); }
+    private bool RemoveCore(string domain, string key)
     {
+        RejectGenericGenerationWrite(domain);
         ValidateIdentity(domain, key);
         var identity = Identity(domain, key);
         var existed = _entries.TryGetValue(identity, out var current) && IsActive(current);
@@ -98,7 +117,11 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
     }
 
     public long IncrementWindow(string domain, string key, DateTimeOffset windowStart, TimeSpan windowLength, long amount = 1)
+    { lock (_ccGenerationGate) return IncrementWindowCore(domain, key, windowStart, windowLength, amount); }
+    private long IncrementWindowCore(string domain, string key, DateTimeOffset windowStart, TimeSpan windowLength, long amount)
     {
+        RejectGenericGenerationWrite(domain);
+        if (!IsCurrentCcState(domain, key)) return 0;
         if (amount <= 0) throw new ArgumentOutOfRangeException(nameof(amount));
         ValidateIdentity(domain, key);
         var windowKey = $"{key}|{windowStart.ToUnixTimeMilliseconds()}";
@@ -110,9 +133,11 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
             var components = current is not null && IsActive(current) && current.CounterComponents is not null
                 ? new Dictionary<string, long>(current.CounterComponents, StringComparer.Ordinal)
                 : new Dictionary<string, long>(StringComparer.Ordinal);
-            components[NodeId] = components.GetValueOrDefault(NodeId) + amount;
+            components[_counterComponentId] = checked(components.GetValueOrDefault(_counterComponentId) + amount);
             updated = new(domain, windowKey, NodeId, NextSequence(), DateTimeOffset.UtcNow,
                 windowStart.Add(windowLength), false, null, components);
+            ValidateCounterComponents(components);
+            ChargeEntry(updated);
             if (current is null ? _entries.TryAdd(identity, updated) : _entries.TryUpdate(identity, updated, current)) break;
         }
         Enqueue(updated);
@@ -128,7 +153,11 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
     }
 
     public bool TryClaim(string domain, string key, TimeSpan timeToLive)
+    { lock (_ccGenerationGate) return TryClaimCore(domain, key, timeToLive); }
+    private bool TryClaimCore(string domain, string key, TimeSpan timeToLive)
     {
+        RejectGenericGenerationWrite(domain);
+        if (!IsCurrentCcState(domain, key)) return false;
         ValidateIdentity(domain, key);
         var identity = Identity(domain, key);
         while (true)
@@ -138,6 +167,7 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
             var value = JsonSerializer.SerializeToElement(true);
             var claim = new RuntimeStateMutation(domain, key, NodeId, NextSequence(), DateTimeOffset.UtcNow,
                 DateTimeOffset.UtcNow.Add(timeToLive), false, value);
+            ChargeEntry(claim);
             if (current is null ? _entries.TryAdd(identity, claim) : _entries.TryUpdate(identity, claim, current))
             {
                 Enqueue(claim);
@@ -148,14 +178,24 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
     }
 
     public bool Merge(RuntimeStateMutation mutation, bool replicate = false)
+    { lock (_ccGenerationGate) return MergeCore(mutation, replicate); }
+    private bool MergeCore(RuntimeStateMutation mutation, bool replicate)
     {
+        mutation = SnapshotMutation(mutation);
         ValidateMutation(mutation);
+        if (mutation.Domain == CcPolicyGeneration.Domain)
+        {
+            CcReleaseAuthorization.Verify(mutation, _options.CurrentValue);
+            return MergeCcGeneration(mutation, replicate);
+        }
+        if (IsObsoleteCcState(mutation)) return false;
         var identity = Identity(mutation.Domain, mutation.Key);
         while (true)
         {
             _entries.TryGetValue(identity, out var current);
             var merged = MergeEntries(current, mutation);
             if (ReferenceEquals(merged, current)) return false;
+            ChargeEntry(merged);
             if (current is null ? _entries.TryAdd(identity, merged) : _entries.TryUpdate(identity, merged, current))
             {
                 InterlockedExtensions.Max(ref _sequence, mutation.Sequence);
@@ -189,42 +229,32 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
         return result;
     }
 
-    public RuntimeStateStatus GetStatus() => new(NodeId, _entries.Values.Count(IsActive),
+    public RuntimeStateStatus GetStatus()
+    { lock (_capacityGate) return new(NodeId, _entries.Values.Count(IsActive),
         Interlocked.Read(ref _sequence), Interlocked.Read(ref _persisted), Interlocked.Read(ref _dropped),
-        Volatile.Read(ref _queueDepth));
+        Volatile.Read(ref _queueDepth), _stateBytes, _memoryCharges.Count, _journalQueueBytes, _capacityError, _journalCapacityFailed); }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        Directory.CreateDirectory(StateDirectory);
-        await using var stream = new FileStream(JournalPath, FileMode.Append, FileAccess.Write, FileShare.Read,
-            64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        await using var writer = new StreamWriter(stream, new UTF8Encoding(false), 64 * 1024, leaveOpen: false);
-        try
+        try { await RunJournalAsync(stoppingToken); }
+        finally
         {
-            await foreach (var mutation in _journalQueue.Reader.ReadAllAsync(stoppingToken))
-                await PersistAsync(mutation, stoppingToken);
-        }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
-        while (_journalQueue.Reader.TryRead(out var pending)) await PersistAsync(pending, CancellationToken.None);
-        await writer.FlushAsync(CancellationToken.None);
-
-        async Task PersistAsync(RuntimeStateMutation mutation, CancellationToken cancellationToken)
-        {
-            Interlocked.Decrement(ref _queueDepth);
-            await writer.WriteLineAsync(JsonSerializer.Serialize(mutation, JsonOptions));
-            Interlocked.Increment(ref _persisted);
-            if (Volatile.Read(ref _queueDepth) == 0) await writer.FlushAsync(cancellationToken);
+            Interlocked.Exchange(ref _journalStopping, 1);
+            _journalQueue.Writer.TryComplete();
+            FailDurableWrites(new IOException("Runtime journal stopped before durable confirmation"));
         }
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        Interlocked.Exchange(ref _journalStopping, 1);
         _journalQueue.Writer.TryComplete();
         await base.StopAsync(cancellationToken);
     }
 
     private void Publish(RuntimeStateMutation mutation)
     {
+        ChargeEntry(mutation);
         _entries[Identity(mutation.Domain, mutation.Key)] = mutation;
         Enqueue(mutation);
         MutationPublished?.Invoke(mutation);
@@ -234,8 +264,10 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
     private void Enqueue(RuntimeStateMutation mutation)
     {
         CleanupExpiredPeriodically();
+        if (!ChargeJournalQueue(mutation)) { Interlocked.Increment(ref _dropped); return; }
         Interlocked.Increment(ref _queueDepth);
         if (_journalQueue.Writer.TryWrite(mutation)) return;
+        ReleaseJournalQueue(mutation);
         Interlocked.Decrement(ref _queueDepth);
         Interlocked.Increment(ref _dropped);
     }
@@ -248,27 +280,37 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
                 64 * 1024, FileOptions.SequentialScan);
-            if (stream.Length > _options.CurrentValue.MaxJournalBytes)
-            {
-                Logger.Warn("运行状态日志超过恢复上限，跳过恢复: {Path}, {Length}", path, stream.Length);
-                return;
-            }
+            if (stream.Length > _options.CurrentValue.MaxJournalDiskBytes)
+                throw new RuntimeStateCapacityException("journal-disk-recovery");
             using var reader = new StreamReader(stream, Encoding.UTF8, true, 64 * 1024);
             while (reader.ReadLine() is { } line)
             {
-                if (line.Length == 0 || Encoding.UTF8.GetByteCount(line) > _options.CurrentValue.MaxValueBytes * 2L) continue;
+                if (line.Length == 0) continue;
                 try
                 {
+                    if (ReadJournalSequence(line) is { } sequence)
+                    {
+                        InterlockedExtensions.Max(ref _sequence, sequence);
+                        continue;
+                    }
+                    if (RecoverBootstrapRecord(line)) continue;
+                    if (ReadSyncCheckpoint(line) is { } checkpoint)
+                    {
+                        RecoverSyncCheckpoint(checkpoint);
+                        continue;
+                    }
                     var mutation = JsonSerializer.Deserialize<RuntimeStateMutation>(line, JsonOptions);
                     if (mutation is not null) MergeRecovered(mutation);
                 }
-                catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+                catch (Exception ex) when (ex is JsonException or InvalidOperationException or ArgumentException)
                 {
+                    _syncJournalCorrupt = true;
                     Logger.Warn(ex, "忽略损坏的运行状态日志记录");
                 }
             }
         }
-        catch (IOException ex) { Logger.Warn(ex, "恢复运行状态日志失败: {Path}", path); }
+        catch (RuntimeStateCapacityException) { throw; }
+        catch (IOException ex) { _syncJournalCorrupt = true; Logger.Warn(ex, "恢复运行状态日志失败: {Path}", path); }
     }
 
     /// <summary>导出仍需反熵传播的值和删除墓碑；仅供复制后台服务使用。</summary>
@@ -278,16 +320,34 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
         return _entries.Values.Where(x => !x.ExpiresAt.HasValue || x.ExpiresAt > DateTimeOffset.UtcNow).ToArray();
     }
 
+    internal (IReadOnlyList<RuntimeStateMutation> Items, string? NextCursor) ExportPage(string? after, int pageSize)
+    {
+        if (pageSize is < 1 or > 1024) throw new ArgumentOutOfRangeException(nameof(pageSize));
+        CleanupExpired();
+        // Keep only the earliest page plus one lookahead, without sorting/materializing the entire store.
+        var candidates = new SortedDictionary<string, RuntimeStateMutation>(StringComparer.Ordinal);
+        foreach (var entry in _entries)
+        {
+            if (after is not null && string.CompareOrdinal(entry.Key, after) <= 0) continue;
+            candidates[entry.Key] = entry.Value;
+            if (candidates.Count > pageSize + 1) candidates.Remove(candidates.Last().Key);
+        }
+        var items = candidates.Take(pageSize).ToArray();
+        return (items.Select(x => x.Value).ToArray(), candidates.Count > pageSize ? items[^1].Key : null);
+    }
+
     private void CleanupExpiredPeriodically()
     {
         if ((Interlocked.Increment(ref _enqueueCount) & 1023) == 0) CleanupExpired();
     }
 
     private void CleanupExpired()
+    { lock (_ccGenerationGate) CleanupExpiredCore(); }
+    private void CleanupExpiredCore()
     {
         var now = DateTimeOffset.UtcNow;
         foreach (var entry in _entries.Where(x => x.Value.ExpiresAt.HasValue && x.Value.ExpiresAt <= now))
-            _entries.TryRemove(entry);
+            if (_entries.TryRemove(entry)) ForgetEntry(entry.Key);
     }
 
     private void MergeRecovered(RuntimeStateMutation mutation)
@@ -299,6 +359,7 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
             _entries.TryGetValue(identity, out var current);
             var merged = MergeEntries(current, mutation);
             if (ReferenceEquals(merged, current)) return;
+            ChargeEntry(merged);
             if (current is null ? _entries.TryAdd(identity, merged) : _entries.TryUpdate(identity, merged, current))
             {
                 InterlockedExtensions.Max(ref _sequence, mutation.Sequence);
@@ -310,6 +371,8 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
     private RuntimeStateMutation MergeEntries(RuntimeStateMutation? current, RuntimeStateMutation incoming)
     {
         if (current is null) return incoming;
+        if (incoming.Domain == CcPolicyGeneration.Domain)
+            return ReadGeneration(incoming).CompareTo(ReadGeneration(current)) > 0 ? incoming : current;
         if (current.CounterComponents is not null || incoming.CounterComponents is not null)
         {
             var components = new Dictionary<string, long>(current.CounterComponents ?? new Dictionary<string, long>(), StringComparer.Ordinal);
@@ -320,20 +383,36 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
             }
             if (!changed && CompareVersion(incoming, current) <= 0) return current;
             var latest = CompareVersion(incoming, current) > 0 ? incoming : current;
+            ValidateCounterComponents(components);
             return latest with { CounterComponents = components };
         }
         return CompareVersion(incoming, current) > 0 ? incoming : current;
     }
 
+    internal void ValidateForSync(RuntimeStateMutation mutation) => ValidateMutation(mutation);
+
     private void ValidateMutation(RuntimeStateMutation mutation)
     {
         ValidateIdentity(mutation.Domain, mutation.Key);
+        if (mutation.Domain == CcPolicyGeneration.Domain) ValidateGenerationMutation(mutation);
         if (mutation.Sequence < 0 || string.IsNullOrWhiteSpace(mutation.NodeId))
             throw new InvalidOperationException("运行状态版本无效。");
         if (mutation.Value is { } value && Encoding.UTF8.GetByteCount(value.GetRawText()) > _options.CurrentValue.MaxValueBytes)
             throw new InvalidOperationException("运行状态值超过限制。");
-        if (mutation.CounterComponents?.Any(x => x.Value < 0 || string.IsNullOrWhiteSpace(x.Key)) == true)
-            throw new InvalidOperationException("运行状态计数器分量无效。");
+        if (mutation.CounterComponents is { } components) ValidateCounterComponents(components);
+    }
+
+    private void ValidateCounterComponents(IReadOnlyDictionary<string, long> components)
+    {
+        if (components.Any(x => x.Value < 0 || string.IsNullOrWhiteSpace(x.Key) || x.Key.Length > 512) ||
+            JsonSerializer.SerializeToUtf8Bytes(components, JsonOptions).Length > _options.CurrentValue.MaxValueBytes)
+            throw new InvalidOperationException("Runtime counter components exceed the allowed size or contain invalid values.");
+        long total = 0;
+        foreach (var value in components.Values)
+        {
+            if (value > long.MaxValue - total) throw new InvalidOperationException("Runtime counter total exceeds Int64 capacity.");
+            total += value;
+        }
     }
 
     private static int CompareVersion(RuntimeStateMutation left, RuntimeStateMutation right)
@@ -342,11 +421,21 @@ public sealed class RuntimeStateStore : BackgroundService, IRuntimeStateStore
         return sequence != 0 ? sequence : string.CompareOrdinal(left.NodeId, right.NodeId);
     }
 
-    private static bool IsActive(RuntimeStateMutation mutation)
-        => !mutation.Deleted && (!mutation.ExpiresAt.HasValue || mutation.ExpiresAt > DateTimeOffset.UtcNow);
+    private static RuntimeStateMutation SnapshotMutation(RuntimeStateMutation mutation) => mutation with
+    {
+        Value = mutation.Value?.Clone(),
+        CounterComponents = mutation.CounterComponents is null ? null
+            : new System.Collections.ObjectModel.ReadOnlyDictionary<string, long>(new Dictionary<string, long>(mutation.CounterComponents, StringComparer.Ordinal))
+    };
+
+    private bool IsActive(RuntimeStateMutation mutation)
+        => !mutation.Deleted && (!mutation.ExpiresAt.HasValue || mutation.ExpiresAt > DateTimeOffset.UtcNow)
+            && IsCurrentCcState(mutation.Domain, mutation.Key);
     private static string Identity(string domain, string key) => domain + "\n" + key;
     private static void ValidateIdentity(string domain, string key)
     {
+        if (domain is SyncCheckpointDomain or BootstrapSnapshotDomain or BootstrapFenceDomain)
+            throw new ArgumentException("Runtime sync checkpoint domain is reserved", nameof(domain));
         if (string.IsNullOrWhiteSpace(domain) || domain.Length > 128 || domain.Contains('\n'))
             throw new ArgumentException("状态域无效。", nameof(domain));
         if (string.IsNullOrWhiteSpace(key) || key.Length > 1024 || key.Contains('\n'))

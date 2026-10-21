@@ -111,8 +111,10 @@ public class LyConfigSource : IConfigurationSource
 /// <summary>
 /// LyConfig 配置提供程序
 /// </summary>
-public class LyConfigProvider : ConfigurationProvider
+public class LyConfigProvider : ConfigurationProvider, LyWaf.Services.Configuration.IRestorableConfigurationProvider
 {
+    public void RestoreValues(IReadOnlyDictionary<string, string?> values) =>
+        Data = new Dictionary<string, string?>(values, StringComparer.OrdinalIgnoreCase);
     private readonly LyConfigSource _source;
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
 
@@ -258,8 +260,10 @@ public class DraftAwareYamlSource : IConfigurationSource
 /// <summary>
 /// 支持草稿的 YAML 配置提供程序
 /// </summary>
-public class DraftAwareYamlProvider : ConfigurationProvider
+public class DraftAwareYamlProvider : ConfigurationProvider, LyWaf.Services.Configuration.IRestorableConfigurationProvider
 {
+    public void RestoreValues(IReadOnlyDictionary<string, string?> values) =>
+        Data = new Dictionary<string, string?>(values, StringComparer.OrdinalIgnoreCase);
     private readonly DraftAwareYamlSource _source;
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
 
@@ -464,8 +468,10 @@ public class LbPatchSource(string? filePath = null, bool validateSource = true) 
 ///   }
 /// }
 /// </summary>
-public class LbPatchProvider(string? filePath = null, bool validateSource = true) : ConfigurationProvider
+public class LbPatchProvider(string? filePath = null, bool validateSource = true) : ConfigurationProvider, LyWaf.Services.Configuration.IRestorableConfigurationProvider
 {
+    public void RestoreValues(IReadOnlyDictionary<string, string?> values) =>
+        Data = new Dictionary<string, string?>(values, StringComparer.OrdinalIgnoreCase);
     private static readonly Logger _logger = LogManager.GetCurrentClassLogger();
 
     public override void Load()

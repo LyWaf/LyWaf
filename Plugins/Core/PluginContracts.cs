@@ -12,6 +12,7 @@ public interface IPluginContext
     IPluginTaskCoordinator Tasks { get; }
     IPluginStorage Storage { get; }
     IPluginNetworkClientFactory Network => throw new NotSupportedException("插件上下文未提供网络客户端。");
+    IPluginNodeMessageClient NodeMessages => throw new NotSupportedException("Host node messaging is unavailable.");
     T GetPluginConfig<T>(string? sectionName = null) where T : class, new();
     ILyWafPlugin? GetPlugin(string pluginId);
     IReadOnlyList<ILyWafPlugin> GetAllPlugins();
@@ -46,6 +47,28 @@ public interface IPluginStorage
 public interface IPluginNetworkClientFactory
 {
     HttpClient CreateClient();
+}
+
+/// <summary>Exact schema versions, not a dynamic schema download or executable-code contract.</summary>
+public sealed record PluginNodeMessageCapability(string MessageType, int SchemaVersion,
+    IReadOnlyList<string> TargetGroups, bool CanSend = false, bool CanReceive = false);
+
+/// <summary>Bound to the current plugin by the host; no destination URI, peer credentials, or arbitrary plugin identity.</summary>
+public interface IPluginNodeMessageClient
+{
+    Task<IReadOnlyList<PluginNodeDelivery>> SendAsync(string messageType, int schemaVersion, string targetGroup,
+        System.Text.Json.JsonElement payload, string messageId, CancellationToken cancellationToken);
+}
+
+public sealed record PluginNodeDelivery(string NodeId, string MessageId, bool Ack, string? ErrorCode = null);
+public sealed record PluginNodeReceivedMessage(string MessageId, string SenderNodeId, string MessageType,
+    int SchemaVersion, string TargetGroup, System.Text.Json.JsonElement Payload);
+public sealed record PluginNodeHandlerResult(bool Ack, string? ErrorCode = null);
+
+/// <summary>Handle only declared, host-authorized messages. Exceptions leave an unknown outcome, never automatic replay.</summary>
+public interface IPluginNodeMessageHandler
+{
+    Task<PluginNodeHandlerResult> HandleNodeMessageAsync(PluginNodeReceivedMessage message, CancellationToken cancellationToken);
 }
 
 /// <summary>可选通知接收能力，宿主仅调用处于运行状态并已授权网络权限的插件。</summary>

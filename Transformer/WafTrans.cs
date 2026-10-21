@@ -250,6 +250,15 @@ namespace LyWaf.Transformer
                 }
             });
 
+            transformBuildContext.AddRequestTransform(transformContext =>
+            {
+                var ownership = transformContext.HttpContext.RequestServices.GetService<LyWaf.Services.Statistic.CcIngressOwnership>();
+                transformContext.ProxyRequest.Headers.Remove(LyWaf.Services.Statistic.CcIngressOwnership.Header);
+                ownership?.Forward(transformContext.HttpContext, transformContext.ProxyRequest,
+                    RequestUtilities.MakeDestinationAddress(transformContext.DestinationPrefix, transformContext.Path, transformContext.Query.QueryString));
+                return ValueTask.CompletedTask;
+            });
+
             transformBuildContext.AddResponseTransform(async transformContext =>
             {
                 // 记录后端响应时间

@@ -38,6 +38,7 @@ public static class PluginExtensions
 
         services.AddSingleton(manager);
         services.AddSingleton<IPluginManager>(manager);
+        LyWaf.Services.NodeCommunication.PluginNodeMessageRegistration.AddPluginNodeMessaging(services, configuration);
         services.AddSingleton<PluginScopedConfiguration>(provider => new(configuration,
             manager.GetAllPlugins().Select(p => p.Metadata), provider.GetRequiredService<ILogger<PluginScopedConfiguration>>()));
         services.AddSingleton<IPluginRequestConfiguration>(provider => provider.GetRequiredService<PluginScopedConfiguration>());

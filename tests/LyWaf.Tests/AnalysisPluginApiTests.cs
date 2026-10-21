@@ -65,6 +65,28 @@ public sealed class AnalysisPluginApiTests
         Assert.Contains(host.Audit.Actions, action => action.Contains("插件 API"));
     }
 
+    [Fact]
+    public async Task ManagedMembershipRoundTripsAndCannotDisableCoverageOrMixManualMembers()
+    {
+        await using var host = await Host.Start();
+        var added = await host.Post("cc/advanced/add", new { name = "managed", useManagedMembership = true });
+        var id = added.GetProperty("ruleId").GetString()!;
+        var detail = (await host.Get("cc/advanced/" + id)).GetProperty("rule");
+        Assert.True(detail.GetProperty("useManagedMembership").GetBoolean());
+        Assert.True(detail.GetProperty("requireCompleteCoverage").GetBoolean());
+        Assert.Empty(detail.GetProperty("expectedNodes").EnumerateArray());
+        await host.Post("cc/advanced/update", new { id, threshold = 321 });
+        Assert.True((await host.Get("cc/advanced" )).GetProperty("data")[0].GetProperty("useManagedMembership").GetBoolean());
+        using var invalid = await host.Client.PostAsJsonAsync("cc/advanced/update", new { id, requireCompleteCoverage = false });
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        using var mixed = await host.Client.PostAsJsonAsync("cc/advanced/update", new { id, expectedNodes = new[] { "a" } });
+        Assert.Equal(HttpStatusCode.BadRequest, mixed.StatusCode);
+        Assert.True(host.Statistic.GetAdvancedCcRules().Single().RequireCompleteCoverage);
+        await host.Post("cc/advanced/update", new { id, useManagedMembership = false, expectedNodes = new[] { "a" } });
+        Assert.False(host.Statistic.GetAdvancedCcRules().Single().UseManagedMembership);
+        Assert.Equal(new[] { "a" }, host.Statistic.GetAdvancedCcRules().Single().ExpectedNodes);
+    }
+
     [Theory]
     [InlineData("cc/advanced/add", "{\"name\":\"bad\",\"threshold\":-1}")]
     [InlineData("cc/advanced/add", "{\"name\":\"bad\",\"type\":\"invalid\"}")]

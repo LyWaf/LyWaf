@@ -179,7 +179,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
                     RecordWafHit(context, clientIp, reason);
                     if (protectService.GetOptions().SemanticDetectionAction.Equals("Reject", StringComparison.OrdinalIgnoreCase))
                     {
-                        _ccRuleChecker.RecordAttackEvent(clientIp);
+                        _ccRuleChecker.RecordAttackEvent(context, clientIp);
                         SetInterceptLogMark(context, reason);
                         EnableCapture(context);
                         await WafUtil.WriteFbOutput(context, new Dictionary<string, string?> { ["reason"] = reason },
@@ -193,7 +193,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             if ((reason = await CheckArgsAttck(context)) != null)
             {
                 // WAF Args 攻击检测，标记为攻击
-                _ccRuleChecker.RecordAttackEvent(clientIp); // 记录攻击事件用于 CC 高频攻击检测
+                _ccRuleChecker.RecordAttackEvent(context, clientIp); // 记录攻击事件用于 CC 高频攻击检测
                 RecordWafHit(context, clientIp, reason);
                 SetInterceptLogMark(context, reason);
                 EnableCapture(context);
@@ -204,7 +204,7 @@ public class WafControlMiddleware(RequestDelegate next, IStatisticService statis
             if ((reason = await CheckPostAttck(context)) != null)
             {
                 // WAF Post 攻击检测，标记为攻击
-                _ccRuleChecker.RecordAttackEvent(clientIp); // 记录攻击事件用于 CC 高频攻击检测
+                _ccRuleChecker.RecordAttackEvent(context, clientIp); // 记录攻击事件用于 CC 高频攻击检测
                 RecordWafHit(context, clientIp, reason);
                 SetInterceptLogMark(context, reason);
                 EnableCapture(context);

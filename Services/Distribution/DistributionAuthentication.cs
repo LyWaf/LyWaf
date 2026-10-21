@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using LyWaf.Services.NodeCommunication;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -7,17 +7,25 @@ using Microsoft.Extensions.Options;
 namespace LyWaf.Services.Distribution;
 
 /// <summary>节点分发请求的 HMAC 验证器，校验请求体摘要、时间窗并拒绝 nonce 重放。</summary>
-public sealed class DistributionAuthentication(IOptionsMonitor<DistributionOptions> options)
+public sealed class DistributionAuthentication(IOptionsMonitor<DistributionOptions> options,
+    IOptionsMonitor<NodeCommunicationOptions>? communication = null)
 {
-    private readonly ConcurrentDictionary<string, long> _nonces = new(StringComparer.Ordinal);
 
     public async Task<(T? Value, string? Error)> ReadAndVerifyAsync<T>(
         HttpContext context, string operation, CancellationToken cancellationToken)
     {
         var current = options.CurrentValue;
+        if (communication?.CurrentValue is { Enabled: true, AllowLegacyProtocol: false })
+            return (default, "Legacy node protocol is disabled");
+        // Legacy signatures have no sender identity, so they cannot enforce per-peer admission.
+        if (communication?.CurrentValue is { Enabled: true } protocol
+            && protocol.Peers.Values.Any(peer => !peer.Enabled || peer.AdmissionState != "Active"))
+            return (default, "Legacy node protocol cannot enforce restricted peer admission");
         if (!current.Enabled || !current.Role.Equals("Node", StringComparison.OrdinalIgnoreCase))
             return (default, "当前实例不是分发目标节点");
         if (string.IsNullOrWhiteSpace(current.SharedSecret)) return (default, "节点未配置 SharedSecret");
+        foreach (var header in new[] { "X-LyWaf-Timestamp", "X-LyWaf-Nonce", "X-LyWaf-Signature" })
+            if (context.Request.Headers[header].Count != 1) return (default, "签名头必须提供且只能出现一次");
         if (!long.TryParse(context.Request.Headers["X-LyWaf-Timestamp"], out var timestamp))
             return (default, "缺少有效时间戳");
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -44,13 +52,10 @@ public sealed class DistributionAuthentication(IOptionsMonitor<DistributionOptio
         if (!CryptographicOperations.FixedTimeEquals(
             Encoding.ASCII.GetBytes(expected), Encoding.ASCII.GetBytes(signature.ToLowerInvariant())))
             return (default, "签名无效");
-        lock (_nonces)
-        {
-            foreach (var stale in _nonces.Where(x => now - x.Value > Math.Clamp(current.AllowedClockSkewSeconds, 5, 300) * 2))
-                _nonces.TryRemove(stale.Key, out _);
-            if (_nonces.Count >= 10000) return (default, "节点认证请求过于频繁");
-            if (!_nonces.TryAdd(nonce, timestamp)) return (default, "nonce 已使用");
-        }
+        var claim = await PersistentReplayGuard.ClaimAsync(Path.Combine(current.StateDirectory, "replay"), nonce, now, cancellationToken);
+        if (claim == ReplayClaim.Replay) return (default, "nonce 已使用");
+        if (claim == ReplayClaim.CapacityExceeded) return (default, "节点认证请求过于频繁");
+        if (claim != ReplayClaim.Accepted) return (default, "节点防重放存储不可用");
         try { return (JsonSerializer.Deserialize<T>(body, JsonOptions), null); }
         catch (JsonException ex) { return (default, $"JSON 无效: {ex.Message}"); }
     }

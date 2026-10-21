@@ -27,7 +27,7 @@ public class DataRetentionService : BackgroundService
         if (!_db.IsEnabled) return;
 
         // 启动后等待一段时间再开始清理
-        await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+        if (!await LyWaf.Services.Lifecycle.ShutdownWait.DelayAsync(TimeSpan.FromMinutes(5), stoppingToken)) return;
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -43,14 +43,7 @@ public class DataRetentionService : BackgroundService
             }
 
             // 每天执行一次
-            try
-            {
-                await Task.Delay(TimeSpan.FromHours(24), stoppingToken);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+            await LyWaf.Services.Lifecycle.ShutdownWait.DelayAsync(TimeSpan.FromHours(24), stoppingToken);
         }
     }
 

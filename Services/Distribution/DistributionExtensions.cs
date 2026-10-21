@@ -1,6 +1,7 @@
 using LyWaf.Services.AuditLog;
 using LyWaf.Services.ManagementApi;
 using LyWaf.Services.Auth;
+using LyWaf.Services.NodeCommunication;
 
 namespace LyWaf.Services.Distribution;
 
@@ -9,19 +10,93 @@ public static class DistributionExtensions
 {
     public static IServiceCollection AddLyWafDistribution(this IServiceCollection services, IConfiguration configuration)
     {
-        services.Configure<DistributionOptions>(configuration.GetSection("Distribution"));
-        services.AddHttpClient("distribution-node");
+        LyWaf.Services.Configuration.ConfigurationReloadRecoveryExtensions.AddConfigurationReloadRecovery(services);
+        services.AddOptions<DistributionOptions>().Bind(configuration.GetSection("Distribution"))
+            .Validate(config => !config.Enabled || (config.HeartbeatIntervalSeconds is >= 1 and <= 300
+                && config.SuspectFailureThreshold is >= 1 and <= 100
+                && config.OfflineTimeoutSeconds is >= 10 and <= 3600
+                && config.OfflineTimeoutSeconds >= config.HeartbeatIntervalSeconds),
+                "Invalid distribution heartbeat or lifecycle thresholds").ValidateOnStart();
+        services.AddOptions<NodeCommunicationOptions>().Bind(configuration.GetSection("NodeCommunication"))
+            .Validate(config => config.Mode is "" or "Standalone" or "Controller" or "Node"
+                && (config.Mode is not ("Controller" or "Node") || config.Role == config.Mode)
+                && (config.Mode != "Standalone" || !config.Enabled), "Invalid node communication mode or role")
+            .PostConfigure(config =>
+            {
+                if (config.Enabled && NodeMessageAuthentication.ValidId(config.ClusterId) && string.IsNullOrEmpty(config.NodeId))
+                    config.NodeId = NodeIdentityService.Resolve(config).NodeId;
+            })
+            .Validate(config => !config.Enabled ||
+                (NodeMessageAuthentication.ValidId(config.ClusterId) && NodeMessageAuthentication.ValidId(config.NodeId)
+                 && config.Role is "Controller" or "Node"
+                 && config.AllowedClockSkewSeconds is >= 5 and <= 300
+                 && config.MaxMessageBytes is >= 1024 and <= 16 * 1024 * 1024
+                 && config.Peers.All(pair => NodeMessageAuthentication.ValidId(pair.Key) && pair.Key != config.NodeId
+                     && pair.Value.Role is "Controller" or "Node"
+                     && NodeAdmissionPolicy.IsValid(pair.Value.AdmissionState)
+                     && pair.Value.AllowedOperations is not null
+                     && pair.Value.AllowedOperations.All(NodeProtocolOperations.IsSupported)
+                     && pair.Value.Keys.Count > 0
+                     && pair.Value.Keys.All(key => NodeMessageAuthentication.ValidId(key.Key) && !string.IsNullOrEmpty(key.Value)
+                         && System.Text.Encoding.UTF8.GetByteCount(key.Value) >= 32))),
+                "Invalid NodeCommunication identity, bounds or peer keys")
+            .Validate(config => !config.Enabled || NodeAdmissionPolicy.HasSingleConfigurationWriter(config),
+                "Only one admitted configuration writer is supported per node").ValidateOnStart();
+        services.AddSingleton<NodeMessageAuthentication>();
+        services.AddSingleton<NodeSocketConnections>();
+        services.AddSingleton<NodeSocketProtocol>();
+        services.AddSingleton<NodeIdentityService>();
+        services.AddNodeHandshakeServices();
+        services.AddHostedService(sp => sp.GetRequiredService<NodeIdentityService>());
+        services.AddHostedService<NodeSocketConnector>();
+        services.AddOptions<DistributionOptions>().PostConfigure<Microsoft.Extensions.Options.IOptionsMonitor<NodeCommunicationOptions>>((config, communication) =>
+        {
+            if (!communication.CurrentValue.Enabled) return;
+            var identity = communication.CurrentValue.NodeId;
+            if (string.IsNullOrEmpty(configuration["Distribution:NodeId"])) config.NodeId = identity;
+            else if (config.Enabled && config.NodeId != identity)
+                throw new InvalidOperationException("Distribution NodeId must match NodeCommunication NodeId");
+        });
+        services.AddOptions<LyWaf.Services.RuntimeState.RuntimeStateOptions>().PostConfigure<Microsoft.Extensions.Options.IOptionsMonitor<NodeCommunicationOptions>>((config, communication) =>
+        {
+            if (!communication.CurrentValue.Enabled) return;
+            var identity = communication.CurrentValue.NodeId;
+            if (string.IsNullOrEmpty(configuration["RuntimeState:NodeId"])) config.NodeId = identity;
+            else if (config.Enabled && config.NodeId != identity)
+                throw new InvalidOperationException("RuntimeState NodeId must match NodeCommunication NodeId");
+        });
+        services.AddSingleton<NodeCommandInbox>();
+        services.AddHttpClient("distribution-node").ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
         services.AddSingleton<DistributionAuthentication>();
         services.AddSingleton<DistributionNodeService>();
+        services.AddHostedService<NodeConfigurationMaintenanceService>();
         services.AddSingleton<IDistributionNodeClient, DistributionNodeClient>();
+        services.AddHostedService<NodeHandshakeMonitor>();
+        services.AddSingleton<NodeReconciliationService>();
+        services.AddHostedService<NodeOutboxRecoveryService>();
         services.AddSingleton<DistributionControllerService>();
+        services.AddHostedService<DistributionOutboxConfirmationService>();
+        services.AddSingleton<NodeTelemetryCollector>();
+        services.AddSingleton(LyWaf.Services.Telemetry.NodeCommunicationTelemetry.Shared);
+        services.AddHostedService<LyWaf.Services.Telemetry.NodeCommunicationHttpObserver>();
+        services.AddTransient<Microsoft.AspNetCore.Hosting.IStartupFilter, LyWaf.Services.Telemetry.NodeCommunicationObservationStartup>();
+        services.AddSingleton<NodeDashboardDiagnostics>();
+        services.AddSingleton<NodeLogicalBanTelemetry>();
+        services.AddHostedService(sp => sp.GetRequiredService<NodeLogicalBanTelemetry>());
         services.AddSingleton<NodeDashboardAgent>();
         services.AddSingleton<MultiNodeDashboardService>();
+        services.AddHostedService(sp => sp.GetRequiredService<MultiNodeDashboardService>());
         return services;
     }
 
     public static WebApplication MapLyWafDistributionApi(this WebApplication app, int controlPort)
     {
+        if (app.Services.GetService<IServiceProviderIsService>()?.IsService(typeof(NodeSetupStore)) == true)
+            app.MapNodeSetup(controlPort);
+        app.MapNodeCommunication(controlPort);
+        app.MapNodeSocket(controlPort);
+        app.MapNodeIdentityConflictManagement(controlPort);
+        app.MapNodeReconciliation(controlPort);
         app.MapPost("/api/distribution/agent/prepare", async (HttpContext context, DistributionAuthentication auth, DistributionNodeService node) =>
         {
             var (request, error) = await auth.ReadAndVerifyAsync<PrepareConfigurationRequest>(context, "prepare", context.RequestAborted);

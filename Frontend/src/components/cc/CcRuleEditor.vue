@@ -75,6 +75,11 @@ const groups = ref<Array<{ operator: 'And' | 'Or'; conditions: FormCondition[] }
 const groupOperator = ref<'And' | 'Or'>('Or')
 const relationshipClass = (op: string) => op === 'And' ? 'border-blue-400/50 bg-blue-500 text-white hover:bg-blue-400' : 'border-amber-400/50 bg-amber-500 text-gray-950 hover:bg-amber-400'
 const form = ref({
+  scope: 'SiteGroup' as 'SiteGroup' | 'Node' | 'Cluster',
+  useManagedMembership: false,
+  expectedNodes: '',
+  requireCompleteCoverage: false,
+  protectionGroup: '',
   name: '',
   enabled: true,
   type: 'FrequentAccess' as CcRuleType,
@@ -159,6 +164,11 @@ const resetForm = () => {
   groups.value = []
   groupOperator.value = 'Or'
   form.value = {
+    scope: 'SiteGroup',
+    useManagedMembership: false,
+    expectedNodes: '',
+    requireCompleteCoverage: false,
+    protectionGroup: '',
     name: '',
     enabled: true,
     type: 'FrequentAccess',
@@ -178,6 +188,11 @@ watch(() => props.editRule, (rule) => {
     groups.value = rule.conditionGroups?.map(g => ({ operator: g.operator, conditions: conditionsToForm(g.conditions) })) ||
       (rule.conditions?.length ? [{ operator: 'And', conditions: conditionsToForm(rule.conditions) }] : [])
     form.value = {
+      scope: rule.scope || 'SiteGroup',
+      useManagedMembership: rule.useManagedMembership || false,
+      expectedNodes: (rule.expectedNodes || []).join(', '),
+      requireCompleteCoverage: rule.requireCompleteCoverage || false,
+      protectionGroup: rule.protectionGroup || '',
       name: rule.name,
       enabled: rule.enabled,
       type: rule.type,
@@ -244,6 +259,12 @@ const handleSubmit = async () => {
 
   try {
     const request: CreateAdvancedCcRuleRequest = {
+      scope: form.value.scope,
+      useManagedMembership: form.value.scope !== 'Node' && form.value.useManagedMembership,
+      expectedNodes: form.value.scope === 'Node' || form.value.useManagedMembership ? []
+        : form.value.expectedNodes.split(',').map(value => value.trim()).filter(Boolean),
+      requireCompleteCoverage: form.value.scope !== 'Node' && (form.value.useManagedMembership || form.value.requireCompleteCoverage),
+      protectionGroup: form.value.scope === 'SiteGroup' ? form.value.protectionGroup.trim() : '',
       name: form.value.name,
       enabled: form.value.enabled,
       type: form.value.type,
@@ -309,6 +330,34 @@ const handleClose = () => {
               </select>
               <p class="text-xs text-gray-600 mt-1">{{ ruleTypeDescriptions[form.type] }}</p>
             </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label class="block text-sm text-gray-400">{{ t('cc.scope') }}
+              <select v-model="form.scope" class="input w-full mt-1" :aria-label="t('cc.scope')">
+                <option value="SiteGroup">{{ t('cc.scope.siteGroup') }}</option>
+                <option value="Node">{{ t('cc.scope.node') }}</option>
+                <option value="Cluster">{{ t('cc.scope.cluster') }}</option>
+              </select>
+            </label>
+            <label v-if="form.scope !== 'Node'" class="block text-sm text-gray-400">{{ t('cc.membership') }}
+              <select v-model="form.useManagedMembership" class="input w-full mt-1" :aria-label="t('cc.membership')">
+                <option :value="false">{{ t('cc.membership.explicit') }}</option>
+                <option :value="true">{{ t('cc.membership.managed') }}</option>
+              </select>
+            </label>
+            <label v-if="form.scope !== 'Node' && !form.useManagedMembership" class="block text-sm text-gray-400">{{ t('cc.expectedNodes') }}
+              <input v-model="form.expectedNodes" type="text" maxlength="33024" class="input w-full mt-1" />
+            </label>
+            <label v-if="form.scope !== 'Node'" class="flex items-center gap-2 text-sm text-gray-400">
+              <input type="checkbox" :disabled="form.useManagedMembership" :checked="form.useManagedMembership || form.requireCompleteCoverage"
+                @change="form.requireCompleteCoverage = ($event.target as HTMLInputElement).checked" />
+              {{ t('cc.requireCompleteCoverage') }}
+            </label>
+          </div>
+          <div v-if="form.scope === 'SiteGroup'">
+            <label for="cc-protection-group" class="block text-sm text-gray-400 mb-1">{{ t('cc.protectionGroup') }}</label>
+            <input id="cc-protection-group" v-model="form.protectionGroup" type="text" maxlength="128" class="input w-full" />
           </div>
 
           <!-- 匹配条件（WAF 风格） -->

@@ -40,10 +40,11 @@ public sealed record ConfigDiffLine(string Kind, int? OldLine, int? NewLine, str
 /// </summary>
 public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccessor)
 {
+    internal Action<string>? MainFileReplacedBeforeIndex { get; set; }
     private const int MaxVersions = 100;
     private const int MaxDiffLines = 5000;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private static readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>
     /// 获取全部配置版本，按创建时间倒序返回。
@@ -71,6 +72,29 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
     /// </summary>
     public Task<ConfigVersionInfo> WriteMainAsync(string path, string content, string action, CancellationToken cancellationToken = default)
         => WriteAsync(Path.GetFullPath(path), content, "main", action, ValidateMainConfig, cancellationToken);
+
+    public Task<ConfigVersionInfo> WriteMainIfUnchangedAsync(string path, string content, string action,
+        string expectedFileHash, CancellationToken cancellationToken = default, string? retentionOwner = null)
+        => WriteAsync(Path.GetFullPath(path), content, "main", action, ValidateMainConfig, cancellationToken,
+            expectedFileHash: expectedFileHash, retentionOwner: retentionOwner);
+
+    /// <summary>Keep compensation evidence independently of the rolling history limit.</summary>
+    public async Task RetainVersionsAsync(string owner, IReadOnlyList<string> ids, CancellationToken token = default)
+    {
+        await _gate.WaitAsync(token);
+        try
+        {
+            var index = await ReadIndexAsync(token);
+            foreach (var id in ids)
+            {
+                var version = index.FirstOrDefault(v => v.Id == id) ?? throw new InvalidDataException("Compensation version is missing");
+                if (!Hash(await ReadVersionContentAsync(version, token)).Equals(version.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Compensation version digest mismatch");
+            }
+            await PinVersionsAsync(owner, ids, token);
+        }
+        finally { _gate.Release(); }
+    }
 
     /// <summary>仅解析并验证主配置候选，不创建版本或修改磁盘文件。</summary>
     public void ValidateMainCandidate(string path, string content) => ValidateMainConfig(Path.GetFullPath(path), content);
@@ -141,27 +165,45 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
         string action,
         Action<string, string> validator,
         CancellationToken cancellationToken,
-        string? actor = null)
+        string? actor = null,
+        string? expectedFileHash = null,
+        string? retentionOwner = null)
     {
+        ConfigurationStorageBudget.CheckContent(content);
         validator(targetPath, content);
         await _gate.WaitAsync(cancellationToken);
         var targetExisted = false;
         string? originalContent = null;
         string? archivedContentPath = null;
+        var archivePinned = false;
         try
         {
+            // Compare under the same gate used by every versioned writer, before creating archives or replacing files.
+            if (expectedFileHash is not null)
+            {
+                await using var baseline = File.OpenRead(targetPath);
+                var actualHash = Convert.ToHexString(await SHA256.HashDataAsync(baseline, cancellationToken));
+                if (!actualHash.Equals(expectedFileHash, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Configuration baseline changed; create a new deployment.");
+            }
             targetExisted = File.Exists(targetPath);
             originalContent = targetExisted
                 ? await File.ReadAllTextAsync(targetPath, cancellationToken)
                 : null;
+            if (originalContent is not null) ConfigurationStorageBudget.CheckContent(originalContent);
+            // Reserve worst-case archives, replacement index and pin manifest before any main-file effect.
+            ConfigurationStorageBudget.Reserve(HistoryDirectory(),
+                Encoding.UTF8.GetByteCount(content) + Encoding.UTF8.GetByteCount(originalContent ?? "")
+                + ConfigurationStorageBudget.IndexBytes + 1024 * 1024, 4,
+                ConfigurationStorageBudget.HistoryBytes, 20000);
             var versions = await ReadIndexAsync(cancellationToken);
             var previous = versions.Where(x => PathEquals(x.TargetPath, targetPath))
                 .OrderByDescending(x => x.CreatedAt).FirstOrDefault();
-            if (previous == null && File.Exists(targetPath))
+            if (originalContent is not null && (previous is null ||
+                !previous.Sha256.Equals(Hash(originalContent), StringComparison.OrdinalIgnoreCase)))
             {
-                var existing = await File.ReadAllTextAsync(targetPath, cancellationToken);
                 previous = await CreateArchivedVersionAsync(
-                    versions, targetPath, existing, kind, "baseline", null, cancellationToken);
+                    versions, targetPath, originalContent, kind, "baseline", previous?.Id, cancellationToken);
             }
             var id = $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}";
             var info = new ConfigVersionInfo(id, DateTimeOffset.UtcNow, actor ?? CurrentOperator(), kind,
@@ -170,9 +212,18 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
             var historyDirectory = HistoryDirectory();
             Directory.CreateDirectory(historyDirectory);
             archivedContentPath = Path.Combine(historyDirectory, info.ContentFile);
-            await AtomicWriteAsync(archivedContentPath, content, cancellationToken);
+            await WriteHistoryAsync(archivedContentPath, content, cancellationToken);
             versions.Add(info);
+            if (Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(versions, JsonOptions)) > ConfigurationStorageBudget.IndexBytes)
+                throw new IOException("Configuration history index exceeds capacity");
+            // Pin both sides before the first configuration effect, including a newly created baseline.
+            if (retentionOwner is not null)
+            {
+                await PinVersionsAsync(retentionOwner, previous is null ? [id] : [id, previous.Id], cancellationToken);
+                archivePinned = true;
+            }
             await AtomicWriteAsync(targetPath, content, cancellationToken);
+            MainFileReplacedBeforeIndex?.Invoke(action);
             try
             {
                 await PruneAndWriteIndexAsync(versions, cancellationToken);
@@ -187,7 +238,7 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
         }
         catch
         {
-            if (archivedContentPath is not null && File.Exists(archivedContentPath))
+            if (!archivePinned && archivedContentPath is not null && File.Exists(archivedContentPath))
                 File.Delete(archivedContentPath);
             throw;
         }
@@ -207,7 +258,7 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
         var info = new ConfigVersionInfo(id, DateTimeOffset.UtcNow, CurrentOperator(), kind,
             Path.GetFullPath(targetPath), id + ".config", Hash(content), previousVersionId, action);
         Directory.CreateDirectory(HistoryDirectory());
-        await AtomicWriteAsync(Path.Combine(HistoryDirectory(), info.ContentFile), content, cancellationToken);
+        await WriteHistoryAsync(Path.Combine(HistoryDirectory(), info.ContentFile), content, cancellationToken);
         versions.Add(info);
         return info;
     }
@@ -236,15 +287,51 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
 
     private async Task PruneAndWriteIndexAsync(List<ConfigVersionInfo> versions, CancellationToken cancellationToken)
     {
+        var pinned = (await ReadPinsAsync(cancellationToken)).Values.SelectMany(ids => ids).ToHashSet(StringComparer.Ordinal);
         var ordered = versions.OrderByDescending(x => x.CreatedAt).ToList();
-        var removedVersions = ordered.Skip(MaxVersions).ToArray();
-        var retained = ordered.Take(MaxVersions).OrderBy(x => x.CreatedAt).ToList();
-        await AtomicWriteAsync(IndexPath(), JsonSerializer.Serialize(retained, JsonOptions), cancellationToken);
+        var removedVersions = ordered.Skip(MaxVersions).Where(v => !pinned.Contains(v.Id)).ToArray();
+        var retained = ordered.Take(MaxVersions).Concat(ordered.Skip(MaxVersions).Where(v => pinned.Contains(v.Id)))
+            .OrderBy(x => x.CreatedAt).ToList();
+        await WriteHistoryAsync(IndexPath(), JsonSerializer.Serialize(retained, JsonOptions), cancellationToken);
         foreach (var removed in removedVersions)
         {
             var path = Path.Combine(HistoryDirectory(), removed.ContentFile);
             if (File.Exists(path)) File.Delete(path);
         }
+    }
+
+    private async Task<Dictionary<string, string[]>> ReadPinsAsync(CancellationToken token)
+    {
+        var path = Path.Combine(HistoryDirectory(), "retention-pins.json");
+        if (!File.Exists(path)) return new(StringComparer.Ordinal);
+        await using var input = File.OpenRead(path);
+        if (input.Length > 1024 * 1024) throw new InvalidDataException("Version retention index exceeds capacity");
+        var pins = await JsonSerializer.DeserializeAsync<Dictionary<string, string[]>>(input, cancellationToken: token)
+            ?? throw new InvalidDataException("Invalid version retention index");
+        if (pins.Count > 10000 || pins.Any(p => string.IsNullOrWhiteSpace(p.Key) || p.Key.Length > 256
+            || p.Value is null || p.Value.Length is < 1 or > 16
+            || p.Value.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > 128)))
+            throw new InvalidDataException("Invalid version retention index");
+        return pins;
+    }
+
+    private async Task PinVersionsAsync(string owner, IReadOnlyList<string> ids, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(owner) || owner.Length > 256 || ids.Count == 0)
+            throw new ArgumentException("Invalid version retention owner");
+        var pins = await ReadPinsAsync(token);
+        pins[owner] = pins.GetValueOrDefault(owner, []).Concat(ids).Distinct(StringComparer.Ordinal).ToArray();
+        var content = JsonSerializer.Serialize(pins, JsonOptions);
+        if (pins.Count > 10000 || pins[owner].Length > 16 || Encoding.UTF8.GetByteCount(content) > 1024 * 1024)
+            throw new IOException("Version retention capacity requires operator maintenance");
+        await WriteHistoryAsync(Path.Combine(HistoryDirectory(), "retention-pins.json"), content, token);
+    }
+
+    private static Task WriteHistoryAsync(string path, string content, CancellationToken token)
+    {
+        ConfigurationStorageBudget.Reserve(HistoryDirectory(), Encoding.UTF8.GetByteCount(content), 1,
+            ConfigurationStorageBudget.HistoryBytes, 20000);
+        return AtomicWriteAsync(path, content, token);
     }
 
     private static async Task AtomicWriteAsync(string path, string content, CancellationToken cancellationToken)
@@ -272,6 +359,8 @@ public sealed class ConfigVersionService(IHttpContextAccessor httpContextAccesso
     {
         if (!File.Exists(IndexPath())) return [];
         await using var stream = File.OpenRead(IndexPath());
+        if (stream.Length > ConfigurationStorageBudget.IndexBytes)
+            throw new InvalidDataException("Configuration history index exceeds capacity");
         return await JsonSerializer.DeserializeAsync<List<ConfigVersionInfo>>(stream, JsonOptions, cancellationToken) ?? [];
     }
 

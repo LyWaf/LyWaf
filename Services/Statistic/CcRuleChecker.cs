@@ -18,6 +18,9 @@ public class CcCheckResult
     public CcAction Action { get; set; }
     public int ActionSeconds { get; set; }
     public string? Message { get; set; }
+    public bool IsNewTrigger { get; set; }
+    public string? StateKey { get; set; }
+    public CcDecision? Decision { get; set; }
 }
 
 /// <summary>
@@ -33,12 +36,12 @@ public interface ICcRuleChecker
     /// <summary>
     /// 记录 WAF 攻击事件（用于 FrequentAttack 类型）
     /// </summary>
-    void RecordAttackEvent(string clientIp);
+    void RecordAttackEvent(HttpContext context, string clientIp);
     
     /// <summary>
     /// 记录错误事件（用于 FrequentError 类型）
     /// </summary>
-    void RecordErrorEvent(string clientIp, int statusCode);
+    void RecordErrorEvent(HttpContext context, string clientIp, int statusCode);
     
     /// <summary>
     /// 执行 CC 处罚动作
@@ -49,6 +52,11 @@ public interface ICcRuleChecker
     /// 清除指定 IP 的 CC 触发记录和计数器（验证码通过后调用）
     /// </summary>
     void ClearTriggeredRecords(string clientIp);
+    string? GetCaptchaSubject(HttpContext context, string clientIp) => null;
+    void RecordCaptchaInterception(HttpContext context, string clientIp) { }
+    /// <summary>Release one rule/scope/subject locally and publish its fence. Callers must authorize this operation; no peer ACK is implied.</summary>
+    CcPolicyGeneration ReleaseRule(HttpContext context, AdvancedCcRule rule, string clientIp);
+    CcPolicyGeneration ReleaseRule(string scope, AdvancedCcRule rule, string clientIp);
 }
 
 public class CcRuleChecker : ICcRuleChecker
@@ -57,6 +65,8 @@ public class CcRuleChecker : ICcRuleChecker
     private readonly IStatisticService _statisticService;
     private readonly ICaptchaService _captchaService;
     private readonly IRuntimeStateStore _runtimeState;
+    private readonly CcDecisionService _decisions;
+    private readonly CcIngressOwnership? _ingress;
 
     // CC 计数器存储: Key = "{ruleId}:{clientIp}", Value = 请求计数信息
     private static readonly ConcurrentDictionary<string, CcCounter> _counters = new();
@@ -67,17 +77,17 @@ public class CcRuleChecker : ICcRuleChecker
     // 错误事件计数: Key = "{clientIp}", Value = 错误计数
     private static readonly ConcurrentDictionary<string, CcCounter> _errorCounters = new();
 
-    // 已触发规则的 IP（避免重复处罚）: Key = "{ruleId}:{clientIp}"
-    private static readonly ConcurrentDictionary<string, DateTime> _triggeredIps = new();
-
     // 编译后的正则表达式缓存
     private static readonly ConcurrentDictionary<string, Regex> _regexCache = new();
 
-    public CcRuleChecker(IStatisticService statisticService, ICaptchaService captchaService, IRuntimeStateStore runtimeState)
+    public CcRuleChecker(IStatisticService statisticService, ICaptchaService captchaService, IRuntimeStateStore runtimeState,
+        CcDecisionService? decisions = null, CcIngressOwnership? ingress = null)
     {
         _statisticService = statisticService;
         _captchaService = captchaService;
         _runtimeState = runtimeState;
+        _decisions = decisions ?? new CcDecisionService(statisticService, runtimeState, CcBanLog.Shared);
+        _ingress = ingress;
 
         // 启动清理任务
         _ = Task.Run(CleanupLoop);
@@ -96,35 +106,23 @@ public class CcRuleChecker : ICcRuleChecker
         
         foreach (var rule in rules)
         {
+            if (!CcRequestIdentity.TrySubject(context, rule, clientIp, out var subject)) continue;
             // 检查是否已经在处罚期内
-            var triggeredKey = $"{rule.Id}:{clientIp}";
+            var triggeredKey = CcRuleStateKey.Current(_runtimeState, rule, clientIp, context);
+            var policy = _decisions.Register(rule, CcRuleStateKey.Scope(context), subject);
+            var currentDecision = _decisions.Evaluate(policy, rule, GetWindowStart(rule.Period), 0).Decision;
             if (_runtimeState.TryGet<DateTimeOffset>("cc.triggered", triggeredKey, out var distributedUntil)
-                && distributedUntil > DateTimeOffset.UtcNow)
+                && distributedUntil > DateTimeOffset.UtcNow
+                && (!rule.RequireCompleteCoverage || currentDecision?.ExpiresAt == distributedUntil))
             {
                 result.IsTriggered = true;
                 result.TriggeredRule = rule;
                 result.Action = rule.Action;
                 result.ActionSeconds = rule.ActionSeconds;
                 result.Message = $"IP {clientIp} 仍在 CC 规则 [{rule.Name}] 处罚期内";
+                result.StateKey = triggeredKey;
+                result.Decision = currentDecision;
                 return result;
-            }
-            if (_triggeredIps.TryGetValue(triggeredKey, out var triggeredTime))
-            {
-                if (DateTime.UtcNow < triggeredTime)
-                {
-                    // 仍在处罚期内
-                    result.IsTriggered = true;
-                    result.TriggeredRule = rule;
-                    result.Action = rule.Action;
-                    result.ActionSeconds = rule.ActionSeconds;
-                    result.Message = $"IP {clientIp} 仍在 CC 规则 [{rule.Name}] 处罚期内";
-                    return result;
-                }
-                else
-                {
-                    // 处罚期已过，移除
-                    _triggeredIps.TryRemove(triggeredKey, out _);
-                }
             }
             
             // 根据规则类型检查
@@ -138,31 +136,32 @@ public class CcRuleChecker : ICcRuleChecker
             
             if (!conditionsMatch) continue;
             
-            var counterKey = $"{rule.Id}:{clientIp}";
+            var counterKey = triggeredKey;
             var windowStart = GetWindowStart(rule.Period);
             var count = rule.Type switch
             {
-                CcRuleType.FrequentAccess => _runtimeState.IncrementWindow("cc.access", counterKey, windowStart, TimeSpan.FromSeconds(rule.Period)),
+                CcRuleType.FrequentAccess => _ingress?.ShouldCount(context, rule, policy) == false
+                    ? _runtimeState.GetWindowValue("cc.access", counterKey, windowStart)
+                    : _runtimeState.IncrementWindow("cc.access", counterKey, windowStart, TimeSpan.FromSeconds(rule.Period)),
                 CcRuleType.FrequentAttack => _runtimeState.GetWindowValue("cc.attack", counterKey, windowStart),
                 CcRuleType.FrequentError => _runtimeState.GetWindowValue("cc.error", counterKey, windowStart),
                 _ => 0
             };
             
             // 检查是否达到阈值
-            if (count >= rule.Threshold)
+            var evaluated = _decisions.Evaluate(policy, rule, windowStart, count);
+            if (evaluated.Decision is { } decision)
             {
                 result.IsTriggered = true;
                 result.TriggeredRule = rule;
                 result.Action = rule.Action;
                 result.ActionSeconds = rule.ActionSeconds;
                 result.Message = $"IP {clientIp} 触发 CC 规则 [{rule.Name}]: {rule.Period}秒内请求{count}次，超过阈值{rule.Threshold}";
+                result.IsNewTrigger = evaluated.Created;
+                result.StateKey = triggeredKey;
+                result.Decision = decision;
                 
-                // 标记为已触发，设置处罚结束时间
-                _triggeredIps[triggeredKey] = DateTime.UtcNow.AddSeconds(rule.ActionSeconds);
-                _runtimeState.Set("cc.triggered", triggeredKey, DateTimeOffset.UtcNow.AddSeconds(rule.ActionSeconds),
-                    TimeSpan.FromSeconds(rule.ActionSeconds));
-                
-                _logger.Warn("CC 规则触发: {Message}", result.Message);
+                if (evaluated.Created) _logger.Warn("CC 规则触发: {Message}", result.Message);
                 return result;
             }
         }
@@ -173,7 +172,7 @@ public class CcRuleChecker : ICcRuleChecker
     /// <summary>
     /// 记录攻击事件
     /// </summary>
-    public void RecordAttackEvent(string clientIp)
+    public void RecordAttackEvent(HttpContext context, string clientIp)
     {
         var rules = _statisticService.GetAdvancedCcRulesByType(CcRuleType.FrequentAttack)
             .Where(r => r.Enabled)
@@ -181,7 +180,10 @@ public class CcRuleChecker : ICcRuleChecker
         
         foreach (var rule in rules)
         {
-            var key = $"{rule.Id}:{clientIp}";
+            if (!CcRequestIdentity.TrySubject(context, rule, clientIp, out var subject)) continue;
+            if (!MatchRuleConditions(context, rule, clientIp)) continue;
+            var key = CcRuleStateKey.Current(_runtimeState, rule, clientIp, context);
+            _decisions.Register(rule, CcRuleStateKey.Scope(context), subject);
             _runtimeState.IncrementWindow("cc.attack", key, GetWindowStart(rule.Period), TimeSpan.FromSeconds(rule.Period));
         }
     }
@@ -189,7 +191,7 @@ public class CcRuleChecker : ICcRuleChecker
     /// <summary>
     /// 记录错误事件
     /// </summary>
-    public void RecordErrorEvent(string clientIp, int statusCode)
+    public void RecordErrorEvent(HttpContext context, string clientIp, int statusCode)
     {
         var rules = _statisticService.GetAdvancedCcRulesByType(CcRuleType.FrequentError)
             .Where(r => r.Enabled)
@@ -197,15 +199,10 @@ public class CcRuleChecker : ICcRuleChecker
         
         foreach (var rule in rules)
         {
-            // 检查状态码是否匹配条件
-            var statusCondition = rule.Conditions.FirstOrDefault(c => c.Target == CcMatchTarget.StatusCode);
-            if (statusCondition != null)
-            {
-                if (!MatchValue(statusCode.ToString(), statusCondition))
-                    continue;
-            }
-            
-            var key = $"{rule.Id}:{clientIp}";
+            if (!CcRequestIdentity.TrySubject(context, rule, clientIp, out var subject)) continue;
+            if (!MatchRuleConditions(context, rule, clientIp)) continue;
+            var key = CcRuleStateKey.Current(_runtimeState, rule, clientIp, context);
+            _decisions.Register(rule, CcRuleStateKey.Scope(context), subject);
             _runtimeState.IncrementWindow("cc.error", key, GetWindowStart(rule.Period), TimeSpan.FromSeconds(rule.Period));
         }
     }
@@ -218,20 +215,20 @@ public class CcRuleChecker : ICcRuleChecker
         if (!result.IsTriggered || result.TriggeredRule == null) return;
         
         var rule = result.TriggeredRule;
+        if (result.StateKey is not null && result.StateKey != CcRuleStateKey.Current(_runtimeState, rule, clientIp, context))
+        {
+            result.IsTriggered = false;
+            return;
+        }
         
         switch (result.Action)
         {
             case CcAction.Block:
-                // 封禁 IP
+                // cc.triggered is the scoped authority; never promote a CC decision to a global IP ban.
                 var blockDuration = TimeSpan.FromSeconds(result.ActionSeconds);
-                var newBan = CcBanCoordinator.Shared.TryBan(clientIp, $"CC 规则触发: {rule.Name}", blockDuration,
-                    () => SharedData.ClientFb.TryGetValue(clientIp, out _) ||
-                        _runtimeState.TryGet<string>("ip.blocked", clientIp, out _),
-                    () =>
-                    {
-                        SharedData.ClientFb.Set(clientIp, $"CC 规则触发: {rule.Name}", blockDuration);
-                        _runtimeState.Set("ip.blocked", clientIp, $"CC 规则触发: {rule.Name}", blockDuration);
-                    });
+                var newBan = result.Decision is null && result.IsNewTrigger && _runtimeState.TryClaim("cc.ban.logged",
+                    result.StateKey ?? CcRuleStateKey.Current(_runtimeState, rule, clientIp, context), blockDuration);
+                if (newBan) CcBanLog.Shared.Add(clientIp, $"CC 规则触发: {rule.Name}", blockDuration);
                 if (newBan) _logger.Info("CC 封禁: IP={ClientIp}, Rule={Rule}, Duration={Duration}秒",
                     clientIp, rule.Name, result.ActionSeconds);
 
@@ -242,8 +239,7 @@ public class CcRuleChecker : ICcRuleChecker
                 break;
                 
             case CcAction.Captcha:
-                // 人机验证 - 将 IP 标记为待验证状态，后续请求由 CaptchaMiddleware 拦截并展示验证页面
-                _captchaService.SetPending(clientIp, rule.Name, result.ActionSeconds);
+                // CaptchaMiddleware reads the same scoped trigger without a second pending cache.
                 _logger.Info("CC 人机验证: IP={ClientIp}, Rule={Rule}, Duration={Duration}秒",
                     clientIp, rule.Name, result.ActionSeconds);
 
@@ -284,6 +280,8 @@ public class CcRuleChecker : ICcRuleChecker
         }
         
         // 记录安全事件
+        if (result.Decision is not null && result.Action != CcAction.LogOnly)
+            _decisions.RecordHit(result.Decision, rule.Name);
         SharedData.Security.RecordEvent(SecurityEventType.CcAttack, clientIp);
     }
 
@@ -292,15 +290,20 @@ public class CcRuleChecker : ICcRuleChecker
     /// </summary>
     public void ClearTriggeredRecords(string clientIp)
     {
-        // 清除触发记录
-        var keysToRemove = _triggeredIps.Keys.Where(k => k.EndsWith($":{clientIp}")).ToList();
-        foreach (var key in keysToRemove)
+        if (CcPolicyGeneration.TryParseKey(clientIp, out var policyKey, out var expected))
         {
-            _triggeredIps.TryRemove(key, out _);
+            // A delayed captcha completion must not release a newer penalty generation.
+            _runtimeState.AdvanceCcPolicyGeneration(policyKey, expected);
+            return;
         }
 
-        foreach (var state in _runtimeState.GetSnapshots("cc.triggered").Where(x => x.Key.EndsWith($":{clientIp}", StringComparison.Ordinal)))
-            _runtimeState.Remove("cc.triggered", state.Key);
+        // Legacy IP-wide captcha completion releases only known CC scopes, never manual IP bans.
+        var policies = _runtimeState.GetSnapshots()
+            .Where(s => CcPolicyGeneration.IsStateDomain(s.Domain) || s.Domain == CcPolicyGeneration.Domain)
+            .Select(s => CcPolicyGeneration.TryParseKey(s.Key, out var key, out _) ? key : null)
+            .Where(key => key is not null && key.EndsWith($":{clientIp}", StringComparison.Ordinal))
+            .Distinct().ToArray();
+        foreach (var key in policies) _runtimeState.AdvanceCcPolicyGeneration(key!);
 
         // 清除计数器
         var counterKeys = _counters.Keys.Where(k => k.EndsWith($":{clientIp}")).ToList();
@@ -314,6 +317,38 @@ public class CcRuleChecker : ICcRuleChecker
 
         _logger.Info("已清除 IP={ClientIp} 的 CC 统计记录", clientIp);
     }
+
+    public string? GetCaptchaSubject(HttpContext context, string clientIp)
+    {
+        foreach (var rule in _statisticService.GetAdvancedCcRules().Where(r => r.Enabled && r.Action == CcAction.Captcha).OrderBy(r => r.Priority))
+        {
+            var key = CcRuleStateKey.Current(_runtimeState, rule, clientIp, context);
+            if (_runtimeState.TryGet<DateTimeOffset>("cc.triggered", key, out var until) && until > DateTimeOffset.UtcNow)
+                return key;
+        }
+        return null;
+    }
+
+    public void RecordCaptchaInterception(HttpContext context, string clientIp)
+    {
+        foreach (var rule in _statisticService.GetAdvancedCcRules().Where(r => r.Enabled && r.Action == CcAction.Captcha).OrderBy(r => r.Priority))
+        {
+            var policy = _decisions.Register(rule, CcRuleStateKey.Scope(context), clientIp);
+            var decision = _decisions.Evaluate(policy, rule, GetWindowStart(rule.Period), 0).Decision;
+            if (decision is null) continue;
+            _decisions.RecordHit(decision, rule.Name);
+            return;
+        }
+    }
+
+    public CcPolicyGeneration ReleaseRule(HttpContext context, AdvancedCcRule rule, string clientIp)
+    {
+        if (!CcRequestIdentity.TrySubject(context, rule, clientIp, out var subject)) throw new InvalidOperationException("Trusted CC subject unavailable");
+        return ReleaseRule(CcRuleStateKey.ResolveScope(rule, CcRuleStateKey.Scope(context), _runtimeState.GetStatus().NodeId), rule, subject);
+    }
+
+    public CcPolicyGeneration ReleaseRule(string scope, AdvancedCcRule rule, string clientIp)
+        => _runtimeState.AdvanceCcPolicyGeneration(CcRuleStateKey.Create(rule, clientIp, scope));
 
     /// <summary>
     /// 匹配所有条件（AND 关系）
@@ -494,15 +529,6 @@ public class CcRuleChecker : ICcRuleChecker
             
             try
             {
-                var now = DateTime.UtcNow;
-                
-                // 清理过期的触发记录
-                var expiredTriggers = _triggeredIps.Where(kv => kv.Value < now).Select(kv => kv.Key).ToList();
-                foreach (var key in expiredTriggers)
-                {
-                    _triggeredIps.TryRemove(key, out _);
-                }
-
                 // 清理过期的计数器
                 CleanupExpiredCounters(_counters);
                 CleanupExpiredCounters(_attackCounters);

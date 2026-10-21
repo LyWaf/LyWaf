@@ -80,6 +80,7 @@ public static partial class ControlApi
                 path.Equals("/api/auth/check", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/health/ready", StringComparison.OrdinalIgnoreCase) ||
                 path.StartsWith("/api/distribution/agent/", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith(LyWaf.Services.NodeCommunication.NodeMessageAuthentication.Prefix, StringComparison.Ordinal) ||
                 path.StartsWith("/api/runtime-state/agent/", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals("/api/pcap/ca.crl", StringComparison.OrdinalIgnoreCase))
             {

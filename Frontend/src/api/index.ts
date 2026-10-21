@@ -60,6 +60,23 @@ type UnwrappedAxios = {
 
 const api = http as unknown as UnwrappedAxios
 
+export type NodeSetupMode = 'Standalone' | 'Controller' | 'Node'
+export interface NodeSetupSettings {
+  mode: NodeSetupMode; activeMode: NodeSetupMode; nodeId?: string; clusterId?: string
+  controllerUrl?: string; hasCredential: boolean; restartRequired: boolean; revision: number
+  authorityUpgradePending?: boolean
+  synchronizeRuntimeState?: boolean; runtimeSynchronizationActive?: boolean; runtimeSynchronizationConfigured?: boolean
+  runtimeHistoryChangePending?: boolean
+}
+export interface NodeSetupPeer { nodeId: string; name: string; enabled: boolean }
+export const nodeSetupApi = {
+  get: () => api.get<{ success: boolean; settings: NodeSetupSettings; peers: NodeSetupPeer[]; effectiveMode: NodeSetupMode }>('/node-setup'),
+  save: (settings: { mode: NodeSetupMode; controllerUrl?: string; credential?: string; synchronizeRuntimeState?: boolean }) =>
+    api.put<{ success: boolean; settings: NodeSetupSettings }>('/node-setup', settings),
+  createPeer: (name: string) => api.post<{ success: boolean; peer: NodeSetupPeer; credential: string }>('/node-setup/peers', { name }),
+  setPeerEnabled: (id: string, enabled: boolean) => api.put<{ success: boolean }>(`/node-setup/peers/${encodeURIComponent(id)}`, { enabled }),
+}
+
 export interface ManagementPage<T> { success: boolean; data: T[]; total: number; page: number; pageSize: number }
 
 // Configuration selectors require the complete set; normal tables should request one page.

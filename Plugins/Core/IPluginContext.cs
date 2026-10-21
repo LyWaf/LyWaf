@@ -18,6 +18,7 @@ public class PluginContext : IPluginContext
     public IPluginTaskCoordinator Tasks { get; }
     public IPluginStorage Storage { get; }
     public IPluginNetworkClientFactory Network { get; }
+    public IPluginNodeMessageClient NodeMessages { get; }
     
     public PluginContext(
         string pluginId,
@@ -30,7 +31,6 @@ public class PluginContext : IPluginContext
         _pluginId = pluginId;
         _pluginManager = pluginManager;
         _eventBus = eventBus;
-        Services = services;
         Configuration = CreatePluginConfiguration(configuration, pluginId,
             pluginManager.IsPermissionGranted(pluginId, PluginPermission.SensitiveConfiguration));
         Logger = NLog.LogManager.GetLogger($"Plugin.{pluginId}");
@@ -46,6 +46,9 @@ public class PluginContext : IPluginContext
             pluginManager.IsPermissionGranted(pluginId, PluginPermission.DataDirectory));
         Network = new PluginNetworkClientFactory(services.GetRequiredService<IHttpClientFactory>(),
             pluginManager.IsPermissionGranted(pluginId, PluginPermission.Network));
+        NodeMessages = services.GetService<LyWaf.Services.NodeCommunication.PluginNodeMessageService>()?.Bind(pluginId)
+            ?? new UnavailableNodeMessages();
+        Services = new ContextServices(this);
     }
 
     private static IConfiguration CreatePluginConfiguration(IConfiguration source, string pluginId, bool includeSensitive)
@@ -86,6 +89,30 @@ public class PluginContext : IPluginContext
     public IDisposable SubscribeEvent<TEvent>(Func<TEvent, Task> handler) where TEvent : class
     {
         return _eventBus.Subscribe(handler);
+    }
+
+    private sealed class UnavailableNodeMessages : IPluginNodeMessageClient
+    {
+        public Task<IReadOnlyList<PluginNodeDelivery>> SendAsync(string messageType, int schemaVersion, string targetGroup,
+            System.Text.Json.JsonElement payload, string messageId, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Host node messaging is unavailable");
+    }
+
+    // Deliberately has no fallback to the host provider, including scopes and IEnumerable<T>.
+    private sealed class ContextServices(PluginContext context) : IServiceProvider
+    {
+        public object? GetService(Type serviceType)
+        {
+            if (serviceType == typeof(IServiceProvider)) return this;
+            if (serviceType == typeof(IConfiguration)) return context.Configuration;
+            if (serviceType == typeof(IPluginContext)) return context;
+            if (serviceType == typeof(IPluginTaskCoordinator)) return context.Tasks;
+            if (serviceType == typeof(IPluginStorage)) return context.Storage;
+            if (serviceType == typeof(IPluginNetworkClientFactory)) return context.Network;
+            if (serviceType == typeof(IPluginNodeMessageClient)) return context.NodeMessages;
+            if (serviceType == typeof(NLog.Logger)) return context.Logger;
+            return null;
+        }
     }
 }
 

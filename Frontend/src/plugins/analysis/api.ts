@@ -46,6 +46,14 @@ interface CcEnumsResponse {
 }
 
 export interface CreateAdvancedCcRuleRequest {
+  scope?: AdvancedCcRule['scope']
+  subject?: AdvancedCcRule['subject']
+  subjectAuthenticationType?: string
+  subjectIssuer?: string
+  expectedNodes?: string[]
+  useManagedMembership?: boolean
+  requireCompleteCoverage?: boolean
+  protectionGroup?: string
   groupOperator?: 'And' | 'Or'
   conditionGroups?: AdvancedCcRule['conditionGroups']
   name: string
@@ -64,6 +72,10 @@ export interface CreateAdvancedCcRuleRequest {
 }
 
 export const advancedCcApi = {
+  release: (request: { ruleId: string; scopeType: 'host' | 'route' | 'group'; scope: string; ip: string }) =>
+    api.post<{ success: boolean; localApplied: boolean; policyGeneration: { version: number; releaseId: string }; propagation: { status: 'pending'; allNodesConfirmed: false }; messageKey: string }>('cc/release', request),
+  releaseStatus: (request: { ruleId: string; scopeType: 'host' | 'route' | 'group'; scope: string; ip: string; policyGeneration: { version: number; releaseId: string } }) =>
+    api.post<{ success: boolean; propagation: { status: string; allNodesConfirmed: boolean; acknowledgedNodes: string[]; pendingNodes: string[] }; execution?: { allNodesConfirmed: boolean; confirmedNodes: string[]; pendingNodes: string[] } }>('cc/release/status', request),
   // 获取所有高级 CC 规则
   getRules: async (): Promise<AdvancedCcRulesResponse> => {
     const rules = await getAllManagementPages<AdvancedCcRule>('cc/advanced', api)

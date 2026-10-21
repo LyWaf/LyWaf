@@ -18,8 +18,9 @@ public sealed record ConfigurationChangeImpact(
 /// <summary>
 /// 对配置快照进行变更分级，并在重载后执行路由和安全策略冒烟检查。
 /// </summary>
-public sealed class ConfigurationLifecycleService
+public sealed class ConfigurationLifecycleService(ConfigurationReloadRecovery? recovery = null)
 {
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IConfigurationRoot, object> ReloadGates = new();
     private static readonly string[] RestartPrefixes =
         ["WafInfos:Listens", "Plugins:Directories", "OpenTelemetry", "Metrics", "DuckDb"];
     private static readonly string[] RoutePrefixes =
@@ -27,24 +28,40 @@ public sealed class ConfigurationLifecycleService
 
     /// <summary>捕获可用于重载前后比较的扁平配置快照。</summary>
     public IReadOnlyDictionary<string, string?> Capture(IConfiguration configuration)
-        => configuration.AsEnumerable().Where(x => x.Value != null)
+    {
+        var values = configuration.AsEnumerable().Where(x => x.Value != null)
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
+        return configuration is IConfigurationRoot root ? new ActiveSnapshot(values,
+            root.Providers.ToDictionary(provider => provider, CaptureProvider)) : values;
+    }
 
     /// <summary>重载配置、执行冒烟检查并返回字段生效级别。</summary>
     public ConfigurationChangeImpact ReloadAndValidate(
         IConfigurationRoot root,
         IReadOnlyDictionary<string, string?> before)
     {
-        root.Reload();
-        try
+        lock (ReloadGates.GetValue(root, _ => new object()))
         {
-            Validate(root);
-            return Analyze(before, Capture(root));
-        }
-        catch
-        {
-            RestoreActiveSnapshot(root, before);
-            throw;
+            try
+            {
+                root.Reload();
+                Validate(root);
+                return Analyze(before, Capture(root));
+            }
+            catch (Exception reloadFailure)
+            {
+                try
+                {
+                    RestoreActiveSnapshot(root, before);
+                    Validate(root);
+                    recovery?.NotifyRestored();
+                }
+                catch (Exception restoreFailure)
+                {
+                    throw new AggregateException("Configuration reload and active-state recovery failed", reloadFailure, restoreFailure);
+                }
+                throw;
+            }
         }
     }
 
@@ -52,9 +69,56 @@ public sealed class ConfigurationLifecycleService
         IConfigurationRoot root,
         IReadOnlyDictionary<string, string?> snapshot)
     {
+        if (snapshot is ActiveSnapshot active)
+        {
+            foreach (var (provider, previous) in active.Providers)
+            {
+                if (provider is IRestorableConfigurationProvider restorable)
+                {
+                    restorable.RestoreValues(previous);
+                    continue;
+                }
+                // Standard YAML/JSON providers expose a stream parser that replaces their data without
+                // rereading the rejected file or publishing a partially restored change notification.
+                if (provider is FileConfigurationProvider file && Path.GetExtension(file.Source.Path ?? "").ToLowerInvariant()
+                    is ".yaml" or ".yml" or ".json")
+                {
+                    using var stream = new MemoryStream(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(previous));
+                    file.Load(stream);
+                    continue;
+                }
+                var current = CaptureProvider(provider);
+                foreach (var key in current.Keys.Concat(previous.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
+                    if (!current.TryGetValue(key, out var value) || !previous.TryGetValue(key, out var old) || value != old)
+                        provider.Set(key, previous.GetValueOrDefault(key));
+            }
+            return;
+        }
         var currentKeys = root.AsEnumerable().Select(static item => item.Key);
         foreach (var key in currentKeys.Concat(snapshot.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
             root[key] = snapshot.GetValueOrDefault(key);
+    }
+
+    private static Dictionary<string, string?> CaptureProvider(IConfigurationProvider provider)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var parents = new Stack<string?>();
+        parents.Push(null);
+        while (parents.TryPop(out var parent))
+            foreach (var child in provider.GetChildKeys([], parent).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var key = parent is null ? child : parent + ":" + child;
+                if (provider.TryGet(key, out var value)) values[key] = value;
+                parents.Push(key);
+            }
+        return values;
+    }
+
+    private sealed class ActiveSnapshot(Dictionary<string, string?> values,
+        Dictionary<IConfigurationProvider, Dictionary<string, string?>> providers)
+        : Dictionary<string, string?>(values, StringComparer.OrdinalIgnoreCase)
+    {
+        public Dictionary<IConfigurationProvider, Dictionary<string, string?>> Providers { get; } = providers;
     }
 
     /// <summary>验证当前配置中会影响路由选择和安全匹配的关键约束。</summary>

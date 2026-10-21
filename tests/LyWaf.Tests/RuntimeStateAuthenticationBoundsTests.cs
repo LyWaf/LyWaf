@@ -9,7 +9,11 @@ public sealed class RuntimeStateAuthenticationBoundsTests
 {
     private sealed class Monitor : IOptionsMonitor<RuntimeStateOptions>
     {
-        public RuntimeStateOptions CurrentValue { get; } = new() { Enabled = true, SharedSecret = "test-secret", MaxValueBytes = 2048 };
+        public RuntimeStateOptions CurrentValue { get; } = new()
+        {
+            Enabled = true, SharedSecret = "test-secret", MaxValueBytes = 2048,
+            Peers = new() { ["node-1"] = new() { Endpoint = "http://node-1" } }
+        };
         public RuntimeStateOptions Get(string? name) => CurrentValue;
         public IDisposable? OnChange(Action<RuntimeStateOptions, string?> listener) => null;
     }
@@ -22,6 +26,19 @@ public sealed class RuntimeStateAuthenticationBoundsTests
         foreach (var header in request.Headers) context.Request.Headers[header.Key] = header.Value.ToArray();
         context.Request.Body = new MemoryStream(body);
         return context;
+    }
+
+    [Fact]
+    public async Task SharedSecretDoesNotAuthorizeUnregisteredOrDisabledSender()
+    {
+        var monitor = new Monitor();
+        monitor.CurrentValue.Peers["node-1"].Enabled = false;
+        var context = Request("{}"u8.ToArray());
+        var auth = new RuntimeStateAuthentication(monitor);
+        Assert.Equal("节点未授权或已禁用", (await auth.ReadAndVerifyAsync(context, default)).Error);
+        Assert.Equal(0, context.Request.Body.Position);
+        monitor.CurrentValue.Peers.Clear();
+        Assert.Equal("节点未授权或已禁用", (await auth.ReadAndVerifyAsync(context, default)).Error);
     }
 
     [Fact]

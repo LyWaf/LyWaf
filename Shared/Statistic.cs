@@ -774,10 +774,15 @@ public class SecurityStatistic
     /// <summary>
     /// 获取统计快照
     /// </summary>
-    public SecurityStatisticSnapshot GetSnapshot()
+    public SecurityStatisticSnapshot GetSnapshot() => CaptureSnapshot(false, out _);
+
+    public SecurityStatisticSnapshot GetSnapshot(out string[]? attackIps) => CaptureSnapshot(true, out attackIps);
+
+    private SecurityStatisticSnapshot CaptureSnapshot(bool includeAttackIps, out string[]? attackIps)
     {
         lock (_lock)
         {
+            attackIps = includeAttackIps && _attackSources.Count <= 4096 ? _attackSources.Keys.ToArray() : null;
             return new SecurityStatisticSnapshot
             {
                 StartTime = StartTime,

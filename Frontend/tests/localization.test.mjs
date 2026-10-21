@@ -23,6 +23,26 @@ function runtime(saved = null) {
 const read = language => JSON.parse(readFileSync(new URL(`../../Localization/${language}.json`, import.meta.url), 'utf8'))
 const pluginRead = (plugin, language) => JSON.parse(readFileSync(new URL(`../../Plugins/Sys/${plugin}/Localization/${language}.json`, import.meta.url), 'utf8'))
 
+test('node errors follow the local language instead of the remote exception text', () => {
+  const { api } = runtime('en-US')
+  const module = { exports: {} }
+  const source = readFileSync(new URL('../src/i18n/node-error.ts', import.meta.url), 'utf8')
+  const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
+  vm.runInNewContext(code, { module, exports: module.exports, require: () => api })
+  const node = { errorCode: 'node_timeout', error: 'remote language and private details' }
+  assert.equal(module.exports.nodeErrorText(node), 'The node request timed out')
+  api.setLocale('zh-CN')
+  assert.equal(module.exports.nodeErrorText(node), read('zh-CN')['node.errors.node_timeout'])
+  assert.equal(module.exports.nodeErrorText({ errorCode: 'future_unknown_code', error: 'private' }),
+    read('zh-CN')['node.errors.node_http_rejected'])
+  assert.equal(module.exports.nodeErrorText({ error: 'legacy error' }), 'legacy error')
+  assert.equal(module.exports.nodeLifecycleText({ lifecycle: 'AuthenticationFailed', online: false, stale: false }),
+    read('zh-CN')['node.lifecycle.AuthenticationFailed'])
+  api.setLocale('en-US')
+  assert.equal(module.exports.nodeLifecycleText({ lifecycle: 'AuthenticationFailed', online: false, stale: false }),
+    'Authentication failed')
+})
+
 test('dashboard durations change language without fetching data again', () => {
   const { api } = runtime('en-US')
   assert.equal(api.formatDuration(75239), '20 h 53 min')

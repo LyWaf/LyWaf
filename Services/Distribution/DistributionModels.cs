@@ -3,6 +3,7 @@ namespace LyWaf.Services.Distribution;
 /// <summary>控制节点保存的目标节点连接信息；Secret 留空时继承全局 SharedSecret。</summary>
 public sealed class DistributionNodeOptions
 {
+    public int ProtocolVersion { get; set; } = 1;
     public string Endpoint { get; set; } = "";
     public string Secret { get; set; } = "";
     public bool Enabled { get; set; } = true;
@@ -20,6 +21,9 @@ public sealed class DistributionOptions
     public long MaxConfigBytes { get; set; } = 4 * 1024 * 1024;
     public int RequestTimeoutSeconds { get; set; } = 15;
     public int AllowedClockSkewSeconds { get; set; } = 60;
+    public int HeartbeatIntervalSeconds { get; set; } = 10;
+    public int SuspectFailureThreshold { get; set; } = 3;
+    public int OfflineTimeoutSeconds { get; set; } = 60;
     public Dictionary<string, DistributionNodeOptions> Nodes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public DistributionPermissionOptions Permissions { get; set; } = new();
 }
@@ -58,7 +62,9 @@ public sealed record NodeAcknowledgement(
     string DeploymentId,
     string Stage,
     string? ConfigVersionId = null,
-    string? Error = null);
+    string? Error = null,
+    string? ErrorCode = null,
+    string? MessageKey = null);
 
 /// <summary>单个目标节点在分发任务中的最新状态和错误。</summary>
 public sealed record DistributionTargetState(
@@ -66,7 +72,8 @@ public sealed record DistributionTargetState(
     string State,
     DateTimeOffset UpdatedAt,
     string? ConfigVersionId = null,
-    string? Error = null);
+    string? Error = null,
+    string? PendingStage = null);
 
 /// <summary>控制节点持久化的分发任务，包含灰度进度、暂停状态和逐节点 ACK/NACK。</summary>
 public sealed record ConfigurationDeployment(
@@ -111,7 +118,7 @@ public sealed record NodeSecuritySnapshot(
     long CrawlerDetectCount,
     long GeoBlockCount,
     long RateLimitCount,
-    int UniqueAttackIps);
+    int? UniqueAttackIps);
 
 /// <summary>节点最近一次聚合拦截事件；EventId 在事件未变化时保持稳定，便于控制端去重。</summary>
 public sealed record NodeSecurityEvent(
@@ -121,7 +128,8 @@ public sealed record NodeSecurityEvent(
     string RuleName,
     string RuleType,
     long HitCount,
-    DateTimeOffset LastHitAt);
+    DateTimeOffset LastHitAt,
+    string? BootId = null);
 
 /// <summary>节点 agent 返回的完整控制台快照，包含版本、运行状态、上游健康和安全摘要。</summary>
 public sealed record NodeDashboardSnapshot(
@@ -134,7 +142,14 @@ public sealed record NodeDashboardSnapshot(
     int RuntimeStateEntries,
     NodeSecuritySnapshot Security,
     IReadOnlyList<NodeUpstreamSnapshot> Upstreams,
-    IReadOnlyList<NodeSecurityEvent> RecentEvents);
+    IReadOnlyList<NodeSecurityEvent> RecentEvents,
+    IReadOnlyList<string>? AttackIps = null,
+    DateTimeOffset? StatisticsStartedAt = null,
+    IReadOnlyList<NodeTelemetryWindow>? Telemetry = null,
+    string? BootId = null,
+    string? BootSource = null,
+    NodeLocalDiagnostics? Diagnostics = null,
+    IReadOnlyList<NodeLogicalBanWindow>? LogicalBans = null);
 
 /// <summary>控制节点包装后的节点视图，保留离线节点最后快照并标记网络和时钟异常。</summary>
 public sealed record ManagedNodeSnapshot(
@@ -148,7 +163,16 @@ public sealed record ManagedNodeSnapshot(
     DateTimeOffset? LastSeenAt,
     string? Error,
     bool CanOperate,
-    NodeDashboardSnapshot? Snapshot);
+    NodeDashboardSnapshot? Snapshot,
+    string? ErrorCode = null,
+    string? RemoteTraceId = null,
+    string Lifecycle = "Connecting",
+    int ConsecutiveFailures = 0,
+    DateTimeOffset? FirstAttemptAt = null,
+    string AdmissionState = "Legacy",
+    bool AdmissionEnabled = true,
+    bool HealthyActive = false,
+    NodePeerDiagnostics? Diagnostics = null);
 
 /// <summary>多节点控制台一次查询的聚合结果和当前用户操作权限。</summary>
 public sealed record MultiNodeDashboard(
@@ -156,4 +180,15 @@ public sealed record MultiNodeDashboard(
     bool CanOperateGlobally,
     IReadOnlyList<ManagedNodeSnapshot> Nodes,
     NodeSecuritySnapshot Security,
-    IReadOnlyList<NodeSecurityEvent> RecentEvents);
+    IReadOnlyList<NodeSecurityEvent> RecentEvents,
+    NodeAggregationCoverage? Coverage = null,
+    NodeTelemetryAggregate? Telemetry = null,
+    int HealthyActiveNodes = 0);
+
+public sealed record NodeAggregationCoverage(
+    int ExpectedNodes,
+    int IncludedNodes,
+    bool Complete,
+    IReadOnlyList<string> MissingNodes,
+    DateTimeOffset? OldestSnapshotAt,
+    bool StatisticsPeriodsKnown);

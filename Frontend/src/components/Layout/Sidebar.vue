@@ -57,7 +57,6 @@ const staticMenuItems: MenuItem[] = [
       { path: '/config', name: '配置文件' },
       { path: '/config-overview', name: '配置概览' },
       { path: '/cluster-config', name: '配置集群' },
-      { path: '/multi-node', name: '节点管理' },
       { path: '/route-config', name: '配置路由' },
       { path: '/fileserver-config', name: '文件服务' },
       { path: '/simpleres-config', name: '简单响应' },
@@ -65,6 +64,7 @@ const staticMenuItems: MenuItem[] = [
       { path: '/error-templates', name: '错误模板' },
     ]
   },
+  { path: '/cluster-management', name: '群集管理', icon: '◫' },
   {
     name: '系统设置', icon: '⚙️', children: [
       { path: '/general-settings', name: '通用设置' },
@@ -104,7 +104,7 @@ watch(pluginMenus, menus => {
 
 const isActive = (item: MenuItem) => {
   if (item.path) {
-    return route.path === item.path
+    return route.path === item.path || Boolean(route.name && router.resolve(item.path).name === route.name)
   }
   return false
 }

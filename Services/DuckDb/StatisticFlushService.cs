@@ -39,7 +39,7 @@ public class StatisticFlushService : BackgroundService
             await _db.InitializeSchemaAsync();
 
             // 等待应用完全启动
-            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            if (!await LyWaf.Services.Lifecycle.ShutdownWait.DelayAsync(TimeSpan.FromSeconds(5), stoppingToken)) return;
 
             while (!stoppingToken.IsCancellationRequested)
             {
@@ -53,16 +53,10 @@ public class StatisticFlushService : BackgroundService
                     _logger.Error(ex, "DuckDB 刷写周期失败");
                 }
 
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(_options.FlushIntervalSeconds), stoppingToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
+                await LyWaf.Services.Lifecycle.ShutdownWait.DelayAsync(TimeSpan.FromSeconds(_options.FlushIntervalSeconds), stoppingToken);
             }
         }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
         catch (Exception ex)
         {
             _logger.Error(ex, "DuckDB 后台刷写服务启动失败");

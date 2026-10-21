@@ -28,4 +28,9 @@ public interface IRuntimeStateStore
     IReadOnlyList<(string Key, T Value)> GetValues<T>(string domain);
     /// <summary>返回当前存储和后台队列状态。</summary>
     RuntimeStateStatus GetStatus();
+    /// <summary>Read the durable release fence for a scoped CC policy/subject.</summary>
+    CcPolicyGeneration GetCcPolicyGeneration(string policyKey);
+    /// <summary>Durably advance the CC fence; an expected generation makes captcha completion conditional.</summary>
+    CcPolicyGeneration AdvanceCcPolicyGeneration(string policyKey, CcPolicyGeneration? expected = null);
+    RuntimeStateMutation IssueCcCaptchaRelease(string policyKey, CcPolicyGeneration expected, string releaseId);
 }

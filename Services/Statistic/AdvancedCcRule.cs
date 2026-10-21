@@ -5,6 +5,14 @@ namespace LyWaf.Services.Statistic;
 /// </summary>
 public class AdvancedCcRule
 {
+    public CcScope Scope { get; set; } = CcScope.SiteGroup;
+    public CcSubjectKind Subject { get; set; } = CcSubjectKind.Ip;
+    public string SubjectAuthenticationType { get; set; } = "";
+    public string SubjectIssuer { get; set; } = "";
+    public string[] ExpectedNodes { get; set; } = [];
+    public bool UseManagedMembership { get; set; }
+    public bool RequireCompleteCoverage { get; set; }
+    public string ProtectionGroup { get; set; } = "";
     /// <summary>
     /// 规则 ID
     /// </summary>
@@ -63,6 +71,9 @@ public class AdvancedCcRule
     /// </summary>
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
+
+public enum CcScope { SiteGroup, Node, Cluster }
+public enum CcSubjectKind { Ip, Account, ApiCredential }
 
 /// <summary>
 /// CC 规则类型

@@ -75,8 +75,10 @@ public enum PluginPermission
     ConsoleApi = 4,
     /// <summary>Allows reading configuration values classified as sensitive.</summary>
     SensitiveConfiguration = 8,
+    /// <summary>Allows declared node messages through the host's group-scoped communication service.</summary>
+    NodeMessaging = 16,
     /// <summary>Represents every currently defined permission.</summary>
-    All = Network | DataDirectory | ConsoleApi | SensitiveConfiguration
+    All = Network | DataDirectory | ConsoleApi | SensitiveConfiguration | NodeMessaging
 }
 
 /// <summary>
@@ -118,6 +120,8 @@ public class PluginMetadata
 
     /// <summary>Gets the privileged capabilities required before the plugin can be enabled.</summary>
     public PluginPermission RequestedPermissions { get; init; } = PluginPermission.None;
+    /// <summary>Exact message/schema/group capabilities; host policy must also grant them.</summary>
+    public IReadOnlyList<PluginNodeMessageCapability> NodeMessages { get; init; } = [];
 
     /// <summary>
     /// 插件默认配置选项实例

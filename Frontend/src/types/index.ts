@@ -109,6 +109,14 @@ export interface CcCondition {
 
 // 高级 CC 规则
 export interface AdvancedCcRule {
+  scope?: 'SiteGroup' | 'Node' | 'Cluster'
+  subject?: 'Ip' | 'Account' | 'ApiCredential'
+  subjectAuthenticationType?: string
+  subjectIssuer?: string
+  expectedNodes?: string[]
+  useManagedMembership?: boolean
+  requireCompleteCoverage?: boolean
+  protectionGroup?: string
   groupOperator?: 'And' | 'Or'
   conditionGroups?: Array<{ operator: 'And' | 'Or'; conditions: CcCondition[] }>
   id: string
@@ -292,10 +300,11 @@ export interface NodeSecuritySnapshot {
   crawlerDetectCount: number
   geoBlockCount: number
   rateLimitCount: number
-  uniqueAttackIps: number
+  uniqueAttackIps: number | null
 }
 
 export interface NodeSecurityEvent {
+  bootId?: string | null
   eventId: string
   sourceIp: string
   application: string
@@ -306,6 +315,11 @@ export interface NodeSecurityEvent {
 }
 
 export interface NodeDashboardSnapshot {
+  bootId?: string | null
+  bootSource?: string | null
+  diagnostics?: NodeLocalDiagnostics | null
+  telemetry?: NodeTelemetryWindow[] | null
+  statisticsStartedAt?: string | null
   nodeId: string
   applicationVersion: string
   configVersionId: string | null
@@ -319,6 +333,13 @@ export interface NodeDashboardSnapshot {
 }
 
 export interface ManagedNodeSnapshot {
+  diagnostics?: NodePeerDiagnostics | null
+  admissionState?: string
+  admissionEnabled?: boolean
+  healthyActive?: boolean
+  lifecycle?: string
+  consecutiveFailures?: number
+  firstAttemptAt?: string | null
   nodeId: string
   endpoint: string
   tags: string[]
@@ -328,16 +349,110 @@ export interface ManagedNodeSnapshot {
   clockSkewWarning: boolean
   lastSeenAt: string | null
   error: string | null
+  errorCode?: string | null
+  remoteTraceId?: string | null
   canOperate: boolean
   snapshot: NodeDashboardSnapshot | null
 }
 
 export interface MultiNodeDashboard {
+  telemetry?: NodeTelemetryAggregate | null
+  healthyActiveNodes?: number
+  coverage?: {
+    expectedNodes: number
+    includedNodes: number
+    complete: boolean
+    missingNodes: string[]
+    oldestSnapshotAt: string | null
+    statisticsPeriodsKnown: boolean
+  }
   generatedAt: string
   canOperateGlobally: boolean
   nodes: ManagedNodeSnapshot[]
   security: NodeSecuritySnapshot
   recentEvents: NodeSecurityEvent[]
+}
+
+export interface NodeTelemetryWindow {
+  bootId: string
+  schema: string
+  start: string
+  end: string
+  watermark: string
+  complete: boolean
+  requests: number
+  errors: number
+  intercepts: number
+  boundsMilliseconds: number[]
+  counts: number[]
+}
+
+export interface NodeTelemetryAggregate {
+  sourceGenerations?: Record<string, string>
+  visitors?: NodeSetMetric | null
+  logicalBans?: NodeSetMetric | null
+  schema: string
+  start: string
+  end: string
+  expectedSetVersion: string
+  status: 'Complete' | 'Partial'
+  includedNodes: string[]
+  missingNodes: Record<string, string>
+  watermark: string | null
+  requests: number
+  errors: number
+  intercepts: number
+  errorRate: number | null
+  interceptRate: number | null
+  p95Milliseconds: number | null
+  p99Milliseconds: number | null
+  quantilesApproximate: boolean
+  quantileMethod: string
+  boundsMilliseconds: number[]
+  counts: number[]
+}
+
+export interface NodeSetMetric {
+  sourceGenerations?: Record<string, string>
+  status: 'Complete' | 'Partial'
+  count: number | null
+  observedCount: number
+  includedNodes: string[]
+  missingNodes: Record<string, string>
+  method: string
+  final: boolean
+  observedAt?: string | null
+}
+
+export interface NodeLocalDiagnostics {
+  communication: {
+    startedAt: string
+    capturedAt: string
+    scope: string
+    series: { operation: string; direction: string; requests: number; failed: number; rejected: number;
+      requestBytes: number; responseBytes: number; unknownSizes: number; totalMilliseconds: number; durationCounts: number[] }[]
+    events: Record<string, number>
+    durationBoundsMilliseconds: number[]
+    replicationAcknowledgement?: { samples: number; totalMilliseconds: number; maxMilliseconds: number; clockSkewSamples: number; semantics: string } | null
+  }
+  replicationQueue: { entries: number; bytes: number; coalesced: number; capacityDropped: number;
+    oversizeDropped: number; closedDropped: number; contentionBuffered: number; authorizationRejected: number } | null
+}
+
+export interface NodePeerDiagnostics {
+  bootId: string | null
+  lastHandshakeAt: string | null
+  reconciliationState: string | null
+  expectedSourceVersion: string | null
+  acknowledgedAppliedVersion: string | null
+  actualAppliedVersion: string | null
+  actualFileVersion: string | null
+  pendingCommands: number | null
+  unknownCommands: number | null
+  retryQueries: number | null
+  oldestPendingMilliseconds: number | null
+  error: string | null
+  capturedAt: string
 }
 
 export interface DistributionTargetState {

@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using LyWaf.Services.NodeCommunication;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -7,22 +7,29 @@ using Microsoft.Extensions.Options;
 namespace LyWaf.Services.RuntimeState;
 
 /// <summary>校验运行状态节点复制请求的 HMAC、时间戳和一次性 nonce。</summary>
-public sealed class RuntimeStateAuthentication(IOptionsMonitor<RuntimeStateOptions> options)
+public sealed class RuntimeStateAuthentication(IOptionsMonitor<RuntimeStateOptions> options,
+    IOptionsMonitor<NodeCommunicationOptions>? communication = null)
 {
-    private readonly ConcurrentDictionary<string, long> _nonces = new(StringComparer.Ordinal);
-    private readonly object _nonceGate = new();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public async Task<(RuntimeStateMutation? Value, string? Error)> ReadAndVerifyAsync(
         HttpContext context, CancellationToken cancellationToken)
     {
         var current = options.CurrentValue;
+        if (communication?.CurrentValue is { Enabled: true, AllowLegacyProtocol: false })
+            return (null, "Legacy node protocol is disabled");
+        // Mixed admission requires v2; do not let the legacy/shared-key path bypass restricted peers.
+        if (communication?.CurrentValue is { Enabled: true } protocol
+            && protocol.Peers.Values.Any(peer => !NodeAdmissionPolicy.Allows(peer, "runtime.merge")))
+            return (null, "runtime_peer_forbidden");
         if (!current.Enabled) return (null, "运行状态节点复制未启用");
         var sender = context.Request.Headers["X-LyWaf-Node"].ToString();
         if (sender.Length is < 1 or > 128) return (null, "节点标识无效");
         foreach (var header in new[] { "X-LyWaf-Node", "X-LyWaf-Timestamp", "X-LyWaf-Nonce", "X-LyWaf-Signature" })
             if (context.Request.Headers[header].Count != 1) return (null, "签名头必须提供且只能出现一次");
-        var secret = current.Peers.TryGetValue(sender, out var peer) && !string.IsNullOrWhiteSpace(peer.Secret)
+        if (!current.Peers.TryGetValue(sender, out var peer) || !peer.Enabled)
+            return (null, "节点未授权或已禁用");
+        var secret = !string.IsNullOrWhiteSpace(peer.Secret)
             ? peer.Secret : current.SharedSecret;
         if (string.IsNullOrWhiteSpace(sender) || string.IsNullOrWhiteSpace(secret)) return (null, "节点或共享密钥未配置");
         if (!long.TryParse(context.Request.Headers["X-LyWaf-Timestamp"], out var timestamp)) return (null, "缺少有效时间戳");
@@ -47,13 +54,17 @@ public sealed class RuntimeStateAuthentication(IOptionsMonitor<RuntimeStateOptio
         var expected = Compute(secret, sender, timestamp, nonce, body);
         if (!CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(expected), Encoding.ASCII.GetBytes(signature.ToLowerInvariant())))
             return (null, "签名无效");
-        lock (_nonceGate)
+        var claim = PersistentReplayGuard.Claim(Path.Combine(current.StateDirectory, "replay"),
+            JsonSerializer.Serialize(new[] { sender, nonce }), now);
+        if (claim == ReplayClaim.Replay) return (null, "nonce 已使用");
+        if (claim == ReplayClaim.CapacityExceeded) return (null, "签名校验容量已满，请稍后重试");
+        if (claim != ReplayClaim.Accepted) return (null, "节点防重放存储不可用");
+        try
         {
-            foreach (var stale in _nonces.Where(x => now - x.Value > skew * 2)) _nonces.TryRemove(stale.Key, out _);
-            if (_nonces.Count >= 10000) return (null, "签名校验容量已满，请稍后重试");
-            if (!_nonces.TryAdd(sender + ":" + nonce, timestamp)) return (null, "nonce 已使用");
+            var mutation = JsonSerializer.Deserialize<RuntimeStateMutation>(body, JsonOptions);
+            var error = RuntimeStateReplicationAuthorization.AuthorizeReceive(current, sender, [mutation!]);
+            return error is null ? (mutation, null) : (null, error);
         }
-        try { return (JsonSerializer.Deserialize<RuntimeStateMutation>(body, JsonOptions), null); }
         catch (JsonException ex) { return (null, $"JSON 无效: {ex.Message}"); }
     }
 

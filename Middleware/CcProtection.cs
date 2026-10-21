@@ -27,11 +27,11 @@ public class CcProtectionMiddleware(RequestDelegate next, ICcRuleChecker ccRuleC
             if (result.Action != CcAction.LogOnly)
             {
                 await _ccRuleChecker.ExecuteAction(context, result, clientIp);
-                return;
+                if (result.IsTriggered) return;
             }
             
             // LogOnly 模式下继续处理请求，只记录日志
-            await _ccRuleChecker.ExecuteAction(context, result, clientIp);
+            if (result.IsTriggered) await _ccRuleChecker.ExecuteAction(context, result, clientIp);
         }
         
         await _next(context);
@@ -56,7 +56,7 @@ public class CcResponseMonitorMiddleware(RequestDelegate next, ICcRuleChecker cc
         if (statusCode >= 400)
         {
             var clientIp = RequestUtil.GetClientIp(context.Request);
-            _ccRuleChecker.RecordErrorEvent(clientIp, statusCode);
+            _ccRuleChecker.RecordErrorEvent(context, clientIp, statusCode);
         }
     }
 }

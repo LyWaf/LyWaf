@@ -1,12 +1,17 @@
 <script setup lang="ts">
 import { locale } from '@/i18n'
 import { t } from '@/i18n'
+import { nodeErrorText, nodeLifecycleText, nodeAdmissionText } from '@/i18n/node-error'
+import { isHealthyActive } from '@/utils/node-health'
+import NodeTelemetrySummary from '@/components/nodes/NodeTelemetrySummary.vue'
+import NodeCommunicationSummary from '@/components/nodes/NodeCommunicationSummary.vue'
+import NodeSetupPanel from '@/components/nodes/NodeSetupPanel.vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { configFileApi, distributionApi, type ConfigVersionInfo } from '@/api'
 import type { ConfigurationDeployment, MultiNodeDashboard } from '@/types'
 import { useToast } from '@/composables/useToast'
 
-type View = 'nodes' | 'upstreams' | 'events' | 'deployments'
+type View = 'nodes' | 'upstreams' | 'events' | 'deployments' | 'communication'
 
 const dashboard = ref<MultiNodeDashboard | null>(null)
 const deployments = ref<ConfigurationDeployment[]>([])
@@ -15,6 +20,7 @@ const view = ref<View>('nodes')
 const loading = ref(false)
 const actionId = ref('')
 const error = ref('')
+const setupMode = ref<string | null>(null)
 const showCreate = ref(false)
 const versionId = ref('')
 const selectedNodes = ref<string[]>([])
@@ -25,7 +31,7 @@ const pauseAfterEachBatch = ref(true)
 const { showError, showSuccess } = useToast()
 let timer: number | undefined
 
-const onlineCount = computed(() => dashboard.value?.nodes.filter(node => node.online).length ?? 0)
+const healthyActiveCount = computed(() => dashboard.value?.nodes.filter(isHealthyActive).length ?? 0)
 const unhealthyCount = computed(() => dashboard.value?.nodes.flatMap(node => node.snapshot?.upstreams ?? [])
   .filter(item => item.activeHealth === 'Unhealthy' || item.passiveHealth === 'Unhealthy').length ?? 0)
 const upstreams = computed(() => dashboard.value?.nodes.flatMap(node =>
@@ -35,19 +41,32 @@ const dashboardNodes = computed(() => dashboard.value?.nodes ?? [])
 const canOperateGlobally = computed(() => dashboard.value?.canOperateGlobally ?? false)
 
 const load = async (silent = false) => {
+  if (setupMode.value !== 'Controller') return
   if (!silent) loading.value = true
   try {
     const response = await distributionApi.getDashboard()
+    if (setupMode.value !== 'Controller') return
     if (!response.success || !response.dashboard) throw new Error(response.message || t('page.cb92a7006b88'))
     dashboard.value = response.dashboard
     error.value = ''
     const deploymentResponse = await distributionApi.getDeployments()
-    if (deploymentResponse.success) deployments.value = deploymentResponse.deployments
+    if (setupMode.value === 'Controller' && deploymentResponse.success) deployments.value = deploymentResponse.deployments
   } catch (e: any) {
-    error.value = e?.message || t('page.67c7507b61b3')
+    if (setupMode.value === 'Controller') error.value = e?.message || t('page.67c7507b61b3')
   } finally {
     loading.value = false
   }
+}
+
+const handleSetupMode = (mode: string) => {
+  const changed = setupMode.value !== mode
+  setupMode.value = mode
+  if (mode !== 'Controller') {
+    dashboard.value = null
+    deployments.value = []
+    error.value = ''
+    showCreate.value = false
+  } else if (changed) void load()
 }
 
 const openCreate = async () => {
@@ -98,7 +117,6 @@ const nodeCanOperateTask = (task: ConfigurationDeployment) => task.nodeOrder.eve
   dashboard.value?.nodes.find(node => node.nodeId === id)?.canOperate)
 
 onMounted(() => {
-  load()
   timer = window.setInterval(() => load(true), 15000)
 })
 onBeforeUnmount(() => timer && window.clearInterval(timer))
@@ -108,10 +126,10 @@ onBeforeUnmount(() => timer && window.clearInterval(timer))
   <div class="space-y-5">
     <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
       <div>
-        <h1 class="text-2xl font-semibold text-gray-100">{{ t('nav.nodes') }}</h1>
+        <h1 class="text-2xl font-semibold text-gray-100">{{ t('nav.clusterManagement') }}</h1>
         <p class="text-sm text-gray-500 mt-1">{{ t('page.09bf2e0a6d90') }}</p>
       </div>
-      <div class="flex flex-wrap items-center gap-2 sm:justify-end">
+      <div v-if="setupMode === 'Controller'" class="flex flex-wrap items-center gap-2 sm:justify-end">
         <button class="btn btn-secondary" :disabled="loading" :title="t('page.b00509deaace')" @click="load()">
           {{ loading ? t('ui.refreshing') : t('common.refresh') }}
         </button>
@@ -121,23 +139,34 @@ onBeforeUnmount(() => timer && window.clearInterval(timer))
       </div>
     </div>
 
-    <div v-if="error" class="border border-red-800 bg-red-950/30 px-4 py-3 text-sm text-red-300 rounded">
+    <NodeSetupPanel @mode="handleSetupMode" />
+
+    <div v-if="error && setupMode === 'Controller'" class="border border-red-800 bg-red-950/30 px-4 py-3 text-sm text-red-300 rounded">
       {{ error }}
     </div>
 
     <div v-if="dashboard" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 border border-dark-border rounded overflow-hidden sm:divide-x divide-dark-border">
-      <div class="bg-dark-card px-4 py-3"><div class="text-xs text-gray-500">{{ t('page.1ef941b4e346') }}</div><div class="text-xl text-gray-100 mt-1">{{ onlineCount }} / {{ dashboard.nodes.length }}</div></div>
+      <div class="bg-dark-card px-4 py-3"><div class="text-xs text-gray-500">{{ t('node.admission.healthyCount') }}</div><div class="text-xl text-gray-100 mt-1">{{ healthyActiveCount }} / {{ dashboard.nodes.length }}</div></div>
       <div class="bg-dark-card px-4 py-3"><div class="text-xs text-gray-500">{{ t('page.08d417edefcd') }}</div><div class="text-xl mt-1" :class="unhealthyCount ? 'text-red-400' : 'text-emerald-400'">{{ unhealthyCount }}</div></div>
       <div class="bg-dark-card px-4 py-3"><div class="text-xs text-gray-500">{{ t('page.16287d49c55b') }}</div><div class="text-xl text-gray-100 mt-1">{{ dashboard.security.totalInterceptCount.toLocaleString(locale) }}</div></div>
-      <div class="bg-dark-card px-4 py-3"><div class="text-xs text-gray-500">{{ t('page.74912f87becc') }}</div><div class="text-xl text-gray-100 mt-1">{{ dashboard.security.uniqueAttackIps.toLocaleString(locale) }}</div></div>
+      <div class="bg-dark-card px-4 py-3"><div class="text-xs text-gray-500">{{ t('page.74912f87becc') }}</div><div class="text-xl text-gray-100 mt-1">{{ dashboard.security.uniqueAttackIps?.toLocaleString(locale) ?? '-' }}</div></div>
     </div>
 
-    <div class="flex items-center border-b border-dark-border overflow-x-auto">
-      <button v-for="item in ([['nodes',t('page.2410d860f093')],['upstreams',t('page.cf56992d35f9')],['events',t('page.971f019596ec')],['deployments',t('page.c8444b75c6c4')]] as const)"
+    <NodeTelemetrySummary v-if="dashboard" :telemetry="dashboard.telemetry" />
+
+    <div v-if="dashboard?.coverage" class="text-sm" :class="dashboard.coverage.complete ? 'text-gray-500' : 'text-amber-400'" role="status">
+      {{ t(dashboard.coverage.complete ? 'nodes.coverage.complete' : 'nodes.coverage.partial', { included: dashboard.coverage.includedNodes, expected: dashboard.coverage.expectedNodes }) }}
+      <span v-if="dashboard.coverage.missingNodes.length"> · {{ dashboard.coverage.missingNodes.join(', ') }}</span>
+    </div>
+
+    <div v-if="setupMode === 'Controller'" class="flex items-center border-b border-dark-border overflow-x-auto">
+      <button v-for="item in ([['nodes',t('page.2410d860f093')],['communication',t('nodes.communication.title')],['upstreams',t('page.cf56992d35f9')],['events',t('page.971f019596ec')],['deployments',t('page.c8444b75c6c4')]] as const)"
         :key="item[0]" class="shrink-0 px-4 py-2.5 text-sm border-b-2 transition-colors"
         :class="view === item[0] ? 'text-primary-400 border-primary-500' : 'text-gray-500 border-transparent hover:text-gray-300'"
         @click="view = item[0]">{{ item[1] }}</button>
     </div>
+
+    <NodeCommunicationSummary v-if="dashboard && view === 'communication'" :nodes="dashboard.nodes" />
 
     <div v-if="dashboard && view === 'nodes'" class="border border-dark-border rounded overflow-x-auto">
       <table class="w-full min-w-[900px] text-sm">
@@ -145,7 +174,11 @@ onBeforeUnmount(() => timer && window.clearInterval(timer))
         <tbody class="divide-y divide-dark-border">
           <tr v-for="node in dashboard.nodes" :key="node.nodeId" class="bg-dark-bg-secondary">
             <td class="px-4 py-3"><div class="font-mono text-gray-200">{{ node.nodeId }}</div><div class="text-xs text-gray-600 mt-1">{{ node.endpoint }}</div><div class="flex gap-1 mt-1"><span v-for="tag in node.tags" :key="tag" class="text-[11px] px-1.5 py-0.5 bg-gray-800 text-gray-400 rounded">{{ tag }}</span></div></td>
-            <td class="px-4 py-3"><span class="px-2 py-1 text-xs rounded" :class="node.online ? 'bg-emerald-900/50 text-emerald-400' : 'bg-red-950 text-red-400'">{{ node.online ? t('page.b9086662b1df') : node.stale ? t('page.a00963a24f1b') : t('page.be1b4f3c6c1c') }}</span><div v-if="node.error" class="text-xs text-red-400 mt-1 max-w-56 truncate" :title="node.error">{{ node.error }}</div></td>
+            <td class="px-4 py-3">
+              <div class="text-xs mb-2" :class="isHealthyActive(node) ? 'text-emerald-400' : 'text-amber-400'">{{ t('node.admission.label') }}: {{ nodeAdmissionText(node) }}</div>
+              <span class="px-2 py-1 text-xs rounded" :class="isHealthyActive(node) ? 'bg-emerald-900/50 text-emerald-400' : node.online ? 'bg-gray-800 text-gray-400' : 'bg-red-950 text-red-400'">{{ t('node.admission.observation') }}: {{ nodeLifecycleText(node) }}</span>
+              <div v-if="node.consecutiveFailures" class="text-xs text-amber-400 mt-1">{{ t('node.lifecycle.failures', { count: node.consecutiveFailures }) }}</div><div v-if="node.errorCode || node.error" class="text-xs text-red-400 mt-1 max-w-56 truncate" :title="nodeErrorText(node)">{{ nodeErrorText(node) }}</div><div v-if="node.remoteTraceId" class="text-xs text-gray-500 mt-1 font-mono break-all">{{ node.remoteTraceId }}</div>
+            </td>
             <td class="px-4 py-3 font-mono text-xs text-gray-400"><div>{{ node.snapshot?.applicationVersion || '-' }}</div><div class="mt-1">{{ node.snapshot?.configVersionId || t('page.7dfdf51d2277') }}</div></td>
             <td class="px-4 py-3 text-gray-400"><div>{{ node.snapshot?.state || '-' }}</div><div class="text-xs text-gray-600 mt-1">{{ formatUptime(node.snapshot?.uptimeSeconds) }} · {{ node.snapshot?.runtimeStateEntries || 0 }} {{ t('settings.status') }}</div></td>
             <td class="px-4 py-3" :class="node.clockSkewWarning ? 'text-amber-400' : 'text-gray-400'">{{ node.clockSkewSeconds == null ? '-' : t('page.67d54f9c74b7', { p0: node.clockSkewSeconds.toFixed(1) }) }}<div v-if="node.clockSkewWarning" class="text-xs mt-1">{{ t('page.a504a2e99cdb') }}</div></td>
@@ -177,7 +210,7 @@ onBeforeUnmount(() => timer && window.clearInterval(timer))
         </RouterLink>
       </div>
       <table class="w-full text-sm"><thead class="bg-dark-card text-gray-500"><tr><th class="px-4 py-3 text-left">{{ t('ui.task') }}</th><th class="px-4 py-3 text-left">{{ t('page.feb7d97d77a4') }}</th><th class="px-4 py-3 text-left">{{ t('page.99f94d299217') }}</th><th class="px-4 py-3 text-left">{{ t('settings.status') }}</th><th class="px-4 py-3 text-right">{{ t('settings.actions') }}</th></tr></thead>
-        <tbody class="divide-y divide-dark-border"><tr v-for="task in deployments" :key="task.id" class="bg-dark-bg-secondary"><td class="px-4 py-3"><div class="font-mono text-xs text-gray-300">{{ task.id }}</div><div class="text-xs text-gray-600 mt-1">{{ formatTime(task.createdAt) }}</div></td><td class="px-4 py-3 font-mono text-xs text-gray-400">{{ task.versionId }}</td><td class="px-4 py-3"><div class="flex flex-wrap gap-1"><span v-for="target in Object.values(task.targets)" :key="target.nodeId" class="px-1.5 py-0.5 rounded text-xs bg-gray-800 text-gray-400" :title="target.error || ''">{{ target.nodeId }}: {{ target.state }}</span></div></td><td class="px-4 py-3 text-gray-300">{{ task.state }}</td><td class="px-4 py-3"><div class="flex justify-end gap-3"><button v-if="task.state === 'Running' || task.state === 'Pausing'" class="text-amber-400 disabled:text-gray-700" :disabled="!nodeCanOperateTask(task) || !!actionId" @click="runCommand(task, 'pause')">{{ t('page.8d12fc0d4eb2') }}</button><button v-if="task.state === 'Paused' || task.state === 'Pausing'" class="text-primary-400 disabled:text-gray-700" :disabled="!nodeCanOperateTask(task) || !!actionId" @click="runCommand(task, 'resume')">{{ t('page.7c9691192f1b') }}</button><button class="text-red-400 disabled:text-gray-700" :disabled="!nodeCanOperateTask(task) || !!actionId" @click="runCommand(task, 'rollback')">{{ t('plugins.rollback') }}</button></div></td></tr><tr v-if="!deployments.length"><td colspan="5" class="px-4 py-10 text-center text-gray-600">{{ t('page.44da6b1d4b94') }}</td></tr></tbody>
+<tbody class="divide-y divide-dark-border"><tr v-for="task in deployments" :key="task.id" class="bg-dark-bg-secondary"><td class="px-4 py-3"><div class="font-mono text-xs text-gray-300">{{ task.id }}</div><div class="text-xs text-gray-600 mt-1">{{ formatTime(task.createdAt) }}</div></td><td class="px-4 py-3 font-mono text-xs text-gray-400">{{ task.versionId }}</td><td class="px-4 py-3"><div class="flex flex-wrap gap-1"><span v-for="target in Object.values(task.targets)" :key="target.nodeId" class="px-1.5 py-0.5 rounded text-xs bg-gray-800 text-gray-400" :title="nodeErrorText(target)">{{ target.nodeId }}: {{ target.state }}</span></div></td><td class="px-4 py-3 text-gray-300">{{ task.state }}</td><td class="px-4 py-3"><div class="flex justify-end gap-3"><button v-if="task.state === 'Running' || task.state === 'Pausing'" class="text-amber-400 disabled:text-gray-700" :disabled="!nodeCanOperateTask(task) || !!actionId" @click="runCommand(task, 'pause')">{{ t('page.8d12fc0d4eb2') }}</button><button v-if="task.state === 'Paused' || task.state === 'Pausing'" class="text-primary-400 disabled:text-gray-700" :disabled="!nodeCanOperateTask(task) || !!actionId" @click="runCommand(task, 'resume')">{{ t('page.7c9691192f1b') }}</button><button class="text-red-400 disabled:text-gray-700" :disabled="!nodeCanOperateTask(task) || !!actionId" @click="runCommand(task, 'rollback')">{{ t('plugins.rollback') }}</button></div></td></tr><tr v-if="!deployments.length"><td colspan="5" class="px-4 py-10 text-center text-gray-600">{{ t('page.44da6b1d4b94') }}</td></tr></tbody>
       </table>
     </div>
 

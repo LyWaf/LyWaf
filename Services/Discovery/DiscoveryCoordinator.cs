@@ -18,21 +18,25 @@ public sealed class DiscoveryCoordinator(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            var current = options.CurrentValue;
-            if (current.Enabled)
+            while (!stoppingToken.IsCancellationRequested)
             {
-                _wasEnabled = true;
-                await PollAsync(current, stoppingToken);
+                var current = options.CurrentValue;
+                if (current.Enabled)
+                {
+                    _wasEnabled = true;
+                    await PollAsync(current, stoppingToken);
+                }
+                else if (_wasEnabled)
+                {
+                    _wasEnabled = false;
+                    if (registry.Clear()) reloadSignal.Pulse("disabled-" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                }
+                await LyWaf.Services.Lifecycle.ShutdownWait.DelayAsync(TimeSpan.FromSeconds(1), stoppingToken);
             }
-            else if (_wasEnabled)
-            {
-                _wasEnabled = false;
-                if (registry.Clear()) reloadSignal.Pulse("disabled-" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            }
-            await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
         }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
     }
 
     internal async Task PollAsync(ServiceDiscoveryOptions current, CancellationToken cancellationToken)

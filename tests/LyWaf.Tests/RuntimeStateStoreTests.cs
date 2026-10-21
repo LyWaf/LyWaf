@@ -9,6 +9,66 @@ namespace LyWaf.Tests;
 public sealed class RuntimeStateStoreTests
 {
     [Fact]
+    public void RepairPagesCoverEveryEntryIncludingTombstonesWithoutRepeatingPrefix()
+    {
+        using var scope = new StoreScope("node-a");
+        for (var i = 0; i < 257; i++) scope.Store.Set("repair", i.ToString("D4"), i);
+        scope.Store.Remove("repair", "0010");
+        string? cursor = null;
+        var received = new List<RuntimeStateMutation>();
+        do
+        {
+            var page = scope.Store.ExportPage(cursor, 20);
+            Assert.InRange(page.Items.Count, 1, 20);
+            received.AddRange(page.Items);
+            cursor = page.NextCursor;
+        } while (cursor is not null);
+        Assert.Equal(257, received.Count);
+        Assert.Equal(257, received.Select(x => x.Key).Distinct().Count());
+        Assert.True(Assert.Single(received, x => x.Key == "0010").Deleted);
+    }
+
+    [Fact]
+    public void RepairCursorReachesEndAfterDeletionAndNewEarlierKeysAppearNextCycle()
+    {
+        using var scope = new StoreScope("node-a");
+        scope.Store.Set("repair", "b", 1);
+        scope.Store.Set("repair", "c", 1);
+        var first = scope.Store.ExportPage(null, 1);
+        Assert.NotNull(first.NextCursor);
+        scope.Store.Set("repair", "a", 1);
+        var second = scope.Store.ExportPage(first.NextCursor, 1);
+        Assert.Equal("c", Assert.Single(second.Items).Key);
+        Assert.Null(second.NextCursor);
+        Assert.Equal("a", Assert.Single(scope.Store.ExportPage(null, 1).Items).Key);
+    }
+
+    [Fact]
+    public void OversizedMergedCounterIsRejectedWithoutChangingExistingState()
+    {
+        using var store = new RuntimeStateStore(new StaticOptionsMonitor<RuntimeStateOptions>(new()
+        { NodeId = "local", StateDirectory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")), MaxValueBytes = 1024 }));
+        RuntimeStateMutation Mutation(char prefix, long sequence) => new("cc", "key", "peer", sequence,
+            DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(1), false, null,
+            new Dictionary<string, long> { [new string(prefix, 450) + "1"] = 1, [new string(prefix, 450) + "2"] = 1 });
+        Assert.True(store.Merge(Mutation('a', 1)));
+        Assert.Throws<InvalidOperationException>(() => store.Merge(Mutation('b', 2)));
+        Assert.Equal(2, Assert.Single(store.GetSnapshots()).CounterValue);
+    }
+
+    [Fact]
+    public void CounterSumOverflowIsRejectedBeforePublishingState()
+    {
+        using var scope = new StoreScope("node-a");
+        var first = new RuntimeStateMutation("cc", "key", "peer", 1, DateTimeOffset.UtcNow,
+            null, false, null, new Dictionary<string, long> { ["a"] = long.MaxValue });
+        Assert.True(scope.Store.Merge(first));
+        Assert.Throws<InvalidOperationException>(() => scope.Store.Merge(first with
+        { Sequence = 2, CounterComponents = new Dictionary<string, long> { ["b"] = 1 } }));
+        Assert.Equal(long.MaxValue, Assert.Single(scope.Store.GetSnapshots()).CounterValue);
+    }
+
+    [Fact]
     public void LastWriterWinsUsesSequenceThenNodeId()
     {
         using var scope = new StoreScope("node-a");
@@ -37,6 +97,63 @@ public sealed class RuntimeStateStoreTests
             new Dictionary<string, long> { ["node-b"] = 2 }));
 
         Assert.Equal(4, scope.Store.GetSnapshots("cc").Single().CounterValue);
+    }
+
+    [Fact]
+    public void RestartWithoutJournalDoesNotLoseNewIncrementsWhenOldSnapshotArrives()
+    {
+        using var original = new StoreScope("node-a");
+        using var restarted = new StoreScope("node-a");
+        using var peer = new StoreScope("node-b");
+        var start = DateTimeOffset.UtcNow;
+        var length = TimeSpan.FromMinutes(5);
+        original.Store.IncrementWindow("cc", "rule:ip", start, length, 40);
+        var oldSnapshot = Assert.Single(original.Store.ExportMutations());
+        peer.Store.Merge(oldSnapshot);
+        peer.Store.IncrementWindow("cc", "rule:ip", start, length, 35);
+
+        restarted.Store.IncrementWindow("cc", "rule:ip", start, length, 30);
+        var newSnapshot = Assert.Single(restarted.Store.ExportMutations());
+        peer.Store.Merge(newSnapshot);
+        peer.Store.Merge(oldSnapshot);
+        peer.Store.Merge(newSnapshot);
+        restarted.Store.Merge(Assert.Single(peer.Store.ExportMutations()));
+        restarted.Store.IncrementWindow("cc", "rule:ip", start, length, 5);
+        peer.Store.Merge(Assert.Single(restarted.Store.ExportMutations()));
+
+        Assert.Equal(110, peer.Store.GetWindowValue("cc", "rule:ip", start));
+        Assert.Equal(110, restarted.Store.GetWindowValue("cc", "rule:ip", start));
+        Assert.Equal(3, Assert.Single(peer.Store.ExportMutations()).CounterComponents!.Count);
+    }
+
+    [Fact]
+    public async Task RecoveredCounterUsesNewEpochWithoutCountingRecoveredValuesTwice()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "lywaf-epoch-" + Guid.NewGuid().ToString("N"));
+        var options = new StaticOptionsMonitor<RuntimeStateOptions>(new() { NodeId = "node-a", StateDirectory = directory });
+        var start = DateTimeOffset.UtcNow;
+        try
+        {
+            using (var original = new RuntimeStateStore(options))
+            {
+                await original.StartAsync(default);
+                original.IncrementWindow("cc", "rule:ip", start, TimeSpan.FromMinutes(5), 40);
+                await original.StopAsync(default);
+            }
+            using var recovered = new RuntimeStateStore(options);
+            Assert.Equal(40, recovered.GetWindowValue("cc", "rule:ip", start));
+            Assert.Equal(45, recovered.IncrementWindow("cc", "rule:ip", start, TimeSpan.FromMinutes(5), 5));
+            var snapshot = Assert.Single(recovered.ExportMutations());
+            Assert.Equal(2, snapshot.CounterComponents!.Count);
+            using var peer = new StoreScope("node-b");
+            peer.Store.Merge(snapshot);
+            peer.Store.Merge(snapshot);
+            Assert.Equal(45, peer.Store.GetWindowValue("cc", "rule:ip", start));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
     }
 
     [Fact]
@@ -167,12 +284,16 @@ public sealed class RuntimeStateStoreTests
     }
 }
 
-public sealed class RuntimeStateAuthenticationTests
+public sealed class RuntimeStateAuthenticationTests : IDisposable
 {
+    private readonly string _stateDirectory = Path.Combine(Path.GetTempPath(), "lywaf-runtime-auth-" + Guid.NewGuid().ToString("N"));
+    public void Dispose() { if (Directory.Exists(_stateDirectory)) Directory.Delete(_stateDirectory, true); }
     [Fact]
     public async Task SignedMutationIsAcceptedOnceAndReplayIsRejected()
     {
-        var options = new RuntimeStateOptions { Enabled = true, NodeId = "node-b", SharedSecret = "state-secret" };
+        var options = new RuntimeStateOptions { Enabled = true, NodeId = "node-b", SharedSecret = "state-secret", StateDirectory = _stateDirectory };
+        options.Peers["node-a"] = new() { Endpoint = "http://node-a",
+            Receive = new() { AllowedDomains = ["ip.blocked"], AllowUngroupedKeys = true } };
         var auth = new RuntimeStateAuthentication(new StaticOptionsMonitor<RuntimeStateOptions>(options));
         var mutation = new RuntimeStateMutation("ip.blocked", "10.0.0.1", "node-a", 1,
             DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(1), false, JsonSerializer.SerializeToElement("test"));
@@ -186,7 +307,8 @@ public sealed class RuntimeStateAuthenticationTests
         Assert.Null(error);
 
         var replay = CreateContext(body, signed);
-        var (_, replayError) = await auth.ReadAndVerifyAsync(replay, default);
+        var restarted = new RuntimeStateAuthentication(new StaticOptionsMonitor<RuntimeStateOptions>(options));
+        var (_, replayError) = await restarted.ReadAndVerifyAsync(replay, default);
         Assert.Equal("nonce 已使用", replayError);
     }
 

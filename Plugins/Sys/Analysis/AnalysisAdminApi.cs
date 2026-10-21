@@ -2,6 +2,11 @@ using System.Text.Json;
 using LyWaf.Services.Statistic;
 using LyWaf.Services.AuditLog;
 using LyWaf.Services.ManagementApi;
+using LyWaf.Services.Auth;
+using LyWaf.Services.RuntimeState;
+using Microsoft.Extensions.Options;
+using System.Net;
+using Yarp.ReverseProxy.Configuration;
 
 namespace LyWaf.Plugins.Sys.Analysis;
 
@@ -11,8 +16,32 @@ public static class AnalysisAdminApi
     public static async Task<IResult> HandleAsync(string path, HttpContext ctx)
     {
         path = path.Trim('/');
+        if (HttpMethods.IsPost(ctx.Request.Method) && path is "cc/release" or "cc/release/status")
+        {
+            if (ctx.Items["ManagementScopes"] is not IEnumerable<string> scopes
+                || !scopes.Any(s => s is ManagementPermissions.Write or "admin"))
+                return ReleaseError(403, "forbidden");
+            return await ReadBodyAsync<ReleaseCcRequest>(ctx, request => ReleaseCc(ctx, request, path == "cc/release/status"));
+        }
         if (HttpMethods.IsGet(ctx.Request.Method) && path == "ban-logs")
-            return Results.Ok(new { success = true, logs = CcBanLog.Shared.Read() });
+        {
+            var tracker = ctx.RequestServices.GetService<CcPropagationTracker>();
+            var confirmations = tracker?.Capture();
+            var decisions = ctx.RequestServices.GetService<CcDecisionService>();
+            var statistics = ctx.RequestServices.GetService<IStatisticService>();
+            var logs = CcBanLog.Shared.Read().Select(log =>
+            {
+                if (log.DecisionId is null) return log;
+                var propagation = confirmations?.Invoke(m => m.Domain == CcDecisionService.DecisionDomain && !m.Deleted
+                    && m.Value?.Deserialize<CcDecision>(new JsonSerializerOptions(JsonSerializerDefaults.Web))?.DecisionId == log.DecisionId);
+                var rule = log.Policy is null ? null : statistics?.GetAdvancedCcRule(log.Policy.RuleId);
+                return log with { PropagationStatus = propagation?.Status ?? "pending", Propagation = propagation,
+                    Execution = log.Policy is null ? null : decisions?.InspectExecution(log.Policy, log.DecisionId),
+                    Coverage = rule is null ? null : decisions?.Coverage(rule, log.Policy),
+                    ExecutionPropagation = log.Policy is null ? null : decisions?.InspectClusterExecution(log.Policy, log.DecisionId) };
+            }).ToArray();
+            return Results.Ok(new { success = true, logs });
+        }
 
         var statisticService = ctx.RequestServices.GetRequiredService<IStatisticService>();
         switch ((ctx.Request.Method, path))
@@ -57,6 +86,76 @@ public static class AnalysisAdminApi
         if (errors.Count != 0)
             return ManagementApiContract.Error(ctx, 400, "validation_failed", "请求字段校验失败", errors);
         return handle(request!);
+    }
+
+    private static IResult ReleaseError(int status, string code) => Results.Json(new
+    { success = false, errorCode = "cc_release_" + code, messageKey = "cc.release." + code }, statusCode: status);
+
+    private static IResult ReleaseCc(HttpContext ctx, ReleaseCcRequest request, bool statusOnly = false)
+    {
+        var rule = ctx.RequestServices.GetRequiredService<IStatisticService>().GetAdvancedCcRule(request.RuleId);
+        if (rule is null) return ReleaseError(404, "ruleMissing");
+        if (!IPAddress.TryParse(request.Ip, out var ip) || ip.ToString() != request.Ip)
+            return ReleaseError(400, "invalidIp");
+        var scope = request.Scope.Trim();
+        if (rule.Subject != CcSubjectKind.Ip) return ReleaseError(409, "scopeMismatch");
+        if (rule.Scope == CcScope.Node)
+        {
+            if (request.ScopeType != "node" || scope != ctx.RequestServices.GetRequiredService<IRuntimeStateStore>().GetStatus().NodeId)
+                return ReleaseError(409, "scopeMismatch");
+        }
+        else if (rule.Scope == CcScope.Cluster)
+        {
+            if (request.ScopeType != "cluster" || scope != "shared") return ReleaseError(409, "scopeMismatch");
+        }
+        else if (!string.IsNullOrWhiteSpace(rule.ProtectionGroup))
+        {
+            if (request.ScopeType != "group" || scope != rule.ProtectionGroup.Trim())
+                return ReleaseError(409, "scopeMismatch");
+        }
+        else if (request.ScopeType == "group") return ReleaseError(409, "scopeMismatch");
+        else if (request.ScopeType == "host")
+        {
+            scope = scope.TrimEnd('.').ToLowerInvariant();
+            if (Uri.CheckHostName(scope) == UriHostNameType.Unknown) return ReleaseError(400, "scopeMismatch");
+        }
+        else if (request.ScopeType != "route" || ctx.RequestServices.GetService<IProxyConfigProvider>()?.GetConfig().Routes
+            .Any(r => r.RouteId == scope) != true) return ReleaseError(400, "scopeMismatch");
+
+        var options = ctx.RequestServices.GetRequiredService<IOptionsMonitor<RuntimeStateOptions>>().CurrentValue;
+        if (statusOnly)
+        {
+            if (request.PolicyGeneration is not { Version: > 0 } generation
+                || !Guid.TryParseExact(generation.ReleaseId, "N", out _)) return ReleaseError(400, "scopeMismatch");
+            var key = CcRuleStateKey.Create(rule, request.Ip, request.ScopeType + ":" + scope);
+            var propagation = ctx.RequestServices.GetRequiredService<CcPropagationTracker>().Read(m =>
+                m.Domain == CcPolicyGeneration.Domain && m.Key == key && !m.Deleted
+                && m.Value?.Deserialize<CcPolicyGeneration>(new JsonSerializerOptions(JsonSerializerDefaults.Web)) == generation);
+            var execution = ctx.RequestServices.GetService<CcDecisionService>()?.InspectRelease(rule,
+                request.ScopeType + ":" + scope, request.Ip, generation);
+            return Results.Json(new { success = true, policyGeneration = generation, propagation, execution });
+        }
+        if (options.Enabled && string.IsNullOrWhiteSpace(options.CcReleasePrivateKeyPem))
+            return ReleaseError(503, "authorityUnavailable");
+        try
+        {
+            var generation = ctx.RequestServices.GetRequiredService<ICcRuleChecker>()
+                .ReleaseRule(request.ScopeType + ":" + scope, rule, request.Ip);
+            ctx.RequestServices.GetRequiredService<IAuditLogService>().Log(
+                ctx.Items["Username"]?.ToString() ?? "unknown",
+                $"CC release rule={rule.Id} scope={request.ScopeType}:{scope} ip={request.Ip} generation={generation.Version}/{generation.ReleaseId}",
+                ctx.Connection.RemoteIpAddress?.ToString() ?? "");
+            return Results.Json(new
+            {
+                success = true, ruleId = rule.Id, scopeType = request.ScopeType, scope, ip = request.Ip,
+                policyGeneration = generation, localApplied = true,
+                propagation = new { status = "pending", replicationEnabled = options.Enabled,
+                    acknowledgedNodes = Array.Empty<string>(), allNodesConfirmed = false },
+                messageKey = "cc.release.pending"
+            }, statusCode: StatusCodes.Status202Accepted);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        { return ReleaseError(503, "authorityUnavailable"); }
     }
 
     private static IResult GetConfig(HttpContext ctx, IStatisticService statisticService)
@@ -217,6 +316,14 @@ public static class AnalysisAdminApi
             enabled = r.Enabled,
             type = r.Type.ToString(),
             groupOperator = r.GroupOperator,
+            protectionGroup = r.ProtectionGroup,
+            scope = r.Scope.ToString(),
+            subject = r.Subject.ToString(),
+            subjectAuthenticationType = r.SubjectAuthenticationType,
+            subjectIssuer = r.SubjectIssuer,
+            expectedNodes = r.ExpectedNodes,
+            useManagedMembership = r.UseManagedMembership,
+            requireCompleteCoverage = r.RequireCompleteCoverage,
             conditionGroups = r.ConditionGroups,
             conditions = r.Conditions.Select(c => new
             {
@@ -252,6 +359,14 @@ public static class AnalysisAdminApi
             enabled = r.Enabled,
             type = r.Type.ToString(),
             groupOperator = r.GroupOperator,
+            protectionGroup = r.ProtectionGroup,
+            scope = r.Scope.ToString(),
+            subject = r.Subject.ToString(),
+            subjectAuthenticationType = r.SubjectAuthenticationType,
+            subjectIssuer = r.SubjectIssuer,
+            expectedNodes = r.ExpectedNodes,
+            useManagedMembership = r.UseManagedMembership,
+            requireCompleteCoverage = r.RequireCompleteCoverage,
             conditionGroups = r.ConditionGroups,
             conditions = r.Conditions.Select(c => new
             {
@@ -289,6 +404,14 @@ public static class AnalysisAdminApi
                 enabled = rule.Enabled,
                 type = rule.Type.ToString(),
                 groupOperator = rule.GroupOperator,
+                protectionGroup = rule.ProtectionGroup,
+                scope = rule.Scope.ToString(),
+                subject = rule.Subject.ToString(),
+                subjectAuthenticationType = rule.SubjectAuthenticationType,
+                subjectIssuer = rule.SubjectIssuer,
+                expectedNodes = rule.ExpectedNodes,
+                useManagedMembership = rule.UseManagedMembership,
+                requireCompleteCoverage = rule.RequireCompleteCoverage,
                 conditionGroups = rule.ConditionGroups,
                 conditions = rule.Conditions.Select(c => new
                 {
@@ -321,6 +444,14 @@ public static class AnalysisAdminApi
             Enabled = request.Enabled ?? true,
             Type = Enum.TryParse<CcRuleType>(request.Type, true, out var t) ? t : CcRuleType.FrequentAccess,
             GroupOperator = request.GroupOperator ?? "Or",
+            ProtectionGroup = request.ProtectionGroup?.Trim() ?? "",
+            Scope = Enum.TryParse<CcScope>(request.Scope, true, out var scope) ? scope : CcScope.SiteGroup,
+            Subject = Enum.TryParse<CcSubjectKind>(request.Subject, true, out var subject) ? subject : CcSubjectKind.Ip,
+            SubjectAuthenticationType = request.SubjectAuthenticationType ?? "",
+            SubjectIssuer = request.SubjectIssuer ?? "",
+            ExpectedNodes = request.ExpectedNodes ?? [],
+            UseManagedMembership = request.UseManagedMembership ?? false,
+            RequireCompleteCoverage = request.RequireCompleteCoverage ?? request.UseManagedMembership ?? false,
             ConditionGroups = request.ConditionGroups,
             Period = request.Period ?? 10,
             Threshold = request.Threshold ?? 100,
@@ -335,7 +466,7 @@ public static class AnalysisAdminApi
             }).ToList() ?? []
         };
 
-        if (statisticService.AddAdvancedCcRule(rule))
+        if (CcRequestIdentity.ValidConfiguration(rule) && statisticService.AddAdvancedCcRule(rule))
         {
             return Results.Json(new
             {
@@ -372,6 +503,14 @@ public static class AnalysisAdminApi
             Enabled = request.Enabled ?? existingRule.Enabled,
             Type = request.Type != null && Enum.TryParse<CcRuleType>(request.Type, true, out var t) ? t : existingRule.Type,
             GroupOperator = request.GroupOperator ?? existingRule.GroupOperator,
+            ProtectionGroup = request.ProtectionGroup?.Trim() ?? existingRule.ProtectionGroup,
+            Scope = Enum.TryParse<CcScope>(request.Scope, true, out var scope) ? scope : existingRule.Scope,
+            Subject = Enum.TryParse<CcSubjectKind>(request.Subject, true, out var subject) ? subject : existingRule.Subject,
+            SubjectAuthenticationType = request.SubjectAuthenticationType ?? existingRule.SubjectAuthenticationType,
+            SubjectIssuer = request.SubjectIssuer ?? existingRule.SubjectIssuer,
+            ExpectedNodes = request.ExpectedNodes ?? (request.UseManagedMembership == true ? [] : existingRule.ExpectedNodes),
+            UseManagedMembership = request.UseManagedMembership ?? existingRule.UseManagedMembership,
+            RequireCompleteCoverage = request.RequireCompleteCoverage ?? (request.UseManagedMembership == true || existingRule.RequireCompleteCoverage),
             ConditionGroups = request.ConditionGroups ?? (request.Conditions != null ? null : existingRule.ConditionGroups),
             Period = request.Period ?? existingRule.Period,
             Threshold = request.Threshold ?? existingRule.Threshold,
@@ -386,7 +525,7 @@ public static class AnalysisAdminApi
             }).ToList() ?? existingRule.Conditions
         };
 
-        if (statisticService.UpdateAdvancedCcRule(rule))
+        if (CcRequestIdentity.ValidConfiguration(rule) && statisticService.UpdateAdvancedCcRule(rule))
         {
             return Results.Json(new
             {

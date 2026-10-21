@@ -41,7 +41,8 @@ public sealed class RequestMirrorDispatcher : BackgroundService
     {
         var workers = Enumerable.Range(0, Math.Clamp(_options.Workers, 1, 32))
             .Select(_ => RunWorkerAsync(stoppingToken));
-        await Task.WhenAll(workers);
+        try { await Task.WhenAll(workers); }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
     }
 
     public override Task StopAsync(CancellationToken cancellationToken)

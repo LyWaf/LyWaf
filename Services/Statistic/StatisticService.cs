@@ -489,7 +489,7 @@ public class StatisticService : IStatisticService
     /// </summary>
     public bool AddAdvancedCcRule(AdvancedCcRule rule)
     {
-        if (string.IsNullOrWhiteSpace(rule.Name))
+        if (string.IsNullOrWhiteSpace(rule.Name) || !CcRequestIdentity.ValidConfiguration(rule))
             return false;
             
         lock (_advancedCcRuleLock)
@@ -519,6 +519,7 @@ public class StatisticService : IStatisticService
     /// </summary>
     public bool UpdateAdvancedCcRule(AdvancedCcRule rule)
     {
+        if (!CcRequestIdentity.ValidConfiguration(rule)) return false;
         lock (_advancedCcRuleLock)
         {
             // 先在动态规则中查找
@@ -614,6 +615,14 @@ public class StatisticService : IStatisticService
                     Type = configRule.Type,
                     Conditions = configRule.Conditions,
                     GroupOperator = configRule.GroupOperator,
+                    ProtectionGroup = configRule.ProtectionGroup,
+                    Scope = configRule.Scope,
+                    Subject = configRule.Subject,
+                    SubjectAuthenticationType = configRule.SubjectAuthenticationType,
+                    SubjectIssuer = configRule.SubjectIssuer,
+                    ExpectedNodes = configRule.ExpectedNodes.ToArray(),
+                    UseManagedMembership = configRule.UseManagedMembership,
+                    RequireCompleteCoverage = configRule.RequireCompleteCoverage,
                     ConditionGroups = configRule.ConditionGroups,
                     Period = configRule.Period,
                     Threshold = configRule.Threshold,

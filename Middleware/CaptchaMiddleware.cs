@@ -1,8 +1,11 @@
 using System.Text.Json;
 using LyWaf.Services.Captcha;
+using LyWaf.Services.Statistic;
+using LyWaf.Services.RuntimeState;
 using LyWaf.Shared;
 using LyWaf.Utils;
 using NLog;
+using LyWaf.Localization;
 
 namespace LyWaf.Middleware;
 
@@ -22,6 +25,22 @@ public class CaptchaMiddleware(RequestDelegate next, ICaptchaService captchaServ
     {
         var path = context.Request.Path.Value ?? "";
         var clientIp = RequestUtil.GetClientIp(context.Request);
+
+        // Keep the original route when challenging CC requests; /__captcha may select another site route.
+        var checker = context.RequestServices.GetService<ICcRuleChecker>();
+        var subject = checker?.GetCaptchaSubject(context, clientIp);
+        if (!_captchaService.IsPending(clientIp) && subject != null)
+        {
+            var action = context.Request.Query["__cc_captcha"].ToString();
+            if (action is "challenge" or "verify")
+                await HandleCaptchaApi(context, subject, CaptchaApiPrefix + action);
+            else
+            {
+                checker?.RecordCaptchaInterception(context, clientIp);
+                await WriteCaptchaPage(context, subject, scoped: true);
+            }
+            return;
+        }
 
         // 处理验证码 API 请求
         if (path.StartsWith(CaptchaApiPrefix, StringComparison.OrdinalIgnoreCase))
@@ -62,7 +81,17 @@ public class CaptchaMiddleware(RequestDelegate next, ICaptchaService captchaServ
 
     private async Task HandleGetChallenge(HttpContext context, string clientIp)
     {
-        var challenge = _captchaService.GenerateChallenge(clientIp);
+        CaptchaChallenge challenge;
+        try { challenge = await _captchaService.GenerateChallengeAsync(clientIp, context.RequestAborted); }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { return; }
+        catch (CaptchaStoreUnavailableException)
+        {
+            context.Response.StatusCode = 503;
+            context.Response.ContentType = "application/json; charset=utf-8";
+            await context.Response.WriteAsJsonAsync(new { success = false, errorCode = "captcha_store_unavailable",
+                messageKey = "captcha.errors.store_unavailable", message = TextLocalizer.Get("captcha.errors.store_unavailable") }, context.RequestAborted);
+            return;
+        }
 
         context.Response.ContentType = "application/json; charset=utf-8";
         await context.Response.WriteAsync(JsonSerializer.Serialize(new
@@ -102,26 +131,33 @@ public class CaptchaMiddleware(RequestDelegate next, ICaptchaService captchaServ
                 }
                 : null;
 
-            var result = _captchaService.Verify(clientIp, body.Token ?? "", body.Answer ?? "", behavior);
+            var target = CcPolicyGeneration.TryParseKey(clientIp, out _, out _)
+                ? context.RequestServices.GetService<CcCaptchaReleaseClient>()?.ResolveTarget(context, RequestUtil.GetClientIp(context.Request), clientIp)
+                : null;
+            var result = await _captchaService.VerifyAsync(clientIp, body.Token ?? "", body.Answer ?? "", behavior, target, context.RequestAborted);
 
             if (result.Success)
             {
                 await context.Response.WriteAsync(JsonSerializer.Serialize(new
                 {
                     success = true,
-                    message = result.Message
+                    message = result.Message,
+                    release = result.Release
                 }));
             }
             else
             {
-                context.Response.StatusCode = 400;
+                context.Response.StatusCode = result.FailureStatus;
                 await context.Response.WriteAsync(JsonSerializer.Serialize(new
                 {
                     success = false,
-                    message = result.Message
+                    message = result.Message,
+                    errorCode = result.ErrorCode,
+                    messageKey = result.ErrorCode == "captcha_store_unavailable" ? "captcha.errors.store_unavailable" : null
                 }));
             }
         }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
         catch (Exception ex)
         {
             _logger.Error(ex, "验证码验证异常: IP={Ip}", clientIp);
@@ -130,7 +166,7 @@ public class CaptchaMiddleware(RequestDelegate next, ICaptchaService captchaServ
         }
     }
 
-    private static async Task WriteCaptchaPage(HttpContext context, string clientIp)
+    private static async Task WriteCaptchaPage(HttpContext context, string clientIp, bool scoped = false)
     {
         if (context.Response.HasStarted) return;
 
@@ -139,6 +175,13 @@ public class CaptchaMiddleware(RequestDelegate next, ICaptchaService captchaServ
         context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
 
         var html = GetCaptchaPageHtml(clientIp);
+        if (scoped)
+        {
+            // Use URL APIs in the browser so existing query parameters and encoded paths survive.
+            html = html.Replace("fetch('/__captcha/challenge')", "fetch(ccCaptchaUrl('challenge'))")
+                .Replace("fetch('/__captcha/verify',", "fetch(ccCaptchaUrl('verify'),")
+                .Replace("var token = '';", "function ccCaptchaUrl(action) { var url = new URL(location.href); url.searchParams.set('__cc_captcha', action); return url; } var token = '';");
+        }
         await context.Response.WriteAsync(html);
     }
 
@@ -487,6 +530,8 @@ public class CaptchaMiddleware(RequestDelegate next, ICaptchaService captchaServ
                         }
                         initSlider(data.sliderTarget);
                     }
+                } else {
+                    document.getElementById('loadingArea').textContent = data.message || 'Challenge service unavailable';
                 }
             })
             .catch(function() {

@@ -69,8 +69,8 @@ public class {{PLUGIN_CLASS_NAME}} : LyWafPluginBase
         // 订阅事件
         // context.SubscribeEvent<RequestStartedEvent>(async e => { ... });
         
-        // 获取其他服务
-        // var someService = context.Services.GetRequiredService<ISomeService>();
+        // 服务目录仅提供当前插件的受限能力
+        // var storage = context.Services.GetRequiredService<IPluginStorage>();
         
         context.Logger.Info("{{PLUGIN_NAME}} 已初始化");
     }

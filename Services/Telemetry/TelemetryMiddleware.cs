@@ -1,13 +1,16 @@
 using System.Diagnostics;
 using Yarp.ReverseProxy.Forwarder;
 using Yarp.ReverseProxy.Model;
+using LyWaf.Services.Distribution;
 
 namespace LyWaf.Services.Telemetry;
 
-public sealed class TelemetryMiddleware(RequestDelegate next)
+public sealed class TelemetryMiddleware(RequestDelegate next, NodeTelemetryCollector? telemetry = null)
 {
     public async Task InvokeAsync(HttpContext context)
     {
+        var started = Stopwatch.GetTimestamp();
+        var failed = false;
         using var activity = LyWafTelemetry.ActivitySource.StartActivity(
             "lywaf.proxy.pipeline",
             ActivityKind.Internal);
@@ -28,8 +31,15 @@ public sealed class TelemetryMiddleware(RequestDelegate next)
         }
         catch (Exception ex)
         {
+            failed = true;
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             throw;
+        }
+        finally
+        {
+            telemetry?.Record(Stopwatch.GetElapsedTime(started).TotalMilliseconds, context.Response.StatusCode,
+                context.Items.TryGetValue("LyWaf.Intercepted", out var intercepted) && intercepted is true, failed,
+                LyWaf.Utils.RequestUtil.GetClientIp(context.Request));
         }
     }
 }

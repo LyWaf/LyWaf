@@ -2,6 +2,15 @@ using System.ComponentModel.DataAnnotations;
 
 namespace LyWaf.Plugins.Sys.Analysis;
 
+public sealed class ReleaseCcRequest
+{
+    public LyWaf.Services.RuntimeState.CcPolicyGeneration? PolicyGeneration { get; set; }
+    [Required, StringLength(128)] public string RuleId { get; set; } = "";
+    [Required, RegularExpression("^(host|route|group|node|cluster)$")] public string ScopeType { get; set; } = "";
+    [Required, StringLength(256)] public string Scope { get; set; } = "";
+    [Required, StringLength(64)] public string Ip { get; set; } = "";
+}
+
 public class AddCcRuleRequest : IValidatableObject
 {
     [Required, StringLength(8192)]
@@ -39,6 +48,20 @@ public class CcConditionRequest
 
 public class AddAdvancedCcRuleRequest
 {
+    [LyWaf.Services.ManagementApi.EnumName(typeof(LyWaf.Services.Statistic.CcScope))]
+    public string? Scope { get; set; }
+    [LyWaf.Services.ManagementApi.EnumName(typeof(LyWaf.Services.Statistic.CcSubjectKind))]
+    public string? Subject { get; set; }
+    [StringLength(128)]
+    public string? SubjectAuthenticationType { get; set; }
+    [StringLength(256)]
+    public string? SubjectIssuer { get; set; }
+    [MaxLength(256)]
+    public string[]? ExpectedNodes { get; set; }
+    public bool? UseManagedMembership { get; set; }
+    public bool? RequireCompleteCoverage { get; set; }
+    [StringLength(128)]
+    public string? ProtectionGroup { get; set; }
     [RegularExpression("^(And|Or)$")]
     public string? GroupOperator { get; set; }
     [MinLength(1), MaxLength(5)]
@@ -64,6 +87,20 @@ public class AddAdvancedCcRuleRequest
 
 public class UpdateAdvancedCcRuleRequest
 {
+    [LyWaf.Services.ManagementApi.EnumName(typeof(LyWaf.Services.Statistic.CcScope))]
+    public string? Scope { get; set; }
+    [LyWaf.Services.ManagementApi.EnumName(typeof(LyWaf.Services.Statistic.CcSubjectKind))]
+    public string? Subject { get; set; }
+    [StringLength(128)]
+    public string? SubjectAuthenticationType { get; set; }
+    [StringLength(256)]
+    public string? SubjectIssuer { get; set; }
+    [MaxLength(256)]
+    public string[]? ExpectedNodes { get; set; }
+    public bool? UseManagedMembership { get; set; }
+    public bool? RequireCompleteCoverage { get; set; }
+    [StringLength(128)]
+    public string? ProtectionGroup { get; set; }
     [RegularExpression("^(And|Or)$")]
     public string? GroupOperator { get; set; }
     [MinLength(1), MaxLength(5)]

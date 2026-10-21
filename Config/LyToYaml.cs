@@ -2608,15 +2608,15 @@ public static class LyToAppSettingsConverter
     ///         Upstreams = ["192.168.1.100:3306", "192.168.1.101:3306"]
     ///         Policy = "RoundRobin"
     ///     }
-    ///     6379 {
-    ///         Upstreams = ["redis.example.com:6379"]
+    ///     7080 {
+    ///         Upstreams = ["app.example.com:7080"]
     ///     }
     /// }
     /// 
     /// 或简写格式：
     /// StreamServer {
     ///     3306 = "192.168.1.100:3306"
-    ///     6379 = ["redis1:6379", "redis2:6379"]
+    ///     7080 = ["app1:7080", "app2:7080"]
     /// }
     /// </summary>
     private static void ProcessStreamServerConfig(object value, Dictionary<string, object> result)

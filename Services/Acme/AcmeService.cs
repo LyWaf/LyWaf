@@ -98,6 +98,10 @@ public class AcmeService : IAcmeService, IHostedService, IDisposable
     private readonly List<AcmeContext> _acmeContexts = [];
     private Timer? _renewalTimer;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
+    private readonly CancellationTokenSource _shutdown = new();
+    private Task _renewalWork = Task.CompletedTask;
+    private bool _stopping;
+    private int _disposed;
 
     public AcmeService(IOptionsMonitor<AcmeOptions> options, PrometheusMetrics? metrics = null)
     {
@@ -147,6 +151,7 @@ public class AcmeService : IAcmeService, IHostedService, IDisposable
         Task<X509Certificate2?> task;
         lock (_onDemandGate)
         {
+            if (_stopping) return null;
             if (!_onDemandRequests.TryGetValue(normalized, out task!))
             {
                 if (!_onDemandPolicy.TryAcquire(normalized, DateTimeOffset.UtcNow, out _)) return null;
@@ -168,7 +173,8 @@ public class AcmeService : IAcmeService, IHostedService, IDisposable
 
     private async Task<X509Certificate2?> RequestOnDemandAsync(string domain)
     {
-        try { return await RequestCertificateAsync(domain, CancellationToken.None); }
+        try { return await RequestCertificateAsync(domain, _shutdown.Token); }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { return null; }
         catch (Exception ex) { _logger.Warn(ex, "域名 {Domain} 按需签发失败", domain); return null; }
     }
 
@@ -214,7 +220,7 @@ public class AcmeService : IAcmeService, IHostedService, IDisposable
 
         // 启动定期续期检查
         _renewalTimer = new Timer(
-            _ => _ = RunRenewalSafelyAsync(),
+            _ => _ = ScheduleRenewal(),
             null,
             TimeSpan.FromHours(_options.CheckIntervalHours),
             TimeSpan.FromHours(_options.CheckIntervalHours));
@@ -225,11 +231,18 @@ public class AcmeService : IAcmeService, IHostedService, IDisposable
     /// <summary>
     /// 停止证书管理
     /// </summary>
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
-        _renewalTimer?.Dispose();
+        Task[] pending;
+        lock (_onDemandGate)
+        {
+            _stopping = true;
+            _renewalTimer?.Dispose();
+            pending = _onDemandRequests.Values.Cast<Task>().Append(_renewalWork).ToArray();
+        }
+        _shutdown.Cancel();
+        await Task.WhenAll(pending).WaitAsync(cancellationToken);
         _logger.Info("ACME 证书管理服务已停止");
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -357,6 +370,9 @@ public class AcmeService : IAcmeService, IHostedService, IDisposable
     /// </summary>
     public async Task<X509Certificate2?> RequestCertificateAsync(string domain, CancellationToken cancellationToken = default)
     {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+        cancellationToken = linked.Token;
+        cancellationToken.ThrowIfCancellationRequested();
         if (_acmeContexts.Count == 0 && !_options.InternalCaEnabled)
         {
             _logger.Error("ACME 上下文未初始化");
@@ -382,6 +398,7 @@ public class AcmeService : IAcmeService, IHostedService, IDisposable
                 {
                     return await RequestCertificateFromContextAsync(_acmeContexts[index], domain, cancellationToken);
                 }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     _logger.Warn(ex, "ACME CA #{Index} 为 {Domain} 签发失败，尝试下一 CA", index + 1, domain);
@@ -576,9 +593,20 @@ public class AcmeService : IAcmeService, IHostedService, IDisposable
         _metrics?.SetCertificateStatus(info.Domain, info.ExpiresAt, info.Source, status);
     }
 
+    internal Task ScheduleRenewal()
+    {
+        lock (_onDemandGate)
+        {
+            if (_stopping) return Task.CompletedTask;
+            if (_renewalWork.IsCompleted) _renewalWork = RunRenewalSafelyAsync();
+            return _renewalWork;
+        }
+    }
+
     private async Task RunRenewalSafelyAsync()
     {
-        try { await CheckAndRenewCertificatesAsync(CancellationToken.None); }
+        try { await CheckAndRenewCertificatesAsync(_shutdown.Token); }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
         catch (Exception ex) { _logger.Error(ex, "ACME 定时续期检查失败"); }
     }
 
@@ -693,6 +721,7 @@ public class AcmeService : IAcmeService, IHostedService, IDisposable
                 ExpiresAt = cert.NotAfter.ToString("yyyy-MM-dd")
             };
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _shutdown.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             _logger.Error(ex, "手动申请证书失败: {Domain}", domain);
@@ -704,8 +733,12 @@ public class AcmeService : IAcmeService, IHostedService, IDisposable
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        lock (_onDemandGate) _stopping = true;
+        _shutdown.Cancel();
         _renewalTimer?.Dispose();
         _semaphore.Dispose();
+        _shutdown.Dispose();
 
         foreach (var cert in _certificates.Values)
         {

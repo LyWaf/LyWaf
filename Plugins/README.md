@@ -124,8 +124,8 @@ public override Task InitializeAsync(IPluginContext context)
     // 获取配置
     var options = context.GetPluginConfig<MyOptions>();
     
-    // 获取服务
-    var service = context.Services.GetRequiredService<IMyService>();
+    // 服务目录仅提供当前插件的受限能力，不是宿主根容器
+    var storage = context.Services.GetRequiredService<IPluginStorage>();
     
     // 使用日志
     context.Logger.Info("插件已初始化");

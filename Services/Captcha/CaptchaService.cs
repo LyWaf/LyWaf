@@ -6,6 +6,7 @@ using LyWaf.Services.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using LyWaf.Services.RuntimeState;
 using NLog;
+using LyWaf.Localization;
 
 namespace LyWaf.Services.Captcha;
 
@@ -18,11 +19,16 @@ public interface ICaptchaService
     /// 为指定 IP 生成验证码挑战
     /// </summary>
     CaptchaChallenge GenerateChallenge(string clientIp);
+    Task<CaptchaChallenge> GenerateChallengeAsync(string clientIp, CancellationToken cancellationToken = default)
+        => Task.FromResult(GenerateChallenge(clientIp));
 
     /// <summary>
     /// 验证验证码答案
     /// </summary>
     CaptchaVerifyResult Verify(string clientIp, string token, string answer, BehaviorData? behavior = null);
+    Task<CaptchaVerifyResult> VerifyAsync(string clientIp, string token, string answer, BehaviorData? behavior,
+        CcCaptchaTarget? target, CancellationToken cancellationToken = default)
+        => Task.FromResult(Verify(clientIp, token, answer, behavior));
 
     /// <summary>
     /// 将 IP 标记为需要验证码
@@ -78,6 +84,9 @@ public class CaptchaVerifyResult
 {
     public bool Success { get; set; }
     public string Message { get; set; } = "";
+    public CcCaptchaReleaseConfirmation? Release { get; set; }
+    public string? ErrorCode { get; set; }
+    public int FailureStatus { get; set; } = 400;
 }
 
 /// <summary>
@@ -112,15 +121,20 @@ public class CaptchaService : ICaptchaService
     private readonly IServiceProvider _serviceProvider;
     private readonly PrometheusMetrics _metrics;
     private readonly IRuntimeStateStore _runtimeState;
+    private readonly ISharedCaptchaStore? _sharedStore;
 
     // 存储验证码挑战: Key = token, Value = (正确答案, IP, 过期时间)
     private static readonly ConcurrentDictionary<string, CaptchaEntry> _challenges = new();
+    // Both copies belong to one process-local consume operation, including across service instances.
+    private static readonly object[] ChallengeGates = Enumerable.Range(0, 256).Select(_ => new object()).ToArray();
+    private static object ChallengeGate(string token) => ChallengeGates[(uint)StringComparer.Ordinal.GetHashCode(token) % (uint)ChallengeGates.Length];
 
     public CaptchaService(IServiceProvider serviceProvider, PrometheusMetrics metrics, IRuntimeStateStore runtimeState)
     {
         _serviceProvider = serviceProvider;
         _metrics = metrics;
         _runtimeState = runtimeState;
+        _sharedStore = serviceProvider.GetService<ISharedCaptchaStore>();
     }
 
     public void SetPending(string clientIp, string ruleName, int actionSeconds)
@@ -154,11 +168,16 @@ public class CaptchaService : ICaptchaService
     }
 
     public CaptchaChallenge GenerateChallenge(string clientIp)
+        => GenerateChallengeAsync(clientIp).GetAwaiter().GetResult();
+
+    public async Task<CaptchaChallenge> GenerateChallengeAsync(string clientIp, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (clientIp is not { Length: > 0 and <= 2048 }) throw new ArgumentException("Invalid challenge subject");
         // 清理过期的挑战
         CleanupExpired();
 
-        var token = GenerateToken();
+        var token = (_sharedStore is null ? "" : "r1.") + GenerateToken();
 
         // 随机选择验证模式: math(算术+鼠标) 或 slider(滑块+鼠标)
         var mode = RandomNumberGenerator.GetInt32(0, 2) == 0 ? "math" : "slider";
@@ -190,14 +209,47 @@ public class CaptchaService : ICaptchaService
             challenge.SliderBackground = CaptchaImageGenerator.GenerateSliderBackgroundImage(sliderTarget, 380, 44);
         }
 
-        _challenges[token] = entry;
-        _runtimeState.Set(ChallengeDomain, token, entry, TimeSpan.FromMinutes(5));
+        if (_sharedStore is not null)
+            await _sharedStore.PutAsync(token, entry, cancellationToken);
+        else lock (ChallengeGate(token))
+        {
+            _challenges[token] = entry;
+            _runtimeState.Set(ChallengeDomain, token, entry, TimeSpan.FromMinutes(5));
+        }
         _metrics.RecordCaptcha("generated", mode);
         return challenge;
     }
 
     public CaptchaVerifyResult Verify(string clientIp, string token, string answer, BehaviorData? behavior = null)
+        => VerifyCoreAsync(clientIp, token, answer, behavior, complete: true, CancellationToken.None).GetAwaiter().GetResult();
+
+    public async Task<CaptchaVerifyResult> VerifyAsync(string clientIp, string token, string answer, BehaviorData? behavior,
+        CcCaptchaTarget? target, CancellationToken cancellationToken = default)
     {
+        if (!CcPolicyGeneration.TryParseKey(clientIp, out _, out _))
+            return await VerifyCoreAsync(clientIp, token, answer, behavior, complete: true, cancellationToken);
+        if (target is null || target.Expected.StateKey(target.PolicyKey) != clientIp)
+            return new() { Message = "验证码作用域已变化", ErrorCode = "cc_captcha_scope_changed" };
+        var verified = await VerifyCoreAsync(clientIp, token, answer, behavior, complete: false, cancellationToken);
+        if (!verified.Success) return verified;
+        try
+        {
+            verified.Release = await _serviceProvider.GetRequiredService<CcCaptchaReleaseClient>().ReleaseAsync(target, token, cancellationToken);
+            _metrics.RecordCaptcha("verified", "success");
+            return verified;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException
+            or HttpRequestException or OperationCanceledException or System.Text.Json.JsonException)
+        {
+            _logger.Warn("CC captcha release unconfirmed: {ErrorType}", ex.GetType().Name);
+            return new() { Message = "解除尚未确认，请稍后重试", FailureStatus = 503, ErrorCode = "cc_release_unconfirmed" };
+        }
+    }
+
+    private async Task<CaptchaVerifyResult> VerifyCoreAsync(string clientIp, string token, string answer, BehaviorData? behavior,
+        bool complete, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(token))
         {
             _metrics.RecordCaptcha("verified", "invalid");
@@ -205,15 +257,28 @@ public class CaptchaService : ICaptchaService
         }
 
         CaptchaEntry? entry;
-        if (_challenges.TryRemove(token, out var localEntry))
+        if (_sharedStore is not null)
         {
-            entry = localEntry;
-            _runtimeState.Remove(ChallengeDomain, token);
+            try { entry = await _sharedStore.TakeAsync(token, cancellationToken); }
+            catch (CaptchaStoreUnavailableException)
+            {
+                _metrics.RecordCaptcha("verified", "unavailable");
+                return new() { Message = TextLocalizer.Get("captcha.errors.store_unavailable"), FailureStatus = 503,
+                    ErrorCode = "captcha_store_unavailable" };
+            }
         }
-        else if (!_runtimeState.TryTake<CaptchaEntry>(ChallengeDomain, token, out entry))
+        else lock (ChallengeGate(token))
         {
-            _metrics.RecordCaptcha("verified", "invalid");
-            return new CaptchaVerifyResult { Success = false, Message = "验证码已过期或无效" };
+            if (_challenges.TryRemove(token, out var localEntry))
+            {
+                entry = localEntry;
+                _runtimeState.Remove(ChallengeDomain, token);
+            }
+            else if (!_runtimeState.TryTake<CaptchaEntry>(ChallengeDomain, token, out entry))
+            {
+                _metrics.RecordCaptcha("verified", "invalid");
+                return new CaptchaVerifyResult { Success = false, Message = "验证码已过期或无效" };
+            }
         }
         if (entry is null)
         {
@@ -221,8 +286,13 @@ public class CaptchaService : ICaptchaService
             return new CaptchaVerifyResult { Success = false, Message = "验证码已过期或无效" };
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (entry.Mode is not ("math" or "slider"))
+            return new() { Message = "验证码已过期或无效" };
+
         // 检查过期
-        if (DateTime.UtcNow > entry.ExpiryTime)
+        if (_sharedStore is null && DateTime.UtcNow > entry.ExpiryTime)
         {
             _metrics.RecordCaptcha("verified", "expired");
             return new CaptchaVerifyResult { Success = false, Message = "验证码已过期" };
@@ -277,8 +347,11 @@ public class CaptchaService : ICaptchaService
         }
 
         // 验证通过，移除 pending 状态
-        RemovePending(clientIp);
-        _metrics.RecordCaptcha("verified", "success");
+        if (complete)
+        {
+            RemovePending(clientIp);
+            _metrics.RecordCaptcha("verified", "success");
+        }
 
         return new CaptchaVerifyResult { Success = true, Message = "验证通过" };
     }
@@ -331,7 +404,7 @@ public class CaptchaService : ICaptchaService
 
         foreach (var key in expiredKeys)
         {
-            _challenges.TryRemove(key, out _);
+            lock (ChallengeGate(key)) _challenges.TryRemove(key, out _);
         }
     }
 

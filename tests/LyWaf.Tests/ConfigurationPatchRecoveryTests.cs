@@ -35,6 +35,8 @@ public sealed class ConfigurationPatchRecoveryTests
             Assert.Equal(existing, File.Exists(path));
             if (existing) Assert.Equal(original, await File.ReadAllTextAsync(path));
             Assert.Equal(existing ? "8080" : null, root["WafInfos:Listens:0:Port"]);
+            if (!existing) Assert.Empty(root.GetSection("WafInfos:Listens").GetChildren());
+            new ConfigurationLifecycleService().Validate(root);
             Assert.Equal(cancel, cancellation.IsCancellationRequested);
         }
         finally
@@ -44,8 +46,10 @@ public sealed class ConfigurationPatchRecoveryTests
         }
     }
 
-    private sealed class PatchProvider(string path, CancellationTokenSource? cancellation) : ConfigurationProvider
+    private sealed class PatchProvider(string path, CancellationTokenSource? cancellation) : ConfigurationProvider, IRestorableConfigurationProvider
     {
+        public void RestoreValues(IReadOnlyDictionary<string, string?> values) =>
+            Data = new Dictionary<string, string?>(values, StringComparer.OrdinalIgnoreCase);
         public override void Load()
         {
             if (!File.Exists(path)) { Data.Clear(); return; }

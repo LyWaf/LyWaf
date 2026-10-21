@@ -481,13 +481,17 @@ public sealed class WebTamperService : IWebTamperService, IDisposable
 
     public async Task ProcessBackgroundChecksAsync(CancellationToken cancellationToken)
     {
-        await foreach (var resourceId in _checkQueue.Reader.ReadAllAsync(cancellationToken))
+        try
         {
-            _metrics.WebTamperDequeued();
-            try { await CheckAsync(resourceId, cancellationToken); }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
-            catch (Exception ex) { Logger.Warn(ex, "网页防篡改后台惰性检查失败: {ResourceId}", resourceId); }
+            await foreach (var resourceId in _checkQueue.Reader.ReadAllAsync(cancellationToken))
+            {
+                _metrics.WebTamperDequeued();
+                try { await CheckAsync(resourceId, cancellationToken); }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
+                catch (Exception ex) { Logger.Warn(ex, "网页防篡改后台惰性检查失败: {ResourceId}", resourceId); }
+            }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
     }
 
     public async Task<ContentComparison?> CheckAsync(string id, CancellationToken cancellationToken)
@@ -849,7 +853,8 @@ public sealed class WebTamperMonitorService(IWebTamperService service, LyWaf.Plu
     {
         var queueTask = service.ProcessBackgroundChecksAsync(stoppingToken);
         var dailyTask = RunDailyChecksAsync(stoppingToken);
-        await Task.WhenAll(queueTask, dailyTask);
+        try { await Task.WhenAll(queueTask, dailyTask); }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
     }
 
     private async Task RunDailyChecksAsync(CancellationToken stoppingToken)
@@ -857,7 +862,7 @@ public sealed class WebTamperMonitorService(IWebTamperService service, LyWaf.Plu
         while (!stoppingToken.IsCancellationRequested)
         {
             try { await Task.Delay(TimeSpan.FromDays(1), stoppingToken); }
-            catch (OperationCanceledException) { break; }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             if (pluginManager.GetPluginState("web-tamper") is not (LyWaf.Plugins.Core.PluginState.Running or LyWaf.Plugins.Core.PluginState.Initialized))
                 continue;
             await service.CheckAllAsync(stoppingToken);

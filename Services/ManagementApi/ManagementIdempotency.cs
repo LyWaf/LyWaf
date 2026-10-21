@@ -3,6 +3,8 @@ using System.Text;
 
 namespace LyWaf.Services.ManagementApi;
 
+public sealed record ManagementNonReplayableResponse;
+
 /// <summary>有限幂等记录，保存请求摘要及最多 64 KiB 响应；超限结果不允许重复执行。</summary>
 public sealed class ManagementIdempotency
 {
@@ -87,7 +89,8 @@ public static class ManagementIdempotencyMiddleware
             {
                 await next();
                 entry.Completion.TrySetResult(new(context.Response.StatusCode, context.Response.ContentType,
-                    capture.Bytes, context.Response.Headers.Location.FirstOrDefault()));
+                    context.GetEndpoint()?.Metadata.GetMetadata<ManagementNonReplayableResponse>() is not null ? null : capture.Bytes,
+                    context.Response.Headers.Location.FirstOrDefault()));
             }
             catch
             {

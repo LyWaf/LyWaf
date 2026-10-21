@@ -37,7 +37,7 @@ public sealed class ManagementBusinessContractTests
             typeof(IAcmeService), typeof(IProxyStateLookup), typeof(IAuditLogService), typeof(SecurityIncidentService),
             typeof(IWafRuleService), typeof(IAccessControlService), typeof(IncidentRequestStore), typeof(NotificationService),
             typeof(ConfigurationBackupService), typeof(ISpeedLimitService), typeof(IProtectService), typeof(IIpGroupService),
-            typeof(IRuntimeStateStore), typeof(ICaptchaService), typeof(IABTestService), typeof(IStatisticService),
+            typeof(IRuntimeStateStore), typeof(RuntimeStateReplicator), typeof(ICaptchaService), typeof(IABTestService), typeof(IStatisticService),
             typeof(LyWaf.Services.DuckDb.RuntimeLogService), typeof(LyWaf.Services.DuckDb.IDuckDbQueryService),
             typeof(LyWaf.Plugins.Core.IPluginManager), typeof(LyWaf.Plugins.Packaging.PluginPackageManager),
             typeof(LyWaf.Services.Lifecycle.UpgradePackageService), typeof(LyWaf.Services.Lifecycle.GracefulShutdownCoordinator),
@@ -77,7 +77,8 @@ public sealed class ManagementBusinessContractTests
             foreach (var operation in path.Value.EnumerateObject())
             {
                 if (!path.Name.Contains("/agent/") && path.Name != "/api/v1/health/ready")
-                    Assert.NotEmpty(operation.Value.GetProperty("x-permissions").EnumerateArray());
+                    Assert.True(operation.Value.GetProperty("x-permissions").EnumerateArray().Any(),
+                        $"Missing management permission: {operation.Name} {path.Name}");
                 foreach (var status in operation.Value.GetProperty("responses").EnumerateObject().Where(s => s.Name.StartsWith('2')))
                     Assert.True(status.Value.TryGetProperty("content", out _), $"{operation.Name} {path.Name} {status.Name}");
             }

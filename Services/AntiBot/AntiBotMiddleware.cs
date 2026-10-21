@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 using NLog;
+using LyWaf.Services.Captcha;
+using LyWaf.Localization;
 
 namespace LyWaf.Services.AntiBot;
 
@@ -56,19 +58,26 @@ public sealed class AntiBotMiddleware(
         ChallengeAnswer? answer;
         try { answer = await context.Request.ReadFromJsonAsync<ChallengeAnswer>(cancellationToken: context.RequestAborted); }
         catch (JsonException) { answer = null; }
-        if (answer is null || !challenges.VerifyProof(context, answer.Token, answer.Counter, out var returnPath))
+        (bool Success, string ReturnPath) result;
+        try { result = answer is null ? (false, "/") : await challenges.VerifyProofAsync(context, answer.Token, answer.Counter); }
+        catch (CaptchaStoreUnavailableException) { await Unavailable(context); return; }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { return; }
+        if (!result.Success)
         { context.Response.StatusCode = StatusCodes.Status403Forbidden; return; }
         context.Response.Cookies.Append(current.CookieName, challenges.CreateSession(context), new CookieOptions
         {
             HttpOnly = true, Secure = context.Request.IsHttps, SameSite = SameSiteMode.Lax,
             MaxAge = TimeSpan.FromMinutes(Math.Clamp(current.SessionMinutes, 1, 1440)), Path = "/"
         });
-        await context.Response.WriteAsJsonAsync(new { success = true, redirect = returnPath }, context.RequestAborted);
+        await context.Response.WriteAsJsonAsync(new { success = true, redirect = result.ReturnPath }, context.RequestAborted);
     }
 
     private async Task WriteChallengeAsync(HttpContext context, AntiBotOptions current)
     {
-        var token = challenges.CreateChallenge(context);
+        string token;
+        try { token = await challenges.CreateChallengeAsync(context); }
+        catch (CaptchaStoreUnavailableException) { await Unavailable(context); return; }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { return; }
         var tokenJson = JsonSerializer.Serialize(token);
         var pathJson = JsonSerializer.Serialize(current.ChallengePath);
         var difficulty = Math.Clamp(current.ProofLeadingZeroNibbles, 1, 6);
@@ -89,4 +98,10 @@ if(!r.ok)throw 0;location.replace((await r.json()).redirect);})().catch(()=>docu
     }
 
     private sealed record ChallengeAnswer(string Token, long Counter);
+    private static async Task Unavailable(HttpContext context)
+    {
+        context.Response.StatusCode = 503;
+        await context.Response.WriteAsJsonAsync(new { errorCode = "captcha_store_unavailable",
+            messageKey = "captcha.errors.store_unavailable", message = TextLocalizer.Get("captcha.errors.store_unavailable") }, context.RequestAborted);
+    }
 }

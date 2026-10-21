@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { locale } from '@/i18n'
 import { t } from '@/plugins/analysis/i18n'
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { useAuth } from '@/composables/useAuth'
 import { refreshPluginMenus } from '@/composables/usePluginMenus'
 import { pluginApi, pluginProxyApi } from '@/api'
 import { advancedCcApi, statisticApi } from './api'
@@ -11,7 +12,58 @@ import { useToast } from '@/composables/useToast'
 import type { AdvancedCcRule, CcRuleType } from '@/types'
 
 const { showSuccess, showError } = useToast()
-const banLogs = ref<{ id: number; time: string; ip: string; reason: string; durationSeconds: number }[]>([])
+const { can } = useAuth()
+const releaseRule = ref<AdvancedCcRule | null>(null)
+const releaseScopeType = ref<'host' | 'route' | 'group'>('route')
+const releaseScope = ref('')
+const releaseIp = ref('')
+const releasing = ref(false)
+const releaseStatus = ref('')
+const releaseReceipt = ref<Parameters<typeof advancedCcApi.releaseStatus>[0] | null>(null)
+const refreshReleaseStatus = async () => {
+  if (!releaseReceipt.value || releasing.value) return
+  releasing.value = true
+  try {
+    const { propagation, execution } = await advancedCcApi.releaseStatus(releaseReceipt.value)
+    releaseStatus.value = t(propagation.allNodesConfirmed ? 'cc.propagation.confirmed' : 'cc.release.pending')
+      + ' ' + t('cc.propagation.nodes', { acknowledged: propagation.acknowledgedNodes.join(', ') || '-', pending: propagation.pendingNodes.join(', ') || '-' })
+    if (execution) releaseStatus.value += ' ' + t(execution.allNodesConfirmed ? 'cc.execution.releaseConfirmed' : 'cc.execution.pending')
+      + ' ' + t('cc.propagation.nodes', { acknowledged: execution.confirmedNodes.join(', ') || '-', pending: execution.pendingNodes.join(', ') || '-' })
+  } catch { releaseStatus.value = t('cc.release.pending'); showError(t('cc.release.failed')) }
+  finally { releasing.value = false }
+}
+const openRelease = (rule: AdvancedCcRule) => {
+  releaseRule.value = rule
+  releaseScopeType.value = rule.protectionGroup?.trim() ? 'group' : 'route'
+  releaseScope.value = rule.protectionGroup?.trim() || ''
+  releaseIp.value = ''
+  releaseStatus.value = ''
+  releaseReceipt.value = null
+  void nextTick(() => document.getElementById('cc-release-ip')?.focus())
+}
+const submitRelease = async () => {
+  if (!releaseRule.value || releasing.value) return
+  const request = { ruleId: releaseRule.value.id, scopeType: releaseScopeType.value, scope: releaseScope.value.trim(), ip: releaseIp.value.trim() }
+  if (!window.confirm(t('cc.release.confirm', { rule: request.ruleId, scope: `${request.scopeType}:${request.scope}`, ip: request.ip }))) return
+  releasing.value = true
+  releaseStatus.value = ''
+  try {
+    const result = await advancedCcApi.release(request)
+    releaseReceipt.value = { ...request, policyGeneration: result.policyGeneration }
+    if (result.localApplied && result.propagation.status === 'pending') releaseStatus.value = t('cc.release.pending')
+  } catch (error: any) {
+    const key = error?.response?.data?.messageKey
+    const known = ['forbidden', 'ruleMissing', 'invalidIp', 'scopeMismatch', 'authorityUnavailable'].map(code => `cc.release.${code}`)
+    showError(t(known.includes(key) ? key : 'cc.release.failed'))
+  } finally { releasing.value = false }
+}
+const banLogs = ref<{ id: number; time: string; ip: string; reason: string; durationSeconds: number;
+  decisionId?: string; protectionScope?: string; propagationStatus?: string;
+  propagation?: { acknowledgedNodes: string[]; pendingNodes: string[]; allNodesConfirmed: boolean };
+  coverage?: { status: string; missingNodes: string[]; watermark?: string };
+  executionPropagation?: { allNodesConfirmed: boolean; confirmedNodes: string[]; pendingNodes: string[]; boots: Record<string, string> };
+  nodes?: Record<string, { observedCount: number; interceptedRequests: number; firstHit?: string; lastHit?: string }>
+}[]>([])
 const logError = ref('')
 const logsLoading = ref(false)
 const loadBanLogs = async () => {
@@ -353,7 +405,7 @@ onUnmounted(() => {
         <div
           v-for="rule in rules"
           :key="rule.id"
-          class="flex items-center justify-between p-4 bg-dark-card-hover rounded-lg"
+          class="flex flex-wrap items-center justify-between gap-3 p-4 bg-dark-card-hover rounded-lg"
         >
           <div class="flex items-center gap-4">
             <!-- 启用开关 -->
@@ -384,6 +436,7 @@ onUnmounted(() => {
           </div>
 
           <div class="flex items-center gap-3 flex-shrink-0">
+            <button v-if="can('write') || can('admin')" @click="openRelease(rule)" class="text-sm text-emerald-400 hover:text-emerald-300">{{ t('cc.release.action') }}</button>
             <button
               @click="openEditDialog(rule)"
               class="text-sm text-primary-400 hover:text-primary-300"
@@ -514,15 +567,58 @@ onUnmounted(() => {
         <table class="w-full text-sm text-left">
           <thead class="sticky top-0 bg-dark-card text-gray-400"><tr>
             <th class="p-3 whitespace-nowrap">{{ t('page.8b6ff498515b') }}</th><th class="p-3">IP</th><th class="p-3">{{ t('page.39a7481a7d30') }}</th><th class="p-3 whitespace-nowrap">{{ t('page.efaa6864377d') }}</th>
+            <th class="p-3 whitespace-nowrap">{{ t('cc.decision.scope') }}</th><th class="p-3 whitespace-nowrap">{{ t('cc.decision.nodes') }}</th>
           </tr></thead>
-          <tbody><tr v-for="log in banLogs" :key="log.id" class="border-t border-dark-border">
+          <tbody><tr v-for="log in banLogs" :key="log.decisionId ?? log.id" class="border-t border-dark-border">
             <td class="p-3 whitespace-nowrap">{{ new Date(log.time).toLocaleString(locale) }}</td>
             <td class="p-3 font-mono">{{ log.ip }}</td>
             <td class="p-3 break-all min-w-48">{{ log.reason }}</td><td class="p-3">{{ log.durationSeconds }}</td>
-          </tr><tr v-if="!banLogs.length"><td colspan="4" class="p-8 text-center text-gray-500">{{ t('page.93ede994e535') }}</td></tr></tbody>
+            <td class="p-3 break-all min-w-48"><div>{{ log.protectionScope ?? '-' }}</div><code v-if="log.decisionId" :title="log.decisionId">{{ log.decisionId.slice(0, 16) }}</code></td>
+            <td class="p-3 min-w-64">
+              <div v-for="(node, name) in log.nodes" :key="name" class="mb-2">
+                <div class="break-all">{{ name }}: {{ t('cc.decision.hits', { count: node.interceptedRequests }) }}</div>
+                <div v-if="node.firstHit" class="text-xs">{{ t('cc.decision.first') }}: {{ new Date(node.firstHit).toLocaleString(locale) }}</div>
+                <div v-if="node.lastHit" class="text-xs">{{ t('cc.decision.last') }}: {{ new Date(node.lastHit).toLocaleString(locale) }}</div>
+              </div>
+              <span v-if="log.decisionId" class="text-amber-300">{{ t(log.propagation?.allNodesConfirmed ? 'cc.propagation.confirmed' : 'cc.decision.pending') }}</span>
+              <div v-if="log.propagation" class="break-all">{{ t('cc.propagation.nodes', { acknowledged: log.propagation.acknowledgedNodes.join(', ') || '-', pending: log.propagation.pendingNodes.join(', ') || '-' }) }}</div>
+              <div v-if="log.executionPropagation" class="mt-2 break-all">
+                {{ t(log.executionPropagation.allNodesConfirmed ? 'cc.execution.confirmed' : 'cc.execution.pending') }}
+                <div>{{ t('cc.propagation.nodes', { acknowledged: log.executionPropagation.confirmedNodes.join(', ') || '-', pending: log.executionPropagation.pendingNodes.join(', ') || '-' }) }}</div>
+                <div v-for="(boot, node) in log.executionPropagation.boots" :key="node" class="font-mono text-xs">{{ node }}: {{ boot }}</div>
+              </div>
+              <div v-if="log.coverage" class="mt-2 break-all">
+                {{ t(log.coverage.status === 'Complete' ? 'cc.coverage.complete' : log.coverage.status === 'Degraded' ? 'cc.coverage.degraded' : 'cc.coverage.partial') }}
+                <div v-if="log.coverage.missingNodes.length">{{ log.coverage.missingNodes.join(', ') }}</div>
+                <time v-if="log.coverage.watermark">{{ new Date(log.coverage.watermark).toLocaleString(locale) }}</time>
+              </div>
+            </td>
+          </tr><tr v-if="!banLogs.length"><td colspan="6" class="p-8 text-center text-gray-500">{{ t('page.93ede994e535') }}</td></tr></tbody>
         </table>
       </div>
     </section>
+
+    <div v-if="releaseRule" class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" @keydown.esc="!releasing && (releaseRule = null)">
+      <form role="dialog" aria-modal="true" aria-labelledby="cc-release-title" class="w-full max-w-lg max-h-[90vh] overflow-auto rounded-lg bg-dark-card p-6 space-y-4" @submit.prevent="submitRelease">
+        <h2 id="cc-release-title" class="text-lg font-semibold">{{ t('cc.release.action') }}</h2>
+        <p class="break-all">{{ releaseRule.name }} <code>{{ releaseRule.id }}</code></p>
+        <label class="block">{{ t('cc.release.scopeType') }}
+          <select v-model="releaseScopeType" :disabled="releasing || !!releaseStatus || !!releaseRule.protectionGroup?.trim()" class="w-full mt-1 rounded border border-dark-border bg-dark-card-hover p-2">
+            <option v-if="releaseRule.protectionGroup?.trim()" value="group">{{ t('cc.release.group') }}</option>
+            <template v-else><option value="route">{{ t('cc.release.route') }}</option><option value="host">{{ t('cc.release.host') }}</option></template>
+          </select>
+        </label>
+        <label class="block">{{ t('cc.release.scope') }}<input v-model="releaseScope" required maxlength="256" :disabled="releasing || !!releaseStatus || releaseScopeType === 'group'" class="w-full mt-1 rounded border border-dark-border bg-dark-card-hover p-2" /></label>
+        <label class="block">IP<input id="cc-release-ip" v-model="releaseIp" required maxlength="64" :disabled="releasing || !!releaseStatus" class="w-full mt-1 rounded border border-dark-border bg-dark-card-hover p-2" /></label>
+        <p class="text-sm text-amber-300">{{ t('cc.release.warning') }}</p>
+        <p v-if="releaseStatus" role="status" class="text-sm text-amber-300">{{ releaseStatus }}</p>
+        <button v-if="releaseReceipt" type="button" :disabled="releasing" @click="refreshReleaseStatus">{{ t('cc.propagation.refresh') }}</button>
+        <div class="flex flex-wrap justify-end gap-4">
+          <button type="button" :disabled="releasing" @click="releaseRule = null">{{ t('cc.release.close') }}</button>
+          <button type="submit" :disabled="releasing || !!releaseStatus" class="text-emerald-400 disabled:opacity-50">{{ t('cc.release.action') }}</button>
+        </div>
+      </form>
+    </div>
 
     <CcRuleEditor
       :show="showEditor"

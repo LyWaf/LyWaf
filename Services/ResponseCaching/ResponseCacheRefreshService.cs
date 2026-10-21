@@ -25,22 +25,38 @@ public sealed class ResponseCacheRefreshService(IHttpClientFactory clientFactory
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await foreach (var item in _queue.Reader.ReadAllAsync(stoppingToken))
+        try
         {
-            try
+            await foreach (var item in _queue.Reader.ReadAllAsync(stoppingToken))
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, item.Uri);
-                request.Headers.TryAddWithoutValidation("X-LyWaf-Cache-Refresh", "1");
-                foreach (var pair in item.VaryHeaders)
-                    request.Headers.TryAddWithoutValidation(pair.Key, pair.Value);
-                using var response = await clientFactory.CreateClient("response-cache-refresh")
-                    .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, stoppingToken);
-            }
-            catch when (!stoppingToken.IsCancellationRequested) { }
-            finally
-            {
-                lock (_gate) _pending.Remove(item.CacheKey);
+                try
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, item.Uri);
+                    request.Headers.TryAddWithoutValidation("X-LyWaf-Cache-Refresh", "1");
+                    foreach (var pair in item.VaryHeaders)
+                        request.Headers.TryAddWithoutValidation(pair.Key, pair.Value);
+                    using var response = await clientFactory.CreateClient("response-cache-refresh")
+                        .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, stoppingToken);
+                }
+                catch when (!stoppingToken.IsCancellationRequested) { }
+                finally
+                {
+                    lock (_gate) _pending.Remove(item.CacheKey);
+                }
             }
         }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
+        finally
+        {
+            _queue.Writer.TryComplete();
+            while (_queue.Reader.TryRead(out _)) { }
+            lock (_gate) _pending.Clear();
+        }
+    }
+
+    public override Task StopAsync(CancellationToken cancellationToken)
+    {
+        _queue.Writer.TryComplete();
+        return base.StopAsync(cancellationToken);
     }
 }
