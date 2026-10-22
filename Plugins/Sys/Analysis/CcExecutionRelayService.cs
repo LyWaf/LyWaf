@@ -7,6 +7,7 @@ namespace LyWaf.Services.Statistic;
 
 public sealed record CcExecutionRelayQuery(string TargetNodeId, CcExecutionQuery[] Queries);
 
+/// <summary>Analysis-owned business relay; the host dispatches only its declared plugin request.</summary>
 public sealed class CcExecutionRelayService(CcPeerQueryClient client, NodeIdentityService identity,
     IOptionsMonitor<NodeCommunicationOptions> communication, IOptionsMonitor<RuntimeStateOptions> runtime)
 {
@@ -21,7 +22,7 @@ public sealed class CcExecutionRelayService(CcPeerQueryClient client, NodeIdenti
             || state.NodeId != config.NodeId || message.Type != Operation || message.ClusterId != config.ClusterId
             || message.ReceiverNodeId != config.NodeId || message.ExpiresAt <= DateTimeOffset.UtcNow
             || !config.Peers.TryGetValue(message.SenderNodeId, out var sender) || sender.Role != "Node"
-            || !NodeAdmissionPolicy.Allows(sender, Operation) || !sender.AllowedOperations.Contains(Operation, StringComparer.Ordinal))
+            || !PluginNodeRequests.Allows(sender, Operation))
             return NodeProtocolResponse.Error(context, "node_operation_forbidden", 403);
         CcExecutionRelayQuery? query;
         try { query = message.Payload.Deserialize<CcExecutionRelayQuery>(NodeMessageAuthentication.JsonOptions); }
@@ -32,7 +33,7 @@ public sealed class CcExecutionRelayService(CcPeerQueryClient client, NodeIdenti
             return NodeProtocolResponse.Error(context, "node_invalid_payload", 400);
         if (!NodeMessageAuthentication.ValidId(query.TargetNodeId) || query.TargetNodeId == message.SenderNodeId || !config.Peers.TryGetValue(query.TargetNodeId, out var target)
             || target.Role != "Node" || !NodeAdmissionPolicy.Allows(target, CcExecutionQueryService.Operation)
-            || !target.AllowedOperations.Contains(CcExecutionQueryService.Operation, StringComparer.Ordinal))
+            || !PluginNodeRequests.Allows(target, CcExecutionQueryService.Operation))
             return NodeProtocolResponse.Error(context, "node_operation_forbidden", 403);
         foreach (var item in queries)
         {
@@ -53,11 +54,11 @@ public sealed class CcExecutionRelayService(CcPeerQueryClient client, NodeIdenti
                 || current.NodeId != message.ReceiverNodeId || current.ClusterId != message.ClusterId || !currentState.Enabled
                 || currentState.NodeId != current.NodeId || !current.Peers.TryGetValue(message.SenderNodeId, out var active)
                 || active.Role != "Node" || !NodeAdmissionPolicy.Allows(active, Operation)
-                || !active.AllowedOperations.Contains(Operation, StringComparer.Ordinal)
+                || !PluginNodeRequests.Allows(active, Operation)
                 || !active.Keys.TryGetValue(keyId, out var currentSecret) || currentSecret != secret
                 || !current.Peers.TryGetValue(query.TargetNodeId, out var currentTarget) || currentTarget.Role != "Node"
                 || !NodeAdmissionPolicy.Allows(currentTarget, CcExecutionQueryService.Operation)
-                || !currentTarget.AllowedOperations.Contains(CcExecutionQueryService.Operation, StringComparer.Ordinal)
+                || !PluginNodeRequests.Allows(currentTarget, CcExecutionQueryService.Operation)
                 || queries.Any(item => RuntimeStateReplicationAuthorization.AuthorizeSend(currentState, message.SenderNodeId,
                     new(CcDecisionService.DecisionDomain, item.Policy.StateKey, currentState.NodeId, 1,
                         DateTimeOffset.UtcNow, null, false, null)) is not null))

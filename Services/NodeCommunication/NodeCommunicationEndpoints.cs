@@ -1,7 +1,6 @@
 using System.Text.Json;
 using LyWaf.Services.Distribution;
 using LyWaf.Services.RuntimeState;
-using LyWaf.Services.Statistic;
 
 namespace LyWaf.Services.NodeCommunication;
 
@@ -9,7 +8,7 @@ public static class NodeCommunicationEndpoints
 {
     public static void MapNodeCommunication(this WebApplication app, int port)
     {
-        foreach (var operation in NodeProtocolOperations.All)
+        foreach (var operation in NodeProtocolOperations.All.Concat(PluginNodeRequests.LegacyOperations(app.Services)).Distinct(StringComparer.Ordinal))
         {
             var name = operation;
             app.MapPost(NodeMessageAuthentication.Prefix + name, (HttpContext context, NodeMessageAuthentication authentication) =>
@@ -19,7 +18,9 @@ public static class NodeCommunicationEndpoints
 
     public static async Task<IResult> DispatchAsync(HttpContext context, NodeMessageAuthentication authentication, string name)
     {
-                if (!NodeProtocolOperations.IsSupported(name)) return NodeProtocolResponse.Error(context, "node_operation_forbidden", 403);
+                NodeRequestTiming.Capture(context);
+                if (!NodeProtocolOperations.IsSupported(name) && !PluginNodeRequests.LegacyOperations(context.RequestServices).Contains(name, StringComparer.Ordinal))
+                    return NodeProtocolResponse.Error(context, "node_operation_forbidden", 403);
                 var (message, error) = await authentication.ReadAsync(context, name, context.RequestAborted);
                 if (error is not null) return NodeProtocolResponse.Error(context, error);
                 NodeProtocolResponse.BindAuthenticatedMessage(context, message!);
@@ -38,10 +39,7 @@ public static class NodeCommunicationEndpoints
                         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
                         { return Results.Empty; }
                     }
-                    if (name == CcExecutionQueryService.Operation)
-                        return context.RequestServices.GetRequiredService<CcExecutionQueryService>().HandleAuthenticated(message!, context);
-                    if (name == CcExecutionRelayService.Operation)
-                        return await context.RequestServices.GetRequiredService<CcExecutionRelayService>().HandleAsync(message!, context);
+                    if (await PluginNodeRequests.DispatchAsync(message!, context) is { } pluginRequest) return pluginRequest;
                     if (name is PluginNodeMessageService.Operation or PluginNodeMessageService.RelayOperation)
                     {
                         var messaging = context.RequestServices.GetService<PluginNodeMessageService>();
@@ -67,8 +65,6 @@ public static class NodeCommunicationEndpoints
                         catch (Exception ex) when (ex is IOException or InvalidOperationException)
                         { return NodeProtocolResponse.Error(context, "node_handshake_unavailable", 503); }
                     }
-                    if (name == CcCaptchaReleaseIssuer.Operation)
-                        return await context.RequestServices.GetRequiredService<CcCaptchaReleaseIssuer>().HandleAsync(message!, context);
                     if (name == RuntimeStateSyncProtocol.Operation)
                     {
                         var runtime = context.RequestServices.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<RuntimeStateOptions>>().CurrentValue;

@@ -138,10 +138,16 @@ public sealed class NodeSocketChannel : IAsyncDisposable
         finally { send.Release(); }
     }
 
-    public ValueTask DisposeAsync()
+    internal void Abort()
     {
         lifetime.Cancel();
-        socket.Abort();
+        try { socket.Abort(); }
+        catch (ObjectDisposedException) { }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        Abort();
         socket.Dispose();
         return ValueTask.CompletedTask;
     }

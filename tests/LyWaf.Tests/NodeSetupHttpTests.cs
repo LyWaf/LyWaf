@@ -74,6 +74,125 @@ public sealed class NodeSetupHttpTests
         Assert.Empty(host.Store.Peers());
     }
 
+    [Fact]
+    public async Task SharedKeyAndDeletionRequireAdminRefreshLiveOptionsAndNeverExposeKeyInStatus()
+    {
+        await using var host = await Host.StartAsync();
+        var issued = await host.Store.CreateCredentialAsync("edge", default);
+        var original = NodeSetupStore.DecodeCredential(issued.Credential);
+        var secret = new string('c', 64);
+        using var denied = await host.SendAsync(HttpMethod.Put, "/api/node-setup/shared-key", new { key = secret }, auditor: true);
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        using var saved = await host.SendAsync(HttpMethod.Put, "/api/node-setup/shared-key", new { key = secret });
+        saved.EnsureSuccessStatusCode();
+        Assert.DoesNotContain(secret, await saved.Content.ReadAsStringAsync());
+        var config = host.App.Services.GetRequiredService<IOptionsMonitor<NodeCommunicationOptions>>().CurrentValue;
+        Assert.Equal(secret, config.Peers[original.NodeId].Keys[config.Peers[original.NodeId].ActiveKeyId]);
+        Assert.DoesNotContain(original.Secret, config.Peers[original.NodeId].Keys.Values);
+        using var exported = await host.SendAsync(HttpMethod.Post, $"/api/node-setup/peers/{original.NodeId}/credential", idempotencyKey: "export-once");
+        exported.EnsureSuccessStatusCode();
+        Assert.Contains("no-store", exported.Headers.CacheControl!.ToString());
+        using var response = JsonDocument.Parse(await exported.Content.ReadAsStringAsync());
+        Assert.Equal(secret, NodeSetupStore.DecodeCredential(response.RootElement.GetProperty("credential").GetString()!).Secret);
+        using var replay = await host.SendAsync(HttpMethod.Post, $"/api/node-setup/peers/{original.NodeId}/credential", idempotencyKey: "export-once");
+        Assert.Equal(HttpStatusCode.Conflict, replay.StatusCode);
+        using var auditorDelete = await host.SendAsync(HttpMethod.Delete, $"/api/node-setup/peers/{original.NodeId}", auditor: true);
+        Assert.Equal(HttpStatusCode.Forbidden, auditorDelete.StatusCode);
+        using var deleted = await host.SendAsync(HttpMethod.Delete, $"/api/node-setup/peers/{original.NodeId}");
+        deleted.EnsureSuccessStatusCode();
+        Assert.Empty(host.Store.Peers());
+        Assert.DoesNotContain(original.NodeId, host.App.Services.GetRequiredService<IOptionsMonitor<NodeCommunicationOptions>>().CurrentValue.Peers.Keys);
+        using var missing = await host.SendAsync(HttpMethod.Post, $"/api/node-setup/peers/{original.NodeId}/credential");
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        using var status = await host.SendAsync(HttpMethod.Get, "/api/node-setup", auditor: true);
+        Assert.DoesNotContain(secret, await status.Content.ReadAsStringAsync());
+        Assert.All(host.Audit.Actions, action => Assert.DoesNotContain(secret, action));
+    }
+
+    [Fact]
+    public async Task SharedKeyDirectJoinPersistsItsMethodAndIdentityWithoutManualCredential()
+    {
+        await using var host = await Host.StartAsync();
+        var shared = new string('d', 64);
+        using var configured = await host.SendAsync(HttpMethod.Put, "/api/node-setup/shared-key", new { key = shared });
+        configured.EnsureSuccessStatusCode();
+        var clientRoot = Path.Combine(host.Root, "joining-client");
+        var node = new NodeSetupStore(clientRoot);
+        var endpoint = host.App.Urls.Single() + "/";
+        var status = await node.ConfigureAsync("Node", endpoint, null, default,
+            authenticationMode: "SharedKey", sharedKey: shared, nodeName: "Shared node");
+        Assert.Equal("SharedKey", status.AuthenticationMode);
+        Assert.True(status.RestartRequired);
+        Assert.Single(host.Store.Peers());
+        var id = status.NodeId;
+        var reloaded = new NodeSetupStore(clientRoot);
+        Assert.Equal("SharedKey", reloaded.Status().AuthenticationMode);
+        Assert.Equal(id, reloaded.Status().NodeId);
+        Assert.Equal(shared, reloaded.Active!.Node!.Credential.Secret);
+        Assert.NotEmpty(reloaded.Active.Node.Credential.ReleasePublicKeyPem);
+        var unchanged = await reloaded.ConfigureAsync("Node", endpoint, null, default, authenticationMode: "SharedKey");
+        Assert.False(unchanged.RestartRequired);
+        await reloaded.ConfigureAsync("Node", endpoint, null, default, authenticationMode: "SharedKey", sharedKey: shared);
+        Assert.Single(host.Store.Peers());
+        Assert.Equal(id, reloaded.Status().NodeId);
+        await Assert.ThrowsAsync<HttpRequestException>(() => reloaded.ConfigureAsync("Node", endpoint, null, default,
+            authenticationMode: "SharedKey", sharedKey: new string('e', 64)));
+        Assert.Equal(id, reloaded.Status().NodeId);
+        var rotated = new string('e', 64);
+        await host.Store.SetSharedCommunicationKeyAsync(rotated, default);
+        await reloaded.ConfigureAsync("Node", endpoint, null, default, authenticationMode: "SharedKey", sharedKey: rotated);
+        Assert.Equal(id, reloaded.Status().NodeId);
+        Assert.Single(host.Store.Peers());
+        await host.Store.DeletePeerAsync(id!, default);
+        await Assert.ThrowsAsync<HttpRequestException>(() => reloaded.ConfigureAsync("Node", endpoint, null, default,
+            authenticationMode: "SharedKey", sharedKey: rotated));
+        Assert.Empty(host.Store.Peers());
+    }
+
+    [Fact]
+    public async Task EnrollmentRequiresFreshSignedRequestAndRejectsReplayAndDisabledIdentity()
+    {
+        await using var host = await Host.StartAsync();
+        var secret = new string('f', 64);
+        await host.Store.SetSharedCommunicationKeyAsync(secret, default);
+        var request = NodeSharedKeyEnrollment.Create(secret, "node-auto", "Auto node");
+        using var bad = await host.SendAsync(HttpMethod.Post, NodeSharedKeyEnrollment.Path, request with { Name = "Tampered" });
+        Assert.Equal(HttpStatusCode.Unauthorized, bad.StatusCode);
+        using var accepted = await host.SendAsync(HttpMethod.Post, NodeSharedKeyEnrollment.Path, request);
+        accepted.EnsureSuccessStatusCode();
+        Assert.Contains("no-store", accepted.Headers.CacheControl!.ToString());
+        var reply = await accepted.Content.ReadFromJsonAsync<NodeSharedKeyReply>();
+        Assert.Equal(request.Nonce, reply!.Nonce);
+        Assert.Equal(NodeSharedKeyEnrollment.Reply(secret, request, reply.Credential).Signature, reply.Signature);
+        using var replay = await host.SendAsync(HttpMethod.Post, NodeSharedKeyEnrollment.Path, request);
+        Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
+        await host.Store.SetPeerEnabledAsync(request.NodeId, false, default);
+        using var disabled = await host.SendAsync(HttpMethod.Post, NodeSharedKeyEnrollment.Path,
+            NodeSharedKeyEnrollment.Create(secret, request.NodeId, request.Name));
+        Assert.Equal(HttpStatusCode.Unauthorized, disabled.StatusCode);
+        Assert.DoesNotContain(secret, string.Join('\n', host.Audit.Actions));
+    }
+
+    [Fact]
+    public async Task FailedFirstJoinReusesItsPersistentIdentityOnRetry()
+    {
+        await using var host = await Host.StartAsync();
+        var secret = new string('b', 64);
+        await host.Store.SetSharedCommunicationKeyAsync(secret, default);
+        var root = Path.Combine(host.Root, "retry-client");
+        var client = new NodeSetupStore(root);
+        var endpoint = host.App.Urls.Single() + "/";
+        await Assert.ThrowsAsync<HttpRequestException>(() => client.ConfigureAsync("Node", endpoint, null, default,
+            authenticationMode: "SharedKey", sharedKey: new string('a', 64)));
+        Assert.Equal("Standalone", client.Status().Mode);
+        var stableId = await File.ReadAllTextAsync(Path.Combine(root, "shared-node-id"));
+        Assert.Empty(host.Store.Peers());
+        client = new NodeSetupStore(root);
+        var joined = await client.ConfigureAsync("Node", endpoint, null, default, authenticationMode: "SharedKey", sharedKey: secret);
+        Assert.Equal(stableId, joined.NodeId);
+        Assert.Single(host.Store.Peers());
+    }
+
     private sealed class Audit : IAuditLogService
     {
         public List<string> Actions { get; } = [];
@@ -84,6 +203,7 @@ public sealed class NodeSetupHttpTests
     private sealed class Host : IAsyncDisposable
     {
         private readonly string root = Path.Combine(Path.GetTempPath(), "lywaf-setup-http-" + Guid.NewGuid().ToString("N"));
+        public string Root => root;
         public WebApplication App { get; private set; } = null!;
         public NodeSetupStore Store { get; private set; } = null!;
         public Audit Audit { get; } = new();

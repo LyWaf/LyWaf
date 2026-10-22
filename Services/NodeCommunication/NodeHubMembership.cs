@@ -86,7 +86,7 @@ public sealed class NodeHubMembership(TimeProvider? clock = null)
             throw new InvalidDataException("Cannot endorse node membership");
         // Keep revoked IDs for the provenance of historical counters. Admission is checked independently on every RPC.
         var nodes = config.Peers.Where(pair => pair.Value.Role == "Node").Select(pair => pair.Key)
-            .Append(config.NodeId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            .Concat(config.HistoricalNodeIds).Append(config.NodeId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         if (nodes.Length > 1025 || nodes.Any(id => !NodeMessageAuthentication.ValidId(id))
             || authority is not null && !NodeSetupCrypto.ValidAuthority(authority))
             throw new InvalidDataException("Invalid node membership");

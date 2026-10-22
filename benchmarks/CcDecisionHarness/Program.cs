@@ -76,6 +76,7 @@ static class CcHarness
                 faultClock, s.GetRequiredService<IOptionsMonitor<NodeCommunicationOptions>>()));
             builder.Services.AddSingleton<CcPeerQueryClient>();
             builder.Services.AddSingleton<CcExecutionQueryService>();
+            LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Register(builder.Services);
             builder.Services.AddHostedService<CcCohortMonitor>();
         }
         builder.Services.AddSingleton<CcDecisionService>();

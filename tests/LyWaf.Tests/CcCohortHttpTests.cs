@@ -238,6 +238,7 @@ public sealed class CcCohortHttpTests
             builder.Services.AddSingleton(node._identity).AddSingleton<NodeMessageAuthentication>();
             builder.Services.AddSingleton<IStartupFilter, CcQueryTimingStartupFilter>();
             builder.Services.AddSingleton(new CcExecutionQueryService(node.Decisions, co, ro, node.Cohort, statistics));
+            LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Register(builder.Services);
             node._app = builder.Build(); node._app.MapNodeCommunication(port); await node._app.StartAsync();
             node.Url = $"http://127.0.0.1:{port}"; return node;
         }

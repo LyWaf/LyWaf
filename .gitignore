@@ -37,3 +37,6 @@ tests/**/obj/
 sdk/**/bin/
 sdk/**/obj/
 */http-upload/*
+.cc-test-artifacts
+*artifacts*
+*TestResults*

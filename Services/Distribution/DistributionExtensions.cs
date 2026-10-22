@@ -2,6 +2,7 @@ using LyWaf.Services.AuditLog;
 using LyWaf.Services.ManagementApi;
 using LyWaf.Services.Auth;
 using LyWaf.Services.NodeCommunication;
+using LyWaf.Plugins.Core;
 
 namespace LyWaf.Services.Distribution;
 
@@ -26,7 +27,7 @@ public static class DistributionExtensions
                 if (config.Enabled && NodeMessageAuthentication.ValidId(config.ClusterId) && string.IsNullOrEmpty(config.NodeId))
                     config.NodeId = NodeIdentityService.Resolve(config).NodeId;
             })
-            .Validate(config => !config.Enabled ||
+            .Validate<IEnumerable<IPluginNodeRequestHandler>>((config, handlers) => !config.Enabled ||
                 (NodeMessageAuthentication.ValidId(config.ClusterId) && NodeMessageAuthentication.ValidId(config.NodeId)
                  && config.Role is "Controller" or "Node"
                  && config.AllowedClockSkewSeconds is >= 5 and <= 300
@@ -35,7 +36,8 @@ public static class DistributionExtensions
                      && pair.Value.Role is "Controller" or "Node"
                      && NodeAdmissionPolicy.IsValid(pair.Value.AdmissionState)
                      && pair.Value.AllowedOperations is not null
-                     && pair.Value.AllowedOperations.All(NodeProtocolOperations.IsSupported)
+                     && pair.Value.AllowedOperations.All(operation => NodeProtocolOperations.IsSupported(operation)
+                         || handlers.Any(handler => handler.Requests.Any(request => request.LegacyOperation == operation)))
                      && pair.Value.Keys.Count > 0
                      && pair.Value.Keys.All(key => NodeMessageAuthentication.ValidId(key.Key) && !string.IsNullOrEmpty(key.Value)
                          && System.Text.Encoding.UTF8.GetByteCount(key.Value) >= 32))),

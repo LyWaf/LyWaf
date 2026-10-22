@@ -135,6 +135,7 @@ public sealed class NodeOperationBusinessHttpTests
             h.Protocol.Peers["sender"].CcCaptchaReleaseGrants = [new("captcha", "host:a.example")];
             services.AddSingleton(statistics);
             services.AddSingleton<CcCaptchaReleaseIssuer>();
+            LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Register(services);
             services.AddSingleton<CcBanLog>();
             services.AddSingleton<CcDecisionService>();
             services.AddSingleton<CcExecutionQueryService>();
@@ -212,7 +213,7 @@ public sealed class NodeOperationBusinessHttpTests
     private sealed class ContractPlugins : IPluginManager
     {
         public ContractPlugin Plugin = new();
-        public ILyWafPlugin? GetPlugin(string id) => id == "sample" ? Plugin : null;
+        public ILyWafPlugin? GetPlugin(string id) => id == "sample" ? Plugin : id == "analysis" ? new LyWaf.Plugins.Sys.AnalysisPlugin() : null;
         public IReadOnlyList<ILyWafPlugin> GetAllPlugins() => [Plugin];
         public IReadOnlyList<ILyWafPlugin> GetSystemPlugins() => [];
         public bool IsSystemPlugin(string id) => false;
@@ -220,6 +221,6 @@ public sealed class NodeOperationBusinessHttpTests
         public Task DisablePluginAsync(string id) => Task.CompletedTask;
         public Task ReloadPluginAsync(string id) => Task.CompletedTask;
         public PluginState GetPluginState(string id) => PluginState.Running;
-        public bool IsPermissionGranted(string id, PluginPermission permission) => id == "sample";
+        public bool IsPermissionGranted(string id, PluginPermission permission) => id is "sample" or "analysis";
     }
 }

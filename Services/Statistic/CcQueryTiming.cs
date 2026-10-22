@@ -6,9 +6,9 @@ namespace LyWaf.Services.Statistic;
 
 internal sealed record CcQueryTiming(DateTimeOffset ReceivedAt, long Started)
 {
-    private static readonly object Key = new();
-    internal static void Capture(HttpContext context) => context.Items[Key] = new CcQueryTiming(DateTimeOffset.UtcNow, Stopwatch.GetTimestamp());
-    internal static CcQueryTiming? Read(HttpContext context) => context.Items.TryGetValue(Key, out var value) ? value as CcQueryTiming : null;
+    internal static void Capture(HttpContext context) => NodeRequestTiming.Capture(context);
+    internal static CcQueryTiming? Read(HttpContext context) => NodeRequestTiming.Read(context) is { } value
+        ? new(value.ReceivedAt, value.Started) : null;
 }
 
 // Capture locally before authentication, never from caller-provided headers.

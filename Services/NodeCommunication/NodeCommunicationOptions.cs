@@ -12,6 +12,7 @@ public sealed class NodeCommunicationOptions
     public bool RequireHttps { get; set; } = true;
     public bool AllowLegacyProtocol { get; set; } = true;
     public string StateDirectory { get; set; } = ".lywaf-node-communication";
+    public List<string> HistoricalNodeIds { get; set; } = [];
     public long MaxMessageBytes { get; set; } = 8 * 1024 * 1024;
     public int AllowedClockSkewSeconds { get; set; } = 60;
     public Dictionary<string, NodePeerOptions> Peers { get; set; } = new(StringComparer.Ordinal);

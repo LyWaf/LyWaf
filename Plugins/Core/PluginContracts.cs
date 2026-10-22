@@ -13,6 +13,7 @@ public interface IPluginContext
     IPluginStorage Storage { get; }
     IPluginNetworkClientFactory Network => throw new NotSupportedException("插件上下文未提供网络客户端。");
     IPluginNodeMessageClient NodeMessages => throw new NotSupportedException("Host node messaging is unavailable.");
+    IPluginNodeRequestClient NodeRequests => throw new NotSupportedException("Host node requests are unavailable.");
     T GetPluginConfig<T>(string? sectionName = null) where T : class, new();
     ILyWafPlugin? GetPlugin(string pluginId);
     IReadOnlyList<ILyWafPlugin> GetAllPlugins();
@@ -69,6 +70,28 @@ public sealed record PluginNodeHandlerResult(bool Ack, string? ErrorCode = null)
 public interface IPluginNodeMessageHandler
 {
     Task<PluginNodeHandlerResult> HandleNodeMessageAsync(PluginNodeReceivedMessage message, CancellationToken cancellationToken);
+}
+
+/// <summary>Request/reply operations owned by a plugin. Legacy names are explicit compatibility aliases.</summary>
+public sealed record PluginNodeRequestCapability(string MessageType, int SchemaVersion, string? LegacyOperation = null);
+public sealed record PluginNodeRequest(string ClusterId, string SenderNodeId, string ReceiverNodeId,
+    string MessageId, string CorrelationId, string MessageType, int SchemaVersion,
+    DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt, System.Text.Json.JsonElement Payload);
+
+public interface IPluginNodeRequestHandler
+{
+    string PluginId { get; }
+    IReadOnlyList<PluginNodeRequestCapability> Requests { get; }
+    Task<IResult> HandleNodeRequestAsync(PluginNodeRequest message, HttpContext context);
+}
+
+public sealed record PluginNodeResponse(string MessageId, int StatusCode, System.Text.Json.JsonElement Payload);
+
+/// <summary>Host-bound identity and peer routing; no URI or signing key is exposed. No automatic retries.</summary>
+public interface IPluginNodeRequestClient
+{
+    Task<PluginNodeResponse> RequestAsync(string targetNodeId, string messageType, int schemaVersion,
+        System.Text.Json.JsonElement payload, string messageId, CancellationToken cancellationToken);
 }
 
 /// <summary>可选通知接收能力，宿主仅调用处于运行状态并已授权网络权限的插件。</summary>

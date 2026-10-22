@@ -10,6 +10,19 @@ public sealed class NodeSocketConnections
 
     public bool IsConnected(string peer) => connections.TryGetValue(peer, out var lease) && lease.Channel is not null;
 
+    public Task DisconnectAsync(string peer)
+    {
+        NodeSocketChannel? channel;
+        lock (gate)
+        {
+            if (!connections.TryGetValue(peer, out var lease)) return Task.CompletedTask;
+            channel = lease.Channel;
+            lease.Dispose();
+        }
+        channel?.Abort();
+        return Task.CompletedTask;
+    }
+
     internal Lease? Reserve(string peer, string? cluster = null, string? localNode = null, bool? secureTransport = null)
     {
         lock (gate)

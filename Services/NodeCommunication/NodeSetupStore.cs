@@ -7,15 +7,16 @@ public sealed record NodeSetupCredential(int Version, string ClusterId, string C
     string NodeId, string KeyId, string Secret, string ReleasePublicKeyPem = "", string ChallengeSecret = "", string ReleaseTrustDomain = "");
 public sealed record NodeSetupPeer(string NodeId, string Name, string KeyId, string Secret, bool Enabled = true);
 public sealed record NodeControllerSetup(string ClusterId, string NodeId, IReadOnlyList<NodeSetupPeer> Peers,
-    string ReleasePrivateKeyPem = "", string ChallengeSecret = "", string ReleaseTrustDomain = "");
-public sealed record NodeClientSetup(string ControllerUrl, NodeSetupCredential Credential);
+    string ReleasePrivateKeyPem = "", string ChallengeSecret = "", string ReleaseTrustDomain = "",
+    string SharedSecret = "", string SharedKeyId = "", IReadOnlyList<string>? RetiredNodeIds = null);
+public sealed record NodeClientSetup(string ControllerUrl, NodeSetupCredential Credential, string AuthenticationMode = "Credential");
 public sealed record NodeSetupState(int Version, long Revision, string Mode,
     NodeControllerSetup? Controller = null, NodeClientSetup? Node = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? SynchronizeRuntimeState = null);
 public sealed record NodeSetupStatus(string Mode, string ActiveMode, string? NodeId, string? ClusterId,
     string? ControllerUrl, bool HasCredential, bool RestartRequired, long Revision, bool AuthorityUpgradePending = false,
     bool SynchronizeRuntimeState = false, bool RuntimeSynchronizationActive = false, bool RuntimeSynchronizationConfigured = false,
-    bool RuntimeHistoryChangePending = false);
+    bool RuntimeHistoryChangePending = false, bool HasSharedCommunicationKey = false, string AuthenticationMode = "Credential");
 public sealed record NodeSetupPeerStatus(string NodeId, string Name, bool Enabled);
 
 /// <summary>Node-local role and per-node credentials. Role changes apply on restart; peer grants can refresh live.</summary>
@@ -82,7 +83,8 @@ public sealed class NodeSetupStore
             state?.SynchronizeRuntimeState ?? legacyRuntimeStateEnabled, RuntimeSynchronizationEnabled(running), state?.SynchronizeRuntimeState is not null,
             state is not null && (state.Mode != (running?.Mode ?? "Standalone")
                 || state.Mode != "Standalone" && running is not null && !string.Equals(RuntimeDirectory(state), RuntimeDirectory(running),
-                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)));
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)),
+            !string.IsNullOrEmpty(state?.Controller?.SharedSecret), client?.AuthenticationMode ?? "Credential");
     }
 
     internal NodeHubAuthority? ControllerAuthority(NodeCommunicationOptions config)
@@ -132,17 +134,39 @@ public sealed class NodeSetupStore
         .Select(peer => new NodeSetupPeerStatus(peer.NodeId, peer.Name, peer.Enabled)).ToArray() ?? [];
 
     public async Task<NodeSetupStatus> ConfigureAsync(string mode, string? controllerUrl, string? credential, CancellationToken token,
-        bool? synchronizeRuntimeState = null)
+        bool? synchronizeRuntimeState = null, string? authenticationMode = null, string? sharedKey = null, string? nodeName = null)
     {
         if (mode is not ("Standalone" or "Controller" or "Node")) throw new ArgumentException("Invalid node mode");
         NodeClientSetup? client = null;
         if (mode == "Node")
         {
             var endpoint = NormalizeUrl(controllerUrl);
-            var key = string.IsNullOrWhiteSpace(credential)
-                ? Volatile.Read(ref desired)?.Node?.Credential ?? throw new ArgumentException("Node credential is required")
-                : DecodeCredential(credential);
-            client = new(endpoint, key);
+            var previous = Volatile.Read(ref desired)?.Node;
+            var method = authenticationMode ?? previous?.AuthenticationMode ?? "Credential";
+            if (method is not ("Credential" or "SharedKey")) throw new ArgumentException("Invalid authentication mode");
+            NodeSetupCredential key;
+            if (method == "SharedKey" && !string.IsNullOrEmpty(sharedKey))
+            {
+                if (!string.IsNullOrWhiteSpace(credential)) throw new ArgumentException("Ambiguous authentication");
+                var secret = NormalizeSharedKey(sharedKey);
+                var id = previous?.ControllerUrl == endpoint ? previous.Credential.NodeId : await EnrollmentIdentityAsync(token);
+                var name = string.IsNullOrWhiteSpace(nodeName) ? id : nodeName.Trim();
+                key = await NodeSharedKeyEnrollment.JoinAsync(endpoint, secret, id, name, token);
+            }
+            else if (method == "SharedKey")
+            {
+                if (!string.IsNullOrWhiteSpace(credential) || previous?.AuthenticationMode != method || previous.ControllerUrl != endpoint)
+                    throw new ArgumentException("Shared communication key is required");
+                key = previous.Credential;
+            }
+            else
+            {
+                if (!string.IsNullOrEmpty(sharedKey)) throw new ArgumentException("Ambiguous authentication");
+                key = string.IsNullOrWhiteSpace(credential)
+                    ? previous is { AuthenticationMode: "Credential" } ? previous.Credential : throw new ArgumentException("Node credential is required")
+                    : DecodeCredential(credential);
+            }
+            client = new(endpoint, key, method);
         }
         await MutateAsync(state => state with
         {
@@ -167,8 +191,9 @@ public sealed class NodeSetupStore
         {
             var controller = state.Controller;
             if (state.Mode != "Controller" || controller is null) throw new InvalidOperationException("Controller mode is required");
-            if (controller.Peers.Count >= 1024) throw new InvalidOperationException("Node capacity exceeded");
+            if (controller.Peers.Count + (controller.RetiredNodeIds?.Count ?? 0) >= 1024) throw new InvalidOperationException("Node identity history capacity exceeded");
             controller = EnsureController(controller);
+            if (!string.IsNullOrEmpty(controller.SharedSecret)) peer = peer with { Secret = controller.SharedSecret, KeyId = controller.SharedKeyId };
             issued = new(1, controller.ClusterId, controller.NodeId, peer.NodeId, peer.KeyId, peer.Secret,
                 NodeSetupCrypto.PublicKey(controller.ReleasePrivateKeyPem), controller.ChallengeSecret, controller.ReleaseTrustDomain);
             return state with { Controller = controller with { Peers = controller.Peers.Append(peer).ToArray() } };
@@ -186,6 +211,133 @@ public sealed class NodeSetupStore
             return state with { Controller = state.Controller with { Peers = state.Controller.Peers
                 .Select(peer => peer.NodeId == nodeId ? peer with { Enabled = enabled } : peer).ToArray() } };
         }, refreshPeers: true, token);
+    }
+
+    public async Task DeletePeerAsync(string nodeId, CancellationToken token)
+    {
+        await MutateAsync(state =>
+        {
+            if (state.Mode != "Controller" || state.Controller is null) throw new InvalidOperationException("Controller mode is required");
+            if (Active is { Mode: "Controller" } running && running.Revision != state.Revision)
+                throw new InvalidOperationException("Apply pending controller changes before editing membership");
+            var controller = state.Controller;
+            if (!controller.Peers.Any(peer => peer.NodeId == nodeId)) throw new KeyNotFoundException("Node is not configured");
+            return state with { Controller = controller with
+            {
+                Peers = controller.Peers.Where(peer => peer.NodeId != nodeId).ToArray(),
+                RetiredNodeIds = (controller.RetiredNodeIds ?? []).Append(nodeId).Distinct(StringComparer.Ordinal).ToArray()
+            } };
+        }, refreshPeers: true, token);
+    }
+
+    public async Task<bool> SetSharedCommunicationKeyAsync(string key, CancellationToken token)
+    {
+        var secret = NormalizeSharedKey(key);
+        var changed = false;
+        await MutateAsync(state =>
+        {
+            if (state.Mode != "Controller" || state.Controller is null) throw new InvalidOperationException("Controller mode is required");
+            if (Active is { Mode: "Controller" } running && running.Revision != state.Revision)
+                throw new InvalidOperationException("Apply pending controller changes before changing the shared key");
+            if (state.Controller.SharedSecret == secret) return state;
+            changed = true;
+            var keyId = "shared-" + Guid.NewGuid().ToString("N");
+            return state with { Controller = state.Controller with
+            {
+                SharedSecret = secret, SharedKeyId = keyId,
+                Peers = state.Controller.Peers.Select(peer => peer with { Secret = secret, KeyId = keyId }).ToArray()
+            } };
+        }, refreshPeers: true, token);
+        return changed;
+    }
+
+    internal static string NormalizeSharedKey(string key)
+    {
+        if (key is not { Length: >= 32 and <= 256 } || key.Any(char.IsControl) || string.IsNullOrWhiteSpace(key))
+            throw new ArgumentException("Invalid shared communication key");
+        return key.Length == 64 && key.All(char.IsAsciiHexDigit) ? key.ToLowerInvariant()
+            : Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
+    }
+
+    private async Task<string> EnrollmentIdentityAsync(CancellationToken token)
+    {
+        await gate.WaitAsync(token);
+        try
+        {
+            var path = Path.Combine(root, "shared-node-id");
+            RejectLinks(path);
+            Directory.CreateDirectory(root);
+            if (File.Exists(path))
+            {
+                if (new FileInfo(path).Length > 128) throw new InvalidDataException("Invalid enrollment identity");
+                var existing = await File.ReadAllTextAsync(path, token);
+                if (!SafeId(existing)) throw new InvalidDataException("Invalid enrollment identity");
+                return existing;
+            }
+            var id = "node-" + Guid.NewGuid().ToString("N");
+            using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            await output.WriteAsync(System.Text.Encoding.UTF8.GetBytes(id), token);
+            output.Flush(true);
+            return id;
+        }
+        finally { gate.Release(); }
+    }
+
+    internal async Task<string> EnrollSharedKeyAsync(NodeSharedKeyRequest request, CancellationToken token)
+    {
+        var running = Active;
+        var controller = running?.Mode == "Controller" ? running.Controller : null;
+        if (controller is null || string.IsNullOrEmpty(controller.SharedSecret)) throw new UnauthorizedAccessException();
+        NodeSharedKeyEnrollment.Validate(request, controller.SharedSecret);
+        var claim = await PersistentReplayGuard.ClaimAsync(Path.Combine(root, "shared-enrollment-replay"),
+            controller.ClusterId + ":" + controller.SharedKeyId + ":" + request.Nonce, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), token);
+        if (claim == ReplayClaim.Replay) throw new UnauthorizedAccessException();
+        if (claim != ReplayClaim.Accepted) throw new IOException("Enrollment replay store unavailable");
+        await MutateAsync(state =>
+        {
+            if (state.Mode != "Controller" || state.Revision != Active?.Revision
+                || state.Controller?.SharedSecret != controller.SharedSecret || state.Controller.SharedKeyId != controller.SharedKeyId)
+                throw new InvalidOperationException("Controller configuration changed");
+            var current = state.Controller;
+            if (request.NodeId == current.NodeId || current.RetiredNodeIds?.Contains(request.NodeId) == true)
+                throw new UnauthorizedAccessException();
+            var peer = current.Peers.FirstOrDefault(peer => peer.NodeId == request.NodeId);
+            if (peer is not null)
+            {
+                if (!peer.Enabled) throw new UnauthorizedAccessException();
+                return state;
+            }
+            if (current.Peers.Count + (current.RetiredNodeIds?.Count ?? 0) >= 1024)
+                throw new InvalidOperationException("Node identity history capacity exceeded");
+            return state with { Controller = state.Controller with
+            {
+                Peers = current.Peers.Append(new(request.NodeId, request.Name, current.SharedKeyId, current.SharedSecret)).ToArray()
+            } };
+        }, refreshPeers: true, token);
+        // Use the validated generation, not a possibly rotated key read after releasing the store lock.
+        var credential = new NodeSetupCredential(1, controller.ClusterId, controller.NodeId, request.NodeId,
+            controller.SharedKeyId, controller.SharedSecret, NodeSetupCrypto.PublicKey(controller.ReleasePrivateKeyPem),
+            controller.ChallengeSecret, controller.ReleaseTrustDomain);
+        return Prefix + Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(credential, Json))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    public async Task<string> IssuePeerCredentialAsync(string nodeId, CancellationToken token)
+    {
+        await gate.WaitAsync(token);
+        try
+        {
+            var state = Volatile.Read(ref desired);
+            if (state?.Mode != "Controller" || state.Controller is null) throw new InvalidOperationException("Controller mode is required");
+            var controller = state.Controller;
+            var peer = controller.Peers.FirstOrDefault(peer => peer.NodeId == nodeId)
+                ?? throw new KeyNotFoundException("Node is not configured");
+            var credential = new NodeSetupCredential(1, controller.ClusterId, controller.NodeId, peer.NodeId, peer.KeyId, peer.Secret,
+                NodeSetupCrypto.PublicKey(controller.ReleasePrivateKeyPem), controller.ChallengeSecret, controller.ReleaseTrustDomain);
+            return Prefix + Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(credential, Json))
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        }
+        finally { gate.Release(); }
     }
 
     internal string StateDirectory(NodeSetupState state) => Path.Combine(root, "clusters",
@@ -323,6 +475,17 @@ public sealed class NodeSetupStore
                 || peer.Name.Any(char.IsControl) || !Valid(new(1, controller.ClusterId, controller.NodeId, peer.NodeId, peer.KeyId, peer.Secret)))
             || controller.Peers.Select(peer => peer.NodeId).Distinct(StringComparer.Ordinal).Count() != controller.Peers.Count))
             throw new InvalidDataException("Invalid controller setup");
+        if (state.Controller is { } shared)
+        {
+            if (!(string.IsNullOrEmpty(shared.SharedSecret) && string.IsNullOrEmpty(shared.SharedKeyId))
+                && (!SafeId(shared.SharedKeyId) || shared.SharedSecret is not { Length: 64 } || !shared.SharedSecret.All(char.IsAsciiHexDigit)
+                    || shared.Peers.Any(peer => peer.Secret != shared.SharedSecret || peer.KeyId != shared.SharedKeyId)))
+                throw new InvalidDataException("Invalid shared communication key");
+            if (shared.RetiredNodeIds is { } retired && (retired.Count + shared.Peers.Count > 1024
+                || retired.Any(id => !SafeId(id) || id == shared.NodeId || shared.Peers.Any(peer => peer.NodeId == id))
+                || retired.Distinct(StringComparer.Ordinal).Count() != retired.Count))
+                throw new InvalidDataException("Invalid retired node identity history");
+        }
         if (state.Controller is { } authority && !(string.IsNullOrEmpty(authority.ReleasePrivateKeyPem)
                 && string.IsNullOrEmpty(authority.ChallengeSecret) && string.IsNullOrEmpty(authority.ReleaseTrustDomain))
             && (!NodeSetupCrypto.ValidPrivateKey(authority.ReleasePrivateKeyPem) || !NodeSetupCrypto.ValidChallengeSecret(authority.ChallengeSecret)
@@ -330,7 +493,7 @@ public sealed class NodeSetupStore
             throw new InvalidDataException("Invalid controller authority configuration");
         if (state.Node is { } node)
         {
-            if (node.Credential is null || !Valid(node.Credential)) throw new InvalidDataException("Invalid node setup");
+            if (node.AuthenticationMode is not ("Credential" or "SharedKey") || node.Credential is null || !Valid(node.Credential)) throw new InvalidDataException("Invalid node setup");
             try { NormalizeUrl(node.ControllerUrl); }
             catch (ArgumentException) { throw new InvalidDataException("Invalid node controller URL"); }
         }

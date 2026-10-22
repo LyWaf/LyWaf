@@ -67,14 +67,20 @@ export interface NodeSetupSettings {
   authorityUpgradePending?: boolean
   synchronizeRuntimeState?: boolean; runtimeSynchronizationActive?: boolean; runtimeSynchronizationConfigured?: boolean
   runtimeHistoryChangePending?: boolean
+  hasSharedCommunicationKey?: boolean
+    authenticationMode?: 'Credential' | 'SharedKey'
 }
 export interface NodeSetupPeer { nodeId: string; name: string; enabled: boolean }
 export const nodeSetupApi = {
   get: () => api.get<{ success: boolean; settings: NodeSetupSettings; peers: NodeSetupPeer[]; effectiveMode: NodeSetupMode }>('/node-setup'),
-  save: (settings: { mode: NodeSetupMode; controllerUrl?: string; credential?: string; synchronizeRuntimeState?: boolean }) =>
+  save: (settings: { mode: NodeSetupMode; controllerUrl?: string; credential?: string; synchronizeRuntimeState?: boolean;
+    authenticationMode?: 'Credential' | 'SharedKey'; sharedKey?: string; nodeName?: string }) =>
     api.put<{ success: boolean; settings: NodeSetupSettings }>('/node-setup', settings),
   createPeer: (name: string) => api.post<{ success: boolean; peer: NodeSetupPeer; credential: string }>('/node-setup/peers', { name }),
   setPeerEnabled: (id: string, enabled: boolean) => api.put<{ success: boolean }>(`/node-setup/peers/${encodeURIComponent(id)}`, { enabled }),
+  deletePeer: (id: string) => api.delete<{ success: boolean }>(`/node-setup/peers/${encodeURIComponent(id)}`),
+  issuePeerCredential: (id: string) => api.post<{ success: boolean; credential: string }>(`/node-setup/peers/${encodeURIComponent(id)}/credential`),
+  setSharedKey: (key: string) => api.put<{ success: boolean; settings: NodeSetupSettings }>('/node-setup/shared-key', { key }),
 }
 
 export interface ManagementPage<T> { success: boolean; data: T[]; total: number; page: number; pageSize: number }

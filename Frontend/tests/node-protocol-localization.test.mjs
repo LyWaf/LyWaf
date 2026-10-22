@@ -35,7 +35,7 @@ test('node protocol and replication authorization errors have both language reso
     '../../Services/NodeCommunication/NodeCommunicationEndpoints.cs',
     '../../Services/NodeCommunication/NodeIdentityConflictResolutionService.cs',
     '../../Services/NodeCommunication/PluginNodeMessageService.cs',
-    '../../Services/Statistic/CcExecutionRelayService.cs',
+    '../../Plugins/Sys/Analysis/CcExecutionRelayService.cs',
     '../../Services/RuntimeState/RuntimeStateReplicationAuthorization.cs',
   ]
   const codes = new Set(sources.flatMap(path =>

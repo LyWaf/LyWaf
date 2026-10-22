@@ -61,6 +61,7 @@ static class RecoveryNode
         builder.Services.AddSingleton<CcCohortState>();
         builder.Services.AddSingleton<CcPeerQueryClient>();
         builder.Services.AddSingleton<CcExecutionQueryService>();
+        LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Register(builder.Services);
         builder.Services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter, CcQueryTimingStartupFilter>();
         builder.Services.AddHostedService<CcCohortMonitor>();
         builder.Services.AddSingleton<CcDecisionService>();

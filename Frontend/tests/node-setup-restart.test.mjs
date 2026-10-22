@@ -5,17 +5,25 @@ import vm from 'node:vm'
 import ts from 'typescript'
 
 const source = readFileSync(new URL('../src/components/nodes/NodeSetupPanel.vue', import.meta.url), 'utf8')
+test('cluster synchronization labels describe plugin state rather than a specific plugin', () => {
+  for (const locale of ['zh-CN', 'en-US']) {
+    const messages = JSON.parse(readFileSync(new URL(`../../Localization/${locale}.json`, import.meta.url), 'utf8'))
+    assert.doesNotMatch(messages['node.setup.runtimeSync'], /CC/i)
+    assert.match(messages['node.setup.runtimeSync'], /插件|plugin/i)
+    assert.match(messages['node.setup.runtimeSyncRunning'], /插件|plugin/i)
+  }
+})
 function panel(restart = async () => ({ success: true })) {
   const calls = { restart: 0, save: 0, saved: [], success: [], errors: [] }
   const settings = { mode: 'Controller', activeMode: 'Standalone', restartRequired: true, revision: 1 }
   const exports = {}
   const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1]
-  const compiled = ts.transpileModule(script + '\nexport { settings, load, mode, synchronization, supportsSynchronization, syncHistoryChange, controllerUrl, credential, save, openRestart, confirmRestart, restartConfirm, restartSent, busy, blocked }',
+  const compiled = ts.transpileModule(script + '\nexport { settings, load, mode, synchronization, supportsSynchronization, syncHistoryChange, controllerUrl, credential, authenticationMode, joinSharedKey, joinNodeName, save, openRestart, confirmRestart, restartConfirm, restartSent, busy, blocked }',
     { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText
   vm.runInNewContext(compiled, {
     exports, defineEmits: () => () => {},
     require: name => {
-      if (name === 'vue') return { ref: value => ({ value }), computed: get => ({ get value() { return get() } }), nextTick: async () => {}, onMounted() {}, onBeforeUnmount() {} }
+      if (name === 'vue') return { ref: value => ({ value }), computed: get => ({ get value() { return get() } }), watch() {}, nextTick: async () => {}, onMounted() {}, onBeforeUnmount() {} }
       if (name === '@/api') return {
         nodeSetupApi: {
           save: async body => { calls.save++; calls.saved.push(body); return { settings: { ...settings } } },
@@ -49,6 +57,31 @@ test('background upgrade status refresh preserves unsaved drafts and ignores old
   await api.load(false)
   assert.equal(api.settings.value.revision, 2)
   assert.equal(api.settings.value.authorityUpgradePending, true)
+})
+
+test('node authentication submits only the selected method and clears the submitted secret', async () => {
+  for (const method of ['Credential', 'SharedKey']) {
+    const { api, calls } = panel()
+    api.mode.value = 'Node'
+    api.authenticationMode.value = method
+    api.credential.value = 'private-credential'
+    api.joinSharedKey.value = 'private-shared-key'
+    api.joinNodeName.value = 'Edge'
+    await api.save()
+    assert.equal(calls.saved[0].authenticationMode, method)
+    assert.equal(calls.saved[0].credential, method === 'Credential' ? 'private-credential' : undefined)
+    assert.equal(calls.saved[0].sharedKey, method === 'SharedKey' ? 'private-shared-key' : undefined)
+    assert.equal(api.credential.value, '')
+    assert.equal(api.joinSharedKey.value, '')
+  }
+})
+
+test('loading a shared-key node restores the selected tab without returning the key', async () => {
+  const { api, serverSettings } = panel()
+  Object.assign(serverSettings, { mode: 'Node', authenticationMode: 'SharedKey', hasCredential: true })
+  await api.load()
+  assert.equal(api.authenticationMode.value, 'SharedKey')
+  assert.equal(api.joinSharedKey.value, '')
 })
 
 test('new managed roles default to synchronization and allow explicit opt-out', async () => {

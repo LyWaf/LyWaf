@@ -21,6 +21,27 @@ public sealed class NodeSocketIntegrationTests
     private const string Secret = "socket-integration-key-at-least-32bytes";
 
     [Fact]
+    public async Task ExplicitRevocationClosesTheLiveSocketWithoutWaitingForReconnect()
+    {
+        await using var hosts = await Hosts.StartAsync();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var connections = hosts.Controller.Services.GetRequiredService<NodeSocketConnections>();
+        var connection = hosts.Connector().ConnectOnceAsync(deadline.Token);
+        try
+        {
+            await WaitFor(() => connections.IsConnected("edge"), deadline.Token);
+            await connections.DisconnectAsync("edge");
+            Assert.False(connections.IsConnected("edge"));
+            try { await connection.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (WebSocketException) { }
+            catch (IOException) { }
+            catch (OperationCanceledException) when (!deadline.IsCancellationRequested) { }
+            Assert.False(hosts.Node.Services.GetRequiredService<NodeSocketConnections>().IsConnected("controller"));
+        }
+        finally { deadline.Cancel(); await Stop(connection); }
+    }
+
+    [Fact]
     public async Task EquivalentOptionsReloadDoesNotDropTheExistingControlSocket()
     {
         await using var hosts = await Hosts.StartAsync();

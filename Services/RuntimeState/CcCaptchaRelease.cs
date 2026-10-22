@@ -37,7 +37,7 @@ public sealed class CcCaptchaReleaseIssuer(IOptionsMonitor<NodeCommunicationOpti
         if (!config.Enabled || message.ClusterId != config.ClusterId || message.Type != Operation
             || message.ExpiresAt <= DateTimeOffset.UtcNow || !config.Peers.TryGetValue(message.SenderNodeId, out var peer)
             || !NodeAdmissionPolicy.Allows(peer, Operation)
-            || !peer.AllowedOperations.Contains(Operation, StringComparer.Ordinal)) return Error(403, "cc_release_forbidden");
+            || !PluginNodeRequests.Allows(peer, Operation)) return Error(403, "cc_release_forbidden");
         CcCaptchaReleaseRequest? request;
         try { request = message.Payload.Deserialize<CcCaptchaReleaseRequest>(NodeMessageAuthentication.JsonOptions); }
         catch (JsonException) { return Error(400, "cc_release_invalid"); }

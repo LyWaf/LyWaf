@@ -19,6 +19,7 @@ public class PluginContext : IPluginContext
     public IPluginStorage Storage { get; }
     public IPluginNetworkClientFactory Network { get; }
     public IPluginNodeMessageClient NodeMessages { get; }
+    public IPluginNodeRequestClient NodeRequests { get; }
     
     public PluginContext(
         string pluginId,
@@ -48,6 +49,8 @@ public class PluginContext : IPluginContext
             pluginManager.IsPermissionGranted(pluginId, PluginPermission.Network));
         NodeMessages = services.GetService<LyWaf.Services.NodeCommunication.PluginNodeMessageService>()?.Bind(pluginId)
             ?? new UnavailableNodeMessages();
+        NodeRequests = services.GetService<LyWaf.Services.NodeCommunication.PluginNodeRequestClient>()?.Bind(pluginId)
+            ?? new UnavailableNodeRequests();
         Services = new ContextServices(this);
     }
 
@@ -98,6 +101,13 @@ public class PluginContext : IPluginContext
             throw new InvalidOperationException("Host node messaging is unavailable");
     }
 
+    private sealed class UnavailableNodeRequests : IPluginNodeRequestClient
+    {
+        public Task<PluginNodeResponse> RequestAsync(string targetNodeId, string messageType, int schemaVersion,
+            System.Text.Json.JsonElement payload, string messageId, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Host node requests are unavailable");
+    }
+
     // Deliberately has no fallback to the host provider, including scopes and IEnumerable<T>.
     private sealed class ContextServices(PluginContext context) : IServiceProvider
     {
@@ -110,6 +120,7 @@ public class PluginContext : IPluginContext
             if (serviceType == typeof(IPluginStorage)) return context.Storage;
             if (serviceType == typeof(IPluginNetworkClientFactory)) return context.Network;
             if (serviceType == typeof(IPluginNodeMessageClient)) return context.NodeMessages;
+            if (serviceType == typeof(IPluginNodeRequestClient)) return context.NodeRequests;
             if (serviceType == typeof(NLog.Logger)) return context.Logger;
             return null;
         }

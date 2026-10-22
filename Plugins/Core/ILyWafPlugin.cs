@@ -122,6 +122,7 @@ public class PluginMetadata
     public PluginPermission RequestedPermissions { get; init; } = PluginPermission.None;
     /// <summary>Exact message/schema/group capabilities; host policy must also grant them.</summary>
     public IReadOnlyList<PluginNodeMessageCapability> NodeMessages { get; init; } = [];
+    public IReadOnlyList<PluginNodeRequestCapability> NodeRequests { get; init; } = [];
 
     /// <summary>
     /// 插件默认配置选项实例

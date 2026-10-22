@@ -79,6 +79,7 @@ public static class NodeSetupConfiguration
         options.Peers.Clear();
         if (state.Mode == "Controller")
         {
+            options.HistoricalNodeIds = (state.Controller!.RetiredNodeIds ?? []).ToList();
             foreach (var peer in state.Controller!.Peers)
                 options.Peers[peer.NodeId] = Peer("Node", peer.KeyId, peer.Secret, peer.Enabled);
         }
@@ -126,7 +127,8 @@ public static class NodeSetupConfiguration
             options.CcReleaseTrustDomain = state.Controller.ReleaseTrustDomain;
             options.CcReleaseAuthorities.Clear();
             options.CcReleaseAuthorities[controller] = NodeSetupCrypto.PublicKey(state.Controller.ReleasePrivateKeyPem);
-            var known = state.Controller!.Peers.Select(peer => peer.NodeId).Append(controller).ToHashSet(StringComparer.Ordinal);
+            var known = state.Controller!.Peers.Select(peer => peer.NodeId).Concat(state.Controller.RetiredNodeIds ?? [])
+                .Append(controller).ToHashSet(StringComparer.Ordinal);
             options.HubSourceIsKnown = known.Contains;
             foreach (var peer in state.Controller.Peers)
                 options.Peers[peer.NodeId] = RuntimePeer("https://node-socket.invalid/", peer.Enabled, false);

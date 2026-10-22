@@ -20,7 +20,8 @@ public sealed class NodeSocketProtocol(IServiceScopeFactory scopes)
         if (request.Method != HttpMethod.Post || !path.StartsWith(NodeMessageAuthentication.Prefix, StringComparison.Ordinal)
             || request.RequestUri!.Query.Length != 0) throw new InvalidDataException("Invalid node request path");
         var operation = path[NodeMessageAuthentication.Prefix.Length..];
-        if (!NodeProtocolOperations.IsSupported(operation)) throw new InvalidDataException("Unsupported node operation");
+        // Encoding is not authorization. The receiver resolves plugin-declared aliases and checks all grants.
+        if (!NodeMessageAuthentication.ValidId(operation)) throw new InvalidDataException("Invalid node operation");
         var headers = SignedHeaders.ToDictionary(name => name, name => request.Headers.TryGetValues(name, out var values)
             ? values.ToArray() : Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
         var body = request.Content is null ? Array.Empty<byte>() : await request.Content.ReadAsByteArrayAsync(token);
@@ -67,8 +68,6 @@ public sealed class NodeSocketProtocol(IServiceScopeFactory scopes)
                 using var input = new MemoryStream(request.Body, writable: false);
                 context.Request.Body = input;
                 foreach (var name in SignedHeaders) context.Request.Headers[name] = request.Headers[name];
-                if (request.Operation == LyWaf.Services.Statistic.CcExecutionQueryService.Operation)
-                    LyWaf.Services.Statistic.CcQueryTiming.Capture(context);
                 result = await NodeCommunicationEndpoints.DispatchAsync(context,
                     services.GetRequiredService<NodeMessageAuthentication>(), request.Operation);
             }

@@ -194,7 +194,7 @@ public sealed class CcCohortState(IRuntimeStateStore store, IOptionsMonitor<Runt
         if (communication is not null && (!communication.CurrentValue.Enabled
             || !communication.CurrentValue.Peers.TryGetValue(signer, out var auth) || !auth.Enabled
             || !NodeAdmissionPolicy.Allows(auth, operation)
-            || !auth.AllowedOperations.Contains(operation, StringComparer.Ordinal)
+            || !PluginNodeRequests.Allows(auth, operation)
             || !auth.Keys.TryGetValue(found.Reply.KeyId, out var secret) || Fingerprint(secret) != found.KeyFingerprint)) return false;
         var tolerance = Math.Min(500, Math.Max(1, period) * 250d);
         var age = (_clock.GetUtcNow() - found.Received).TotalMilliseconds;

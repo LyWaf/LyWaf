@@ -216,6 +216,7 @@ public sealed class CcCaptchaReleaseTests
             builder.Services.AddSingleton(statistics);
             builder.Services.AddSingleton<NodeMessageAuthentication>();
             builder.Services.AddSingleton<CcCaptchaReleaseIssuer>();
+            LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Register(builder.Services);
             f._app = builder.Build();
             f._app.MapNodeCommunication(7030);
             await f._app.StartAsync();

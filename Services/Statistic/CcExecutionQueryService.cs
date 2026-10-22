@@ -60,7 +60,7 @@ public sealed class CcExecutionQueryService(CcDecisionService decisions,
             || message.ClusterId != config.ClusterId || message.ReceiverNodeId != config.NodeId || message.Type != Operation)
             return NodeProtocolResponse.Error(context, "node_invalid_payload", 400);
         if (!config.Peers.TryGetValue(message.SenderNodeId, out var peer) || !peer.Enabled
-            || !NodeAdmissionPolicy.Allows(peer, Operation) || !peer.AllowedOperations.Contains(Operation, StringComparer.Ordinal))
+            || !PluginNodeRequests.Allows(peer, Operation))
             return NodeProtocolResponse.Error(context, "node_operation_forbidden", 403);
         CcExecutionQuery? query;
         try { query = message.Payload.Deserialize<CcExecutionQuery>(NodeMessageAuthentication.JsonOptions); }

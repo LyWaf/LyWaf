@@ -118,5 +118,122 @@ try {
       }
     }
   }
+  for (const language of ['en-US', 'zh-CN']) for (const width of [1440, 390]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 } })
+    const page = await context.newPage(), errors = []
+    const english = language === 'en-US'
+    let keySaves = 0, deletes = 0, exports = 0
+    let peers = [{ nodeId: 'edge-fixture', name: 'Edge fixture', enabled: true }]
+    let settings = { mode: 'Controller', activeMode: 'Controller', restartRequired: false,
+      hasSharedCommunicationKey: false, revision: 1 }
+    page.on('pageerror', error => errors.push(error.message))
+    page.on('dialog', async dialog => { errors.push('Native dialog'); await dialog.dismiss() })
+    await page.route(url => url.pathname.startsWith('/api/'), async route => {
+      const request = route.request(), path = new URL(request.url()).pathname.replace('/api/v1/', '/api/')
+      const respond = body => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+      if (path === '/api/node-setup' && request.method() === 'GET')
+        return respond({ success: true, settings, peers, effectiveMode: 'Controller' })
+      if (path === '/api/node-setup/shared-key' && request.method() === 'PUT') {
+        assert.equal(request.postDataJSON().key, 'a'.repeat(64)); keySaves++
+        settings = { ...settings, hasSharedCommunicationKey: true, revision: 2 }
+        return respond({ success: true, settings })
+      }
+      if (path.endsWith('/edge-fixture/credential') && request.method() === 'POST') {
+        exports++; return respond({ success: true, credential: 'lywaf_node_fixture_current' })
+      }
+      if (path.endsWith('/edge-fixture') && request.method() === 'DELETE') {
+        deletes++; peers = []; return respond({ success: true })
+      }
+      errors.push('Unexpected API: ' + request.method() + ' ' + path); await route.abort()
+    })
+    await page.goto(`http://127.0.0.1:${port}/__node_setup?language=${language}`)
+    const keyInput = page.locator('input[type=password]')
+    await keyInput.fill('a'.repeat(64))
+    await page.getByRole('button', { name: english ? 'Set Shared Key' : '设置统一密钥', exact: true }).click()
+    const dialog = page.getByRole('dialog')
+    await dialog.waitFor(); await page.keyboard.press('Escape')
+    assert.equal(keySaves, 0)
+    await page.getByRole('button', { name: english ? 'Set Shared Key' : '设置统一密钥', exact: true }).click()
+    await dialog.getByRole('button').last().click()
+    await page.waitForFunction(() => document.querySelector('input[type=password]')?.value === '')
+    assert.equal(keySaves, 1)
+    const row = page.getByRole('row').filter({ hasText: 'Edge fixture' })
+    await row.getByRole('button').first().click()
+    await page.locator('textarea[readonly]').waitFor()
+    assert.equal(await page.locator('textarea[readonly]').inputValue(), 'lywaf_node_fixture_current')
+    await page.getByRole('dialog').getByRole('button').first().click()
+    assert.equal(exports, 1)
+    await row.getByRole('button').last().click()
+    await dialog.waitFor(); await page.keyboard.press('Escape')
+    assert.equal(deletes, 0)
+    await row.getByRole('button').last().click()
+    await dialog.getByRole('button').last().click()
+    await row.waitFor({ state: 'detached' })
+    assert.equal(deletes, 1)
+    assert.deepEqual(errors, [])
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    await page.screenshot({ path: resolve(artifacts, `${language}-${width}-controller.png`), fullPage: true })
+    results.push({ language, width, controller: true, keySaves, deletes, exports })
+    await context.close()
+  }
+  for (const language of ['en-US', 'zh-CN']) for (const width of [1440, 390]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 } })
+    const page = await context.newPage(), errors = []
+    const english = language === 'en-US'
+    let saves = 0
+    let settings = { mode: 'Standalone', activeMode: 'Standalone', hasCredential: false, restartRequired: false,
+      revision: 1, authenticationMode: 'Credential' }
+    page.on('pageerror', error => errors.push(error.message))
+    await page.route(url => url.pathname.startsWith('/api/'), async route => {
+      const request = route.request(), path = new URL(request.url()).pathname.replace('/api/v1/', '/api/')
+      const respond = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+      if (path === '/api/node-setup' && request.method() === 'GET')
+        return respond({ success: true, settings, peers: [], effectiveMode: 'Standalone' })
+      if (path === '/api/node-setup' && request.method() === 'PUT') {
+        saves++
+        const body = request.postDataJSON()
+        assert.equal(body.authenticationMode, 'SharedKey')
+        assert.equal(body.sharedKey, 'a'.repeat(64))
+        assert.equal(body.credential, undefined)
+        assert.equal(body.nodeName, 'Direct shared node')
+        if (saves === 1) return respond({ success: false, messageKey: 'node.errors.node_setup_join_failed' }, 502)
+        settings = { ...settings, mode: 'Node', hasCredential: true, restartRequired: true,
+          authenticationMode: 'SharedKey', controllerUrl: body.controllerUrl, revision: 2 }
+        return respond({ success: true, settings })
+      }
+      errors.push('Unexpected API: ' + request.method() + ' ' + path); await route.abort()
+    })
+    await page.goto(`http://127.0.0.1:${port}/__node_setup?language=${language}`)
+    await page.getByRole('combobox').selectOption('Node')
+    await page.getByLabel(english ? 'Controller URL' : '中控地址').fill('http://controller.example:7030/')
+    await page.locator('input[type=password]').fill('unsaved-credential')
+    const sharedTab = page.getByRole('tab', { name: english ? 'Shared Key' : '统一密钥', exact: true })
+    await sharedTab.click()
+    assert.equal(await page.locator('input[type=password]').inputValue(), '')
+    await page.locator('input[type=password]').fill('a'.repeat(64))
+    await sharedTab.focus()
+    await page.keyboard.press('ArrowLeft')
+    assert.equal(await page.locator('input[type=password]').inputValue(), '')
+    await sharedTab.click()
+    await page.locator('input[type=password]').fill('a'.repeat(64))
+    await page.getByLabel(english ? 'Node name (optional)' : '节点名称（选填）').fill('Direct shared node')
+    const save = page.getByRole('button', { name: english ? 'Save' : '保存', exact: true })
+    const rejection = page.waitForResponse(response => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname.endsWith('/node-setup') && response.status() === 502)
+    await save.click()
+    await rejection
+    await page.waitForFunction(() => [...document.querySelectorAll('button[type=submit]')].some(button => !button.disabled))
+    assert.equal(await page.locator('input[type=password]').inputValue(), 'a'.repeat(64))
+    await save.click()
+    await page.getByRole('button', { name: english ? 'Restart LyWaf' : '重启 LyWaf', exact: true }).waitFor()
+    assert.equal(saves, 2)
+    assert.equal(await page.locator('input[type=password]').inputValue(), '')
+    assert.equal(await sharedTab.getAttribute('aria-selected'), 'true')
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+    assert.deepEqual(errors, [])
+    await page.screenshot({ path: resolve(artifacts, `${language}-${width}-shared-join.png`), fullPage: true })
+    results.push({ language, width, sharedJoin: true, saves })
+    await context.close()
+  }
   console.log(JSON.stringify({ success: true, results, artifacts }))
 } finally { await browser?.close(); await server.close() }

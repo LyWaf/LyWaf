@@ -42,7 +42,6 @@ public static class RuntimeStateExtensions
         services.AddHostedService<LyWaf.Services.Statistic.CcCohortMonitor>();
         services.AddSingleton<LyWaf.Services.Statistic.CcExecutionQueryService>();
         services.AddSingleton<LyWaf.Services.Statistic.CcExecutionRelayService>();
-        services.AddSingleton<Microsoft.AspNetCore.Hosting.IStartupFilter, LyWaf.Services.Statistic.CcQueryTimingStartupFilter>();
         services.AddHostedService(sp => sp.GetRequiredService<LyWaf.Services.Statistic.CcDecisionService>());
         services.AddSingleton<RuntimeStateReplicator>();
         services.AddHostedService(sp => sp.GetRequiredService<RuntimeStateReplicator>());

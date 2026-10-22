@@ -10,6 +10,7 @@ public static class PluginNodeMessageRegistration
         services.TryAddSingleton<NodeMessageAuthentication>();
         services.AddHttpClient("node-plugin-messages").ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
         services.AddSingleton<PluginNodeMessageService>();
+        services.AddSingleton<PluginNodeRequestClient>();
         return services;
     }
 }

@@ -41,6 +41,7 @@ public sealed class NodeHttpIntegrationTests
         builder.Services.AddSingleton<CcDecisionService>(services => new(
             null!, services.GetRequiredService<IRuntimeStateStore>(), new CcBanLog()));
         builder.Services.AddSingleton<CcExecutionQueryService>();
+        LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Register(builder.Services);
         await using var app = builder.Build();
         // Host matching is independent of the ephemeral listening port.
         app.MapNodeCommunication(7030);

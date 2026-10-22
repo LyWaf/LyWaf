@@ -16,11 +16,12 @@ public sealed class CcCaptchaReleaseClient : IDisposable
     private readonly IStatisticService _statistics;
     private readonly HttpClient _http;
     private readonly NodeSocketConnections? _sockets;
+    private readonly LyWaf.Plugins.Core.IPluginManager? _plugins;
 
     public CcCaptchaReleaseClient(IOptionsMonitor<RuntimeStateOptions> runtime,
         IOptionsMonitor<NodeCommunicationOptions> communication, IRuntimeStateStore store, IStatisticService statistics,
-        NodeSocketConnections? sockets = null)
-        : this(runtime, communication, store, statistics, new SocketsHttpHandler { AllowAutoRedirect = false }) { _sockets = sockets; }
+        NodeSocketConnections? sockets = null, LyWaf.Plugins.Core.IPluginManager? plugins = null)
+        : this(runtime, communication, store, statistics, new SocketsHttpHandler { AllowAutoRedirect = false }) { _sockets = sockets; _plugins = plugins; }
 
     internal CcCaptchaReleaseClient(IOptionsMonitor<RuntimeStateOptions> runtime,
         IOptionsMonitor<NodeCommunicationOptions> communication, IRuntimeStateStore store, IStatisticService statistics, HttpMessageHandler transport)
@@ -43,6 +44,7 @@ public sealed class CcCaptchaReleaseClient : IDisposable
 
     public async Task<CcCaptchaReleaseConfirmation> ReleaseAsync(CcCaptchaTarget target, string token, CancellationToken cancellationToken)
     {
+        PluginNodeRequests.EnsureSender(_plugins, LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Id, CcCaptchaReleaseIssuer.Operation);
         var options = _runtime.CurrentValue;
         var config = _communication.CurrentValue;
         var localRule = options.Enabled && string.IsNullOrWhiteSpace(options.CcReleasePrivateKeyPem)
@@ -69,6 +71,8 @@ public sealed class CcCaptchaReleaseClient : IDisposable
         var envelope = new NodeMessage(2, config.ClusterId, config.NodeId, authority, new Guid(Convert.FromHexString(releaseId)).ToString("D"),
             request.ChallengeId, CcCaptchaReleaseIssuer.Operation, now, now.AddMinutes(2),
             JsonSerializer.SerializeToElement(request, NodeMessageAuthentication.JsonOptions));
+        if (config.Mode is "Controller" or "Node" && peer.AllowedOperations.Contains(PluginNodeRequests.Operation, StringComparer.Ordinal))
+            envelope = PluginNodeRequests.Wrap(envelope, LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Id);
         var body = JsonSerializer.SerializeToUtf8Bytes(envelope, NodeMessageAuthentication.JsonOptions);
         for (var attempt = 0; attempt < 2; attempt++)
         {

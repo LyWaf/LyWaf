@@ -15,9 +15,10 @@ public sealed class CcPeerQueryClient : IDisposable
     private readonly HttpClient _http;
     private readonly NodeSocketConnections? _sockets;
     private readonly NodeHubMembership? _membership;
+    private readonly LyWaf.Plugins.Core.IPluginManager? _plugins;
     public CcPeerQueryClient(IOptionsMonitor<NodeCommunicationOptions> communication, IOptionsMonitor<RuntimeStateOptions> runtime,
-        NodeSocketConnections? sockets = null, NodeHubMembership? membership = null)
-        : this(communication, runtime, new SocketsHttpHandler { AllowAutoRedirect = false }) { _sockets = sockets; _membership = membership; }
+        NodeSocketConnections? sockets = null, NodeHubMembership? membership = null, LyWaf.Plugins.Core.IPluginManager? plugins = null)
+        : this(communication, runtime, new SocketsHttpHandler { AllowAutoRedirect = false }) { _sockets = sockets; _membership = membership; _plugins = plugins; }
     internal CcPeerQueryClient(IOptionsMonitor<NodeCommunicationOptions> communication, IOptionsMonitor<RuntimeStateOptions> runtime, HttpMessageHandler handler)
     { _communication = communication; _runtime = runtime; _http = new(handler) { Timeout = TimeSpan.FromSeconds(2) }; }
 
@@ -60,13 +61,14 @@ public sealed class CcPeerQueryClient : IDisposable
             var relay = config.Mode == "Node" && node != config.ControllerNodeId;
             var signer = relay ? config.ControllerNodeId : node;
             var operation = relay ? CcExecutionRelayService.Operation : CcExecutionQueryService.Operation;
+            PluginNodeRequests.EnsureSender(_plugins, LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Id, operation);
             if (relay && (config.Role != "Node" || !NodeMessageAuthentication.ValidId(node)
                 || _membership is null || !_membership.IsKnown(config.ClusterId, signer, node)))
                 throw new InvalidOperationException("CC query source is not endorsed by the controller");
             if (!config.Enabled || !runtime.Enabled || config.NodeId != runtime.NodeId
                 || !runtime.Peers.TryGetValue(signer, out var target) || !target.Enabled || target.ProtocolVersion != 2
                 || !config.Peers.TryGetValue(signer, out var peer) || !peer.Enabled || !NodeAdmissionPolicy.Allows(peer, operation)
-                || !peer.AllowedOperations.Contains(operation, StringComparer.Ordinal)
+                || !PluginNodeRequests.Allows(peer, operation)
                 || !peer.Keys.TryGetValue(peer.ActiveKeyId, out var secret) || Encoding.UTF8.GetByteCount(secret) < 32
                 || !Uri.TryCreate(target.Endpoint, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http")
                 || config.RequireHttps && uri.Scheme != "https" || uri.AbsolutePath != "/" || uri.Query.Length != 0 || uri.Fragment.Length != 0 || uri.UserInfo.Length != 0)
@@ -79,6 +81,8 @@ public sealed class CcPeerQueryClient : IDisposable
                     ? JsonSerializer.SerializeToElement(new CcExecutionRelayQuery(node, queries), NodeMessageAuthentication.JsonOptions) : batch
                     ? JsonSerializer.SerializeToElement(new CcExecutionBatch(queries), NodeMessageAuthentication.JsonOptions)
                     : JsonSerializer.SerializeToElement(queries[0], NodeMessageAuthentication.JsonOptions));
+            if (config.Mode is "Controller" or "Node" && peer.AllowedOperations.Contains(PluginNodeRequests.Operation, StringComparer.Ordinal))
+                envelope = PluginNodeRequests.Wrap(envelope, LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Id);
             var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, NodeMessageAuthentication.JsonOptions);
             using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(uri, NodeMessageAuthentication.Prefix + envelope.Type))
             { Content = new ByteArrayContent(bytes) };
@@ -115,7 +119,7 @@ public sealed class CcPeerQueryClient : IDisposable
             var currentConfig = _communication.CurrentValue;
             if (!currentConfig.Enabled || currentConfig.ClusterId != envelope.ClusterId || currentConfig.NodeId != envelope.SenderNodeId
                 || !currentConfig.Peers.TryGetValue(signer, out var currentPeer) || !NodeAdmissionPolicy.Allows(currentPeer, operation)
-                || !currentPeer.AllowedOperations.Contains(operation, StringComparer.Ordinal)
+                || !PluginNodeRequests.Allows(currentPeer, operation)
                 || !currentPeer.Keys.TryGetValue(keyId, out var currentSecret) || currentSecret != secret
                 || (relay && currentConfig.ControllerNodeId != signer))
                 throw new InvalidOperationException("CC query authorization changed");

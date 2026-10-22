@@ -38,8 +38,16 @@ public class AnalysisPlugin : LyWafPluginBase, IPluginApiHandler, IPluginProxySt
         Description = "后台分析访问流量，检测 CC 攻击等异常行为",
         Author = "LyWaf Team",
         Priority = PluginPriority.High,  // 低优先级，后台运行
-        EnabledByDefault = true
+        EnabledByDefault = true,
+        RequestedPermissions = PluginPermission.NodeMessaging,
+        NodeRequests = Analysis.AnalysisNodeRequests.Capabilities
     };
+
+    public override void ConfigureServices(IServiceCollection services, IConfiguration configuration)
+    {
+        Analysis.AnalysisNodeRequests.Register(services);
+        base.ConfigureServices(services, configuration);
+    }
 
     public override IReadOnlyList<PluginAction> GetActions() =>
     [

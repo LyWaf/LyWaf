@@ -129,7 +129,11 @@ async function configure(instance, body) {
     assert.notEqual(await panel.evaluate(element => getComputedStyle(element).paddingTop), '0px')
     if (body.mode === 'Node') {
       await panel.getByLabel('Controller URL').fill(body.controllerUrl)
-      await panel.locator('input[type=password]').fill(body.credential)
+      if (body.authenticationMode === 'SharedKey') {
+        await panel.getByRole('tab', { name: 'Shared Key', exact: true }).click()
+        await panel.locator('input[type=password]').fill(body.sharedKey)
+        await panel.getByLabel('Node name (optional)').fill(body.nodeName)
+      } else await panel.locator('input[type=password]').fill(body.credential)
     }
     const response = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/node-setup')
       && response.request().method() === 'PUT')
@@ -198,10 +202,19 @@ try {
   for (const instance of instances) await proxyWorks(instance)
   checks.push('all-three-standalone-proxies')
   await configure(controller, { mode: 'Controller' })
+  const sharedJoinKey = process.env.LYWAF_TEST_SHARED_JOIN ? randomBytes(32).toString('hex') : null
+  if (sharedJoinKey) await request(controller, '/api/node-setup/shared-key', 'PUT', { key: sharedJoinKey })
   for (const instance of [a, b]) {
-    const issued = await request(controller, '/api/node-setup/peers', 'POST', { name: instance.name })
-    await configure(instance, { mode: 'Node', controllerUrl: controller.url, credential: issued.credential })
+    if (sharedJoinKey && instance === a) {
+      await configure(instance, { mode: 'Node', controllerUrl: controller.url,
+        authenticationMode: 'SharedKey', sharedKey: sharedJoinKey, nodeName: instance.name })
+      assert.equal((await request(instance, '/api/node-setup')).settings.authenticationMode, 'SharedKey')
+    } else {
+      const issued = await request(controller, '/api/node-setup/peers', 'POST', { name: instance.name })
+      await configure(instance, { mode: 'Node', controllerUrl: controller.url, credential: issued.credential })
+    }
   }
+  if (sharedJoinKey) checks.push('direct-shared-key-and-credential-nodes-coexist')
   checks.push('real-api-role-restart-and-default-synchronization')
   if (browser) checks.push('full-spa-role-save-confirm-and-restart-with-real-backends')
   let dashboard

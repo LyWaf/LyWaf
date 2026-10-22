@@ -14,7 +14,8 @@ namespace LyWaf.Tests;
 
 public sealed class NodeOperationContractHttpTests
 {
-    public static IEnumerable<object[]> AuthenticationCases() => NodeProtocolOperations.All.SelectMany(operation =>
+    public static IEnumerable<object[]> AuthenticationCases() => NodeProtocolOperations.All
+        .Concat(LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Capabilities.Select(item => item.LegacyOperation!)).SelectMany(operation =>
         new[] { "signature", "permission", "storage" }.Select(fault => new object[] { operation, fault }));
 
     [Theory]
@@ -22,7 +23,7 @@ public sealed class NodeOperationContractHttpTests
     public async Task ProductionRoutesReturnCompleteAuthenticationContract(string operation, string fault)
     {
         await using var host = await NodeContractHttpHost.Start();
-        Assert.Equal(16, NodeProtocolOperations.All.Count);
+        Assert.Equal(14, NodeProtocolOperations.All.Count);
         if (fault == "permission") host.Protocol.Peers["sender"].AllowedOperations.Clear();
         if (fault == "storage") File.WriteAllText(Path.Combine(host.Directory, "replay-v2"), "not a directory");
         using var response = await host.Send(operation, new { }, fault == "signature");
@@ -68,7 +69,7 @@ internal sealed class NodeContractHttpHost : IAsyncDisposable
         {
             Enabled = true, RequireHttps = false, ClusterId = "contract", NodeId = "receiver", StateDirectory = Directory,
             Peers = new() { ["sender"] = new() { Role = "Controller", Keys = new() { ["key"] = Secret },
-                AllowedOperations = NodeProtocolOperations.All.ToList() } }
+                AllowedOperations = NodeProtocolOperations.All.Concat(LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Capabilities.Select(item => item.LegacyOperation!)).ToList() } }
         };
         Runtime = new() { Enabled = true, NodeId = "receiver", StateDirectory = Path.Combine(Directory, "runtime"),
             SharedSecret = Secret, MaxStateEntries = 1 };
@@ -89,6 +90,7 @@ internal sealed class NodeContractHttpHost : IAsyncDisposable
         builder.Services.AddSingleton<RuntimeStateAuthentication>();
         builder.Services.AddSingleton<RuntimeStateReplicator>();
         configure?.Invoke(builder.Services, host);
+        LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Register(builder.Services);
         host.App = builder.Build();
         host.App.MapNodeCommunication(7030);
         if (legacy) host.App.MapLyWafRuntimeStateApi(7030);

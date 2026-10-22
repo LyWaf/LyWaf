@@ -102,7 +102,7 @@ public sealed partial class ManagedRuntimeHubTests
         builder.Services.AddOptions<NodeCommunicationOptions>().Bind(builder.Configuration.GetSection("NodeCommunication"));
         builder.Services.AddOptions<RuntimeStateOptions>().Bind(builder.Configuration.GetSection("RuntimeState"));
         builder.Services.AddOptions<PluginNodeMessageOptions>();
-        builder.Services.AddSingleton(DispatchProxy.Create<IPluginManager, NodeHandshakeMetadataTests.ManagerProxy>());
+        builder.Services.AddSingleton(DispatchProxy.Create<IPluginManager, AnalysisManagerProxy>());
         builder.Services.AddSingleton<INodeHandshakeConfigurationSource, Revision>();
         builder.Services.AddSingleton<NodeIdentityService>();
         builder.Services.AddHostedService(s => s.GetRequiredService<NodeIdentityService>());
@@ -124,6 +124,7 @@ public sealed partial class ManagedRuntimeHubTests
             builder.Services.AddSingleton<CcDecisionService>();
             builder.Services.AddSingleton<CcPeerQueryClient>();
             builder.Services.AddSingleton<CcExecutionQueryService>();
+            LyWaf.Plugins.Sys.Analysis.AnalysisNodeRequests.Register(builder.Services);
             builder.Services.AddSingleton<CcExecutionRelayService>();
             builder.Services.AddSingleton<CcCaptchaReleaseIssuer>();
             builder.Services.AddSingleton<CcCaptchaReleaseClient>();
@@ -136,6 +137,13 @@ public sealed partial class ManagedRuntimeHubTests
         app.MapNodeCommunication(port);
         app.MapNodeSocket(port);
         return app;
+    }
+
+    public class AnalysisManagerProxy : NodeHandshakeMetadataTests.ManagerProxy
+    {
+        protected override object? Invoke(MethodInfo? method, object?[]? args) => method?.Name == nameof(IPluginManager.GetPlugin)
+            ? args?[0] as string == "analysis" ? new LyWaf.Plugins.Sys.AnalysisPlugin() : null
+            : base.Invoke(method, args);
     }
 
     private sealed class Revision : INodeHandshakeConfigurationSource

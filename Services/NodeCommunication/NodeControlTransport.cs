@@ -18,7 +18,8 @@ public static class NodeControlTransport
                 || !Header("X-LyWaf-Sender", configuration.NodeId) || !Header("X-LyWaf-Receiver", peer)
                 || request.RequestUri is not { IsAbsoluteUri: true } uri || uri.Query.Length != 0 || uri.Fragment.Length != 0
                 || request.Method != HttpMethod.Post || !uri.AbsolutePath.StartsWith(NodeMessageAuthentication.Prefix, StringComparison.Ordinal)
-                || !NodeProtocolOperations.IsSupported(uri.AbsolutePath[NodeMessageAuthentication.Prefix.Length..])
+                || (!NodeProtocolOperations.IsSupported(uri.AbsolutePath[NodeMessageAuthentication.Prefix.Length..])
+                    && !identity.AllowedOperations.Contains(uri.AbsolutePath[NodeMessageAuthentication.Prefix.Length..], StringComparer.Ordinal))
                 || !NodeAdmissionPolicy.Allows(identity, uri.AbsolutePath[NodeMessageAuthentication.Prefix.Length..]))
                 throw new InvalidOperationException("Node control route is not authorized");
         }

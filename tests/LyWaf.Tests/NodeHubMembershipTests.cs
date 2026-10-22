@@ -76,6 +76,20 @@ public sealed class NodeHubMembershipTests
     }
 
     [Fact]
+    public void DeletedIdentityIsOnlyHistoricalAndNotAnExpectedCcParticipant()
+    {
+        var controller = Controller();
+        controller.HistoricalNodeIds = ["deleted-edge"];
+        var request = Request(); var remote = Remote();
+        var proof = NodeHubMembership.Create(controller, request, remote, "new", Now, includeCcMembership: true);
+        var cache = new NodeHubMembership(new Clock());
+        cache.Accept(Node(), request, remote, proof);
+        Assert.Contains("deleted-edge", cache.KnownNodes("cluster", "controller"));
+        Assert.DoesNotContain("deleted-edge", cache.ExpectedCcNodes("cluster", "controller")!);
+        Assert.False(controller.Peers.ContainsKey("deleted-edge"));
+    }
+
+    [Fact]
     public void AcceptedSourcesAreImmutableAndDisconnectInvalidatesThem()
     {
         var cache = new NodeHubMembership(new Clock());
