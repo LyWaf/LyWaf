@@ -2724,10 +2724,10 @@ public static class LyToAppSettingsConverter
     ///     DataDirectory = "plugin_data"
     ///     EnableHotReload = false
     ///     DisabledPlugins = ["plugin-id-1", "plugin-id-2"]
-    ///     SystemPlugins = ["request-logger", "custom-header"]  # 系统插件，默认加载
+    ///     SystemPlugins = ["request-logger", "http-settings"]  # 系统插件，默认加载
     ///     PluginConfigs {
     ///         request-logger { LogLevel = "Info" }
-    ///         custom-header { HeaderName = "X-Custom"; HeaderValue = "test" }
+    ///         http-settings { HeaderName = "X-Custom"; HeaderValue = "test" }
     ///     }
     /// }
     /// </summary>

@@ -113,9 +113,9 @@ public class AnalysisPlugin : LyWafPluginBase, IPluginApiHandler, IPluginProxySt
     public void ConfigureProxyStage(IApplicationBuilder app, PluginProxyStage stage)
     {
         if (stage == PluginProxyStage.RequestProtection)
-            app.UseMiddleware<LyWaf.Middleware.CcProtectionMiddleware>();
+            app.UseMiddleware<Analysis.CcProtectionMiddleware>();
         else if (stage == PluginProxyStage.ResponseMonitoring)
-            app.UseMiddleware<LyWaf.Middleware.CcResponseMonitorMiddleware>();
+            app.UseMiddleware<Analysis.CcResponseMonitorMiddleware>();
     }
 
     /// <summary>

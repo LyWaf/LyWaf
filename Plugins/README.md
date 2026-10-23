@@ -13,8 +13,8 @@ Plugins/
 │   ├── IPluginManager.cs    # 插件管理器
 │   └── PluginExtensions.cs  # 扩展方法
 ├── Examples/                # 示例插件
-│   ├── RequestLoggerPlugin.cs   # 请求日志示例
-│   └── CustomHeaderPlugin.cs    # 自定义头示例
+│   └── RequestLoggerPlugin.cs   # 请求日志记录器
+├── Sys/HttpSettings/          # http通用设置（http-settings）
 ├── Templates/               # 插件模板
 │   └── PluginTemplate.cs.template
 └── README.md
@@ -265,6 +265,6 @@ public override async Task StopAsync(CancellationToken cancellationToken)
 查看 `Examples` 目录中的示例：
 
 - **RequestLoggerPlugin** - 请求日志记录
-- **CustomHeaderPlugin** - 自定义响应头
+- **HttpSettingsPlugin** - http通用设置：请求/响应头、安全响应头、请求标识及站点/路径配置，见 [插件说明](Sys/HttpSettings/README.md)
 
 使用模板快速创建新插件：`Templates/PluginTemplate.cs.template`

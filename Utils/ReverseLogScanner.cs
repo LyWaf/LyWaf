@@ -24,6 +24,41 @@ public sealed class ReverseLogScanner : IDisposable
         _fileLength = _stream.Length;
     }
 
+    internal ReverseLogScanner(FileStream snapshot, long length)
+    {
+        _stream = snapshot;
+        _fileLength = length;
+    }
+
+    internal async Task<(List<LogEntry> entries, int total)> QuerySnapshotAsync(
+        int offset, int limit, string search, CancellationToken token)
+    {
+        var index = await BuildIndexAsync(token);
+        var entries = new List<LogEntry>();
+        var total = 0;
+        long pageBytes = 0;
+        for (var i = index.Count - 1; i >= 0; i--)
+        {
+            token.ThrowIfCancellationRequested();
+            string? block = null;
+            if (search.Length > 0)
+            {
+                block = await ReadEntryBlockAsync(index, i, token);
+                if (!block.Contains(search, StringComparison.OrdinalIgnoreCase)) continue;
+            }
+            if (total >= offset && entries.Count < limit)
+            {
+                var end = i + 1 < index.Count ? index[i + 1].ByteOffset : _fileLength;
+                pageBytes += end - index[i].ByteOffset;
+                if (pageBytes > 8 * 1024 * 1024) throw new ArgumentException("Requested log page is too large");
+                block ??= await ReadEntryBlockAsync(index, i, token);
+                entries.Add(LogUtil.ParseLogEntry(block, i, index[i].Timestamp));
+            }
+            total++;
+        }
+        return (entries, total);
+    }
+
     /// <summary>
     /// 分页查询日志条目（倒序：最新在前，支持搜索和时间过滤）
     /// </summary>
@@ -164,7 +199,7 @@ public sealed class ReverseLogScanner : IDisposable
             }
         }
 
-        File.Move(tempPath, filePath, overwrite: true);
+        File.Replace(tempPath, filePath, null);
         IndexCache.TryRemove(filePath, out _); // 使缓存失效
         return true;
     }

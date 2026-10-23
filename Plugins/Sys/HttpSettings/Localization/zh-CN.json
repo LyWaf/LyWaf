@@ -1,0 +1,19 @@
+{
+  "metadata.name": "http通用设置",
+  "metadata.description": "统一处理请求头、响应头、安全响应头与请求标识，支持站点和路径配置",
+  "config.Enabled.label": "启用",
+  "config.Headers.label": "响应头补缺（兼容原 Headers）",
+  "config.RequestHeaders.label": "设置请求头",
+  "config.RequestHeadersIfMissing.label": "请求头补缺",
+  "config.AppendRequestHeaders.label": "追加请求头",
+  "config.RemoveRequestHeaders.label": "删除请求头",
+  "config.ResponseHeaders.label": "设置响应头",
+  "config.AppendResponseHeaders.label": "追加响应头",
+  "config.RemoveResponseHeaders.label": "删除响应头",
+  "config.StatusCodes.label": "响应状态码过滤",
+  "config.SecurityHeaders.label": "默认安全响应头",
+  "config.HstsMaxAgeSeconds.label": "HSTS 有效秒数（仅 HTTPS）",
+  "config.RequestIdHeader.label": "请求标识头名称",
+  "config.StatusCodes.description": "留空作用于所有响应（含错误）；支持 20x、4xx 和精确状态码。",
+  "config.RequestIdHeader.description": "留空禁用。使用 X-Request-ID 等 X- 头；用服务端请求标识覆盖客户端传入的值。"
+}

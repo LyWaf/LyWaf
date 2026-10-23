@@ -2,7 +2,7 @@
 import { t } from '@/plugins/analysis/i18n'
 import { ref } from 'vue'
 import Section from '@/components/common/Section.vue'
-import { ccApi } from '@/plugins/analysis/api'
+import { ccApi } from '../api'
 import { useToast } from '@/composables/useToast'
 import type { CcRule } from '@/types'
 

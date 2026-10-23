@@ -54,7 +54,7 @@ public sealed class LocalizationTests
             new HttpUploadPlugin(), new LyWaf.Plugins.Sys.SiteAuth.SiteAuthPlugin(),
             new LyWaf.Plugins.Sys.AnalysisPlugin(), new LyWaf.Plugins.Sys.ImageProcessPlugin(),
             new LyWaf.Plugins.Sys.WebTamper.WebTamperPlugin(),
-            new LyWaf.Plugins.Examples.CustomHeaderPlugin(), new LyWaf.Plugins.Examples.RequestLoggerPlugin()
+            new LyWaf.Plugins.Sys.HttpSettings.HttpSettingsPlugin(), new LyWaf.Plugins.Examples.RequestLoggerPlugin()
         ];
         foreach (var plugin in plugins)
         {

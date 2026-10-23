@@ -2,7 +2,7 @@ using LyWaf.Services.Statistic;
 using LyWaf.Utils;
 using NLog;
 
-namespace LyWaf.Middleware;
+namespace LyWaf.Plugins.Sys.Analysis;
 
 /// <summary>
 /// CC 防护中间件

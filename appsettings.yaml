@@ -65,7 +65,7 @@ Plugins:
       MaxHeight: 4096
       EnableUrlParams: true
       CacheSeconds: 3600
-    custom-header:
+    http-settings:
       enabled: true
       headers:
         X-Powered-By: LyWaf

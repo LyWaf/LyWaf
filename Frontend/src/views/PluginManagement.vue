@@ -87,10 +87,10 @@ function parseFlatToStructured(flat: Record<string, string>, defaults: Record<st
 
   const result: ConfigItem[] = []
 
-  // 按 defaults 顺序优先，再加 flat 中新增的，最后从 labels 补充（保持声明顺序）
+  // Honor plugin declaration order, even when empty collections are absent from defaults.
   const orderedKeys: string[] = []
   const seen = new Set<string>()
-  for (const key of [...Object.keys(defaults), ...Object.keys(flat)]) {
+  for (const key of [...Object.keys(schema), ...Object.keys(defaults), ...Object.keys(flat)]) {
     const topKey = key.indexOf(':') === -1 ? key : key.substring(0, key.indexOf(':'))
     if (!seen.has(topKey)) { seen.add(topKey); orderedKeys.push(topKey) }
   }
@@ -485,6 +485,11 @@ const logViewerLoading = ref(false)
 
 // 文件列表
 const logFiles = ref<PluginLogFile[]>([])
+const logWriterStatistics = ref<{
+  written: number; pending: number; dropped: number; writeFailures: number
+  queuedBytes?: number; rotationFailures?: number; cleanupFailures?: number
+  lastErrorAt?: string | null; lastErrorType?: string | null; healthy?: boolean
+} | null>(null)
 const logSelectedFile = ref('')
 
 // 日志条目
@@ -504,6 +509,7 @@ const openLogViewer = async (plugin: PluginItem, action: PluginActionItem) => {
   logViewerAction.value = action
   logViewerVisible.value = true
   logFiles.value = []
+  logWriterStatistics.value = null
   logEntries.value = []
   logSelectedFile.value = ''
   logTotal.value = 0
@@ -519,6 +525,7 @@ const loadLogFiles = async () => {
     const res = await pluginApi.executeAction(logViewerPlugin.value.id, logViewerAction.value.id, { action: 'list-files' })
     if (res.success && res.data?.files) {
       logFiles.value = res.data.files
+      logWriterStatistics.value = res.data.statistics ?? null
       // 自动选中第一个文件
       if (logFiles.value.length > 0 && !logSelectedFile.value) {
         logSelectedFile.value = logFiles.value[0].name
@@ -899,12 +906,13 @@ onMounted(loadPlugins)
     <!-- 配置编辑弹窗 -->
     <div v-if="editConfigVisible" class="fixed inset-0 z-50 flex items-center justify-center">
       <div class="absolute inset-0 bg-black/60" @click="editConfigVisible = false"></div>
-      <div class="relative bg-dark-card border border-dark-border rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+      <div role="dialog" aria-modal="true" aria-labelledby="plugin-config-title" data-testid="plugin-config-dialog"
+        class="relative bg-dark-card border border-dark-border rounded-lg shadow-2xl w-[calc(100%-2rem)] max-w-3xl max-h-[90dvh] min-h-0 flex flex-col overflow-hidden">
         <!-- 标题 -->
-        <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border">
-          <div>
-            <h2 class="text-lg font-semibold text-gray-100">{{ t('plugins.editConfig') }}</h2>
-            <p class="text-xs text-gray-500 mt-0.5">{{ pluginMessage(editConfigPlugin?.id, 'metadata.name', editConfigPlugin?.name) }} ({{ editConfigPlugin?.id }})</p>
+        <div class="flex items-center justify-between gap-3 px-4 sm:px-6 py-4 border-b border-dark-border shrink-0">
+          <div class="min-w-0">
+            <h2 id="plugin-config-title" class="text-lg font-semibold text-gray-100">{{ t('plugins.editConfig') }}</h2>
+            <p class="text-xs text-gray-500 mt-0.5 break-words">{{ pluginMessage(editConfigPlugin?.id, 'metadata.name', editConfigPlugin?.name) }} ({{ editConfigPlugin?.id }})</p>
           </div>
           <button @click="editConfigVisible = false" class="text-gray-400 hover:text-gray-200 transition-colors">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -914,7 +922,7 @@ onMounted(loadPlugins)
         </div>
 
         <!-- 配置列表 -->
-        <div class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+        <div data-testid="plugin-config-scroll" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 sm:px-6 py-4 space-y-4">
           <div v-if="editConfigLoading" class="flex items-center justify-center py-12">
             <span class="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></span>
             <span class="ml-3 text-gray-400">{{ t('plugins.loadingConfig') }}</span>
@@ -969,10 +977,10 @@ onMounted(loadPlugins)
             <div v-else-if="item.type === 'array'"
               class="border border-dark-border/60 rounded-lg p-3 space-y-2">
               <div class="flex items-center justify-between">
-                <span class="text-sm text-gray-300" :class="{ 'font-mono': !editConfigLabels[item.key] }">{{ fieldLabel(item.key, editConfigLabels[item.key], editConfigPlugin?.id) }}
+                <span class="text-sm text-gray-300 break-words min-w-0" :class="{ 'font-mono': !editConfigLabels[item.key] && !editConfigSchema[item.key]?.labelKey }">{{ fieldLabel(item.key, editConfigLabels[item.key], editConfigPlugin?.id, editConfigSchema[item.key]?.labelKey) }}
                   <span class="text-xs text-gray-600 ml-1">{{ t('common.arrayCount', { count: (item as ArrayItem).items.length }) }}</span>
                 </span>
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 shrink-0">
                   <button v-if="isArrayModified(item as ArrayItem)" @click="resetArray(item as ArrayItem)"
                     class="text-gray-500 hover:text-yellow-400 transition-colors p-0.5" :title="t('common.reset')">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -981,7 +989,7 @@ onMounted(loadPlugins)
                     </svg>
                   </button>
                   <button @click="addArrayItem(item as ArrayItem)"
-                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ {{ t('common.add') }}</button>
+                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors whitespace-nowrap">+ {{ t('common.add') }}</button>
                 </div>
               </div>
               <div v-for="(_val, idx) in (item as ArrayItem).items" :key="idx"
@@ -1003,10 +1011,10 @@ onMounted(loadPlugins)
             <div v-else-if="item.type === 'dict'"
               class="border border-dark-border/60 rounded-lg p-3 space-y-2">
               <div class="flex items-center justify-between">
-                <span class="text-sm text-gray-300" :class="{ 'font-mono': !editConfigLabels[item.key] }">{{ fieldLabel(item.key, editConfigLabels[item.key], editConfigPlugin?.id) }}
+                <span class="text-sm text-gray-300 break-words min-w-0" :class="{ 'font-mono': !editConfigLabels[item.key] && !editConfigSchema[item.key]?.labelKey }">{{ fieldLabel(item.key, editConfigLabels[item.key], editConfigPlugin?.id, editConfigSchema[item.key]?.labelKey) }}
                   <span class="text-xs text-gray-600 ml-1">{{ t('common.dictionaryCount', { count: (item as DictItem).entries.length }) }}</span>
                 </span>
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 shrink-0">
                   <button v-if="isDictModified(item as DictItem)" @click="resetDict(item as DictItem)"
                     class="text-gray-500 hover:text-yellow-400 transition-colors p-0.5" :title="t('common.reset')">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1015,7 +1023,7 @@ onMounted(loadPlugins)
                     </svg>
                   </button>
                   <button @click="addDictEntry(item as DictItem)"
-                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors">+ {{ t('common.add') }}</button>
+                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors whitespace-nowrap">+ {{ t('common.add') }}</button>
                 </div>
               </div>
               <div v-for="(entry, idx) in (item as DictItem).entries" :key="idx"
@@ -1041,10 +1049,10 @@ onMounted(loadPlugins)
             <div v-else-if="item.type === 'object-array'"
               class="border border-dark-border/60 rounded-lg p-3 space-y-3">
               <div class="flex items-center justify-between">
-                <span class="text-sm text-gray-300" :class="{ 'font-mono': !editConfigLabels[item.key] }">{{ fieldLabel(item.key, editConfigLabels[item.key], editConfigPlugin?.id) }}
+                <span class="text-sm text-gray-300 break-words min-w-0" :class="{ 'font-mono': !editConfigLabels[item.key] && !editConfigSchema[item.key]?.labelKey }">{{ fieldLabel(item.key, editConfigLabels[item.key], editConfigPlugin?.id, editConfigSchema[item.key]?.labelKey) }}
                   <span class="text-xs text-gray-600 ml-1">[{{ (item as ObjArrayItem).items.length }}]</span>
                 </span>
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 shrink-0">
                   <button v-if="isObjArrayModified(item as ObjArrayItem)" @click="resetObjArray(item as ObjArrayItem)"
                     class="text-gray-500 hover:text-yellow-400 transition-colors p-0.5" :title="t('common.reset')">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1053,7 +1061,7 @@ onMounted(loadPlugins)
                     </svg>
                   </button>
                   <button @click="addObjArrayItem(item as ObjArrayItem)"
-                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors">{{ t('page.fbf5151f677c') }}</button>
+                    class="text-xs text-primary-400 hover:text-primary-300 transition-colors whitespace-nowrap">{{ t('page.fbf5151f677c') }}</button>
                 </div>
               </div>
               <!-- 每条规则卡片 -->
@@ -1111,28 +1119,27 @@ onMounted(loadPlugins)
                 class="text-xs text-gray-600 text-center py-2">{{ t('page.fcd8ed2e793f') }}</div>
             </div>
           </template>
-        </div>
-
-        <!-- 底部按钮 -->
-        <section v-if="supportsScopedConfig" class="px-6 py-3 border-t border-gray-700 max-h-64 overflow-auto">
-          <h3 class="text-sm font-medium mb-2">{{ t('page.b97e9cb78e75') }}</h3>
-          <div class="flex flex-wrap gap-2">
-            <input v-model="effectiveHost" :aria-label="t('page.1b0bd09c7cc4')" placeholder="img.example.com" class="input min-w-0 flex-1" />
-            <input v-model="effectivePath" :aria-label="t('fields.Path')" placeholder="/thumb/a.png" class="input min-w-0 flex-1" />
-            <button class="btn btn-sm btn-secondary" :disabled="effectiveLoading" @click="queryEffectiveConfig">{{ effectiveLoading ? t('page.192533042f7f') : t('ui.query') }}</button>
+          <section v-if="supportsScopedConfig" data-testid="plugin-effective-config" class="pt-4 border-t border-dark-border">
+            <h3 class="text-sm font-medium mb-2">{{ t('page.b97e9cb78e75') }}</h3>
+            <div class="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
+              <input v-model="effectiveHost" :aria-label="t('page.1b0bd09c7cc4')" placeholder="example.com" class="input w-full min-w-0" />
+              <input v-model="effectivePath" :aria-label="t('fields.Path')" placeholder="/" class="input w-full min-w-0" />
+              <button class="btn btn-sm btn-secondary" :disabled="effectiveLoading" @click="queryEffectiveConfig">{{ effectiveLoading ? t('page.192533042f7f') : t('ui.query') }}</button>
+            </div>
+            <p v-if="effectiveResult?.lastReloadError" role="alert" class="text-sm text-red-400 mt-2">{{ effectiveResult.lastReloadError }}</p>
+            <table v-if="effectiveResult" class="w-full text-xs mt-3 table-fixed">
+              <thead><tr><th class="text-left">{{ t('page.49ecd0e342d6') }}</th><th class="text-left">{{ t('common.value') }}</th><th class="text-left">{{ t('settings.source') }}</th></tr></thead>
+              <tbody><tr v-for="(value, key) in effectiveResult.config" :key="key">
+                <td class="break-all py-1">{{ key }}</td><td class="break-all">{{ value }}</td><td class="break-all">{{ effectiveResult.sources[key] }}</td>
+              </tr></tbody>
+            </table>
+          </section>
+          <div v-if="Object.keys(editConfigErrors).length" role="alert" class="text-sm text-red-400 break-words">
+            <p v-for="(messages, field) in editConfigErrors" :key="field">{{ field }}: {{ messages.join('；') }}</p>
           </div>
-          <p v-if="effectiveResult?.lastReloadError" role="alert" class="text-sm text-red-400 mt-2">{{ effectiveResult.lastReloadError }}</p>
-          <table v-if="effectiveResult" class="w-full text-xs mt-3 table-fixed">
-            <thead><tr><th class="text-left">{{ t('page.49ecd0e342d6') }}</th><th class="text-left">{{ t('common.value') }}</th><th class="text-left">{{ t('settings.source') }}</th></tr></thead>
-            <tbody><tr v-for="(value, key) in effectiveResult.config" :key="key">
-              <td class="break-all py-1">{{ key }}</td><td class="break-all">{{ value }}</td><td class="break-all">{{ effectiveResult.sources[key] }}</td>
-            </tr></tbody>
-          </table>
-        </section>
-        <div v-if="Object.keys(editConfigErrors).length" role="alert" class="px-6 py-3 text-sm text-red-400 max-h-32 overflow-auto">
-          <p v-for="(messages, field) in editConfigErrors" :key="field">{{ field }}: {{ messages.join('；') }}</p>
         </div>
-        <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-dark-border">
+        <!-- 底部按钮 -->
+        <div data-testid="plugin-config-footer" class="flex flex-wrap items-center justify-end gap-2 sm:gap-3 px-4 sm:px-6 py-4 border-t border-dark-border shrink-0">
           <button @click="editConfigVisible = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
           <button @click="validateConfig" :disabled="editConfigSaving || editConfigValidating || editConfigLoading" class="btn btn-sm btn-secondary">
             {{ editConfigValidating ? t('common.loading') : t('plugins.validateConfig') }}
@@ -1155,7 +1162,7 @@ onMounted(loadPlugins)
         <div class="flex items-center justify-between px-6 py-4 border-b border-dark-border shrink-0">
           <div class="flex items-center gap-4">
             <h3 class="text-lg font-semibold text-gray-100">
-              {{ logViewerAction?.name || t('dashboard.view.logs') }}
+              {{ pluginMessage(logViewerPlugin?.id, `actions.${logViewerAction?.id}.name`, logViewerAction?.name || t('dashboard.view.logs')) }}
               <span class="text-sm font-normal text-gray-500 ml-2">{{ pluginMessage(logViewerPlugin?.id, 'metadata.name', logViewerPlugin?.name) }}</span>
             </h3>
             <span v-if="logTotal > 0" class="text-xs text-gray-500">
@@ -1166,6 +1173,17 @@ onMounted(loadPlugins)
         </div>
 
         <!-- 内容区 -->
+        <div v-if="logWriterStatistics" class="flex flex-wrap gap-x-5 gap-y-1 px-6 py-2 text-xs border-b border-dark-border shrink-0" aria-live="polite">
+          <span class="text-gray-400">{{ pluginMessage(logViewerPlugin?.id, 'logs.writer.written', 'Written') }}: {{ logWriterStatistics.written }}</span>
+          <span class="text-gray-400">{{ pluginMessage(logViewerPlugin?.id, 'logs.writer.pending', 'Pending') }}: {{ logWriterStatistics.pending }}</span>
+          <span :class="logWriterStatistics.dropped ? 'text-amber-400' : 'text-gray-400'">{{ pluginMessage(logViewerPlugin?.id, 'logs.writer.dropped', 'Dropped') }}: {{ logWriterStatistics.dropped }}</span>
+          <span :class="logWriterStatistics.writeFailures ? 'text-red-400' : 'text-gray-400'">{{ pluginMessage(logViewerPlugin?.id, 'logs.writer.failures', 'Write failures') }}: {{ logWriterStatistics.writeFailures }}</span>
+          <span v-if="logWriterStatistics.queuedBytes !== undefined" class="text-gray-400">{{ pluginMessage(logViewerPlugin?.id, 'logs.writer.bytes', 'Pending bytes') }}: {{ formatFileSize(logWriterStatistics.queuedBytes) }}</span>
+          <span v-if="logWriterStatistics.rotationFailures !== undefined" :class="logWriterStatistics.rotationFailures ? 'text-red-400' : 'text-gray-400'">{{ pluginMessage(logViewerPlugin?.id, 'logs.writer.rotationFailures', 'Rotation failures') }}: {{ logWriterStatistics.rotationFailures }}</span>
+          <span v-if="logWriterStatistics.cleanupFailures !== undefined" :class="logWriterStatistics.cleanupFailures ? 'text-amber-400' : 'text-gray-400'">{{ pluginMessage(logViewerPlugin?.id, 'logs.writer.cleanupFailures', 'Cleanup failures') }}: {{ logWriterStatistics.cleanupFailures }}</span>
+          <span v-if="logWriterStatistics.healthy === false" class="text-red-400">{{ pluginMessage(logViewerPlugin?.id, 'logs.writer.unhealthy', 'Writer unavailable') }}</span>
+          <span v-if="logWriterStatistics.lastErrorType" class="w-full break-words text-amber-400">{{ pluginMessage(logViewerPlugin?.id, 'logs.writer.lastError', 'Last error') }}: {{ logWriterStatistics.lastErrorType }} <span v-if="logWriterStatistics.lastErrorAt">({{ logWriterStatistics.lastErrorAt }})</span></span>
+        </div>
         <div class="flex-1 flex overflow-hidden">
           <!-- 左侧文件列表 -->
           <div class="w-56 shrink-0 border-r border-dark-border flex flex-col">

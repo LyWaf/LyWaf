@@ -35,3 +35,35 @@ test('empty object arrays and dictionaries retain their editor types', () => {
   assert.equal(items[1].type, 'dict')
   assert.deepEqual(plain(editor.flattenItems(items)), { Rules: '', Headers: '' })
 })
+
+test('plugin schema keeps response defaults beside response operations regardless of saved key order', () => {
+  const flat = { 'Headers:X-Frame-Options': 'SAMEORIGIN', RequestHeaders: '', ResponseHeaders: '', AppendResponseHeaders: '', RemoveResponseHeaders: '' }
+  const schema = {
+    RequestHeaders: { type: 'Dictionary`2' }, Headers: { type: 'Dictionary`2' },
+    ResponseHeaders: { type: 'Dictionary`2' }, AppendResponseHeaders: { type: 'Dictionary`2' }, RemoveResponseHeaders: { type: 'List`1' },
+  }
+  const items = editor.parseFlatToStructured(flat, { 'Headers:X-Frame-Options': 'SAMEORIGIN' }, {}, {}, schema)
+  assert.deepEqual(plain(items.map(item => item.key)), Object.keys(schema))
+  assert.deepEqual(plain(editor.flattenItems(items)), flat)
+})
+
+test('effective configuration shares the editor scroll area and footer cannot collapse', () => {
+  const template = parse(vue).descriptor.template.ast
+  const attribute = (node, name) => node.props?.find(p => p.type === 6 && p.name === name)?.value?.content
+  function find(node, id) {
+    if (attribute(node, 'data-testid') === id) return node
+    for (const child of node.children || []) { const found = find(child, id); if (found) return found }
+  }
+  const dialog = find(template, 'plugin-config-dialog')
+  const scroll = find(dialog, 'plugin-config-scroll')
+  assert.ok(find(scroll, 'plugin-effective-config'), 'query inputs and results must scroll with the form')
+  assert.match(attribute(scroll, 'class'), /min-h-0/)
+  assert.match(attribute(scroll, 'class'), /overflow-y-auto/)
+  const effective = find(scroll, 'plugin-effective-config')
+  assert.doesNotMatch(attribute(effective, 'class'), /overflow-auto|max-h-/)
+  assert.match(attribute(find(dialog, 'plugin-config-footer'), 'class'), /shrink-0/)
+})
+
+test('collection labels consume the same plugin schema localization keys as scalar fields', () => {
+  assert.equal((vue.match(/fieldLabel\(item\.key, editConfigLabels\[item\.key\], editConfigPlugin\?\.id, editConfigSchema\[item\.key\]\?\.labelKey\)/g) || []).length, 4)
+})

@@ -46,7 +46,7 @@ public sealed class UploadSignatureTests
         {
             var results = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => Task.Run(() =>
                 UploadSignature.Consume(directory, Nonce, 1000))));
-            Assert.Single(results.Where(x => x));
+            Assert.Single(results, x => x);
             Assert.Single(Directory.GetFiles(directory, "*.nonce"));
             Assert.False(UploadSignature.Consume(directory, Nonce, 1001));
             Assert.True(UploadSignature.Consume(directory, Nonce, 8201));

@@ -1,0 +1,19 @@
+{
+  "metadata.name": "HTTP settings",
+  "metadata.description": "Manage request and response headers, security headers and request IDs with site and path configuration",
+  "config.Enabled.label": "Enabled",
+  "config.Headers.label": "Default response headers (if absent)",
+  "config.RequestHeaders.label": "Set request headers",
+  "config.RequestHeadersIfMissing.label": "Default request headers (if absent)",
+  "config.AppendRequestHeaders.label": "Append request headers",
+  "config.RemoveRequestHeaders.label": "Remove request headers",
+  "config.ResponseHeaders.label": "Set response headers",
+  "config.AppendResponseHeaders.label": "Append response headers",
+  "config.RemoveResponseHeaders.label": "Remove response headers",
+  "config.StatusCodes.label": "Response status filters",
+  "config.SecurityHeaders.label": "Default security headers",
+  "config.HstsMaxAgeSeconds.label": "HSTS max age (seconds; HTTPS only)",
+  "config.RequestIdHeader.label": "Request ID header name",
+  "config.StatusCodes.description": "Empty applies to every response, including errors. Supports 20x, 4xx and exact codes.",
+  "config.RequestIdHeader.description": "Empty disables it. Use X-Request-ID or another X- header; incoming IDs are replaced by the server request ID."
+}
