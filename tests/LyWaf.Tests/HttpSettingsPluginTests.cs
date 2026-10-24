@@ -20,6 +20,14 @@ namespace LyWaf.Tests;
 public sealed class HttpSettingsPluginTests
 {
     [Fact]
+    public void ResponseDefaultsAreDeclaredWithResponseOperations()
+    {
+        var fields = PluginConfigurationSchema.Describe(typeof(HttpSettingsOptions)).Select(field => field.Path).ToList();
+        Assert.True(fields.IndexOf(nameof(HttpSettingsOptions.RemoveRequestHeaders)) < fields.IndexOf(nameof(HttpSettingsOptions.Headers)));
+        Assert.True(fields.IndexOf(nameof(HttpSettingsOptions.Headers)) < fields.IndexOf(nameof(HttpSettingsOptions.ResponseHeaders)));
+    }
+
+    [Fact]
     public void NativeExampleUsesRealConfigurationProvider()
     {
         var path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../Plugins/Sys/HttpSettings/example.ly"));

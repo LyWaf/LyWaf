@@ -720,6 +720,7 @@ export interface ErrorTemplateItem {
   statusCode: number
   hasOriginal: boolean
   hasEdit: boolean
+  title: string | null
 }
 
 export interface ErrorTemplateDetail {
@@ -744,6 +745,9 @@ export const errorTemplateApi = {
 
   revert: (statusCode: number) =>
     api.post<ApiResponse>(`/error-templates/${statusCode}/revert`),
+
+  delete: (statusCode: number) =>
+    api.delete<ApiResponse>(`/error-templates/${statusCode}`),
 }
 
 // ==================== WAF 自定义规则 API ====================

@@ -27,12 +27,38 @@ const editContent = ref('')
 const showRevertConfirm = ref(false)
 const reverting = ref(false)
 const activeTab = ref<'source' | 'preview'>('source')
+const newStatusCode = ref('')
+const adding = ref(false)
+const showDeleteConfirm = ref(false)
+const deleting = ref(false)
+const isCustomSaved = computed(() => selectedCode.value !== null
+  && !STATUS_INFO.value[selectedCode.value]
+  && templates.value.some(tpl => tpl.statusCode === selectedCode.value))
 
 // 是否有未保存的修改
 const hasChanges = computed(() => {
   if (!detail.value) return false
   return editContent.value !== detail.value.activeContent
 })
+
+const addTemplate = async () => {
+  const code = Number(newStatusCode.value)
+  if (!/^\d{3}$/.test(newStatusCode.value) || code < 400 || code > 599) {
+    showError(t('errorTemplates.invalidCode'))
+    return
+  }
+  if (templates.value.some(tpl => tpl.statusCode === code)) {
+    showError(t('errorTemplates.alreadyExists'))
+    return
+  }
+  adding.value = false
+  selectedCode.value = code
+  detail.value = { success: true, statusCode: code, editContent: null, originalContent: null,
+    hasEdit: false, hasOriginal: false, activeContent: '' }
+  editContent.value = `<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n  <meta charset="utf-8">\n  <title>${code} Error</title>\n</head>\n<body>\n  <h1>${code}</h1>\n</body>\n</html>\n`
+  activeTab.value = 'source'
+  newStatusCode.value = ''
+}
 
 // 加载列表
 const loadList = async () => {
@@ -76,6 +102,7 @@ const saveTemplate = async () => {
     if (res?.success) {
       showSuccess(t('page.11cd7a79f4da'))
       // 刷新详情和列表
+      detail.value = null
       await selectTemplate(selectedCode.value)
       await loadList()
     } else {
@@ -97,7 +124,7 @@ const revertTemplate = async () => {
     if (res?.success) {
       showSuccess(t('page.70217866ec64'))
       showRevertConfirm.value = false
-      selectedCode.value = selectedCode.value // force re-select
+      detail.value = null
       await selectTemplate(selectedCode.value!)
       await loadList()
     } else {
@@ -107,6 +134,28 @@ const revertTemplate = async () => {
     showError(t('page.89281a45e04f'))
   } finally {
     reverting.value = false
+  }
+}
+
+const deleteTemplate = async () => {
+  if (!selectedCode.value || !isCustomSaved.value) return
+  deleting.value = true
+  try {
+    const res = await errorTemplateApi.delete(selectedCode.value) as unknown as { success: boolean; message?: string }
+    if (!res?.success) {
+      showError(res?.message || t('errorTemplates.deleteFailed'))
+      return
+    }
+    showDeleteConfirm.value = false
+    selectedCode.value = null
+    detail.value = null
+    editContent.value = ''
+    await loadList()
+    showSuccess(t('errorTemplates.deleted'))
+  } catch {
+    showError(t('errorTemplates.deleteFailed'))
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -181,10 +230,25 @@ onMounted(() => {
             <span class="font-mono">{{ tpl.statusCode }}</span>
             <span v-if="tpl.hasEdit" class="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0" :title="t('page.d0c9d92453ab')"></span>
           </div>
-          <div v-if="STATUS_INFO[tpl.statusCode]" class="text-[11px] mt-0.5 opacity-60 truncate">
-            {{ STATUS_INFO[tpl.statusCode].en }}
+          <div v-if="tpl.title || STATUS_INFO[tpl.statusCode]" class="text-[11px] mt-0.5 opacity-60 truncate" :title="tpl.title || STATUS_INFO[tpl.statusCode]?.en">
+            {{ tpl.title || STATUS_INFO[tpl.statusCode]?.en }}
           </div>
         </button>
+        <div class="pt-2 border-t border-dark-border">
+          <button v-if="!adding" @click="adding = true"
+            class="w-full text-left px-3 py-2 rounded-lg text-sm text-primary-400 hover:bg-white/5">
+            + {{ t('common.add') }}
+          </button>
+          <div v-else class="space-y-2 px-1">
+            <input v-model.trim="newStatusCode" type="text" inputmode="numeric" maxlength="3"
+              :placeholder="t('errorTemplates.statusCode')" @keydown.enter="addTemplate"
+              class="w-full px-2 py-1.5 rounded bg-dark-bg border border-dark-border text-sm text-gray-100 outline-none focus:border-primary-500" />
+            <div class="flex gap-1">
+              <button @click="addTemplate" class="btn btn-sm btn-primary flex-1 text-xs">{{ t('common.add') }}</button>
+              <button @click="adding = false" class="btn btn-sm btn-secondary text-xs">{{ t('common.cancel') }}</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- 右侧编辑区 -->
@@ -204,7 +268,11 @@ onMounted(() => {
                 class="text-xs text-gray-500 hover:text-gray-300 transition-colors px-2 py-1 rounded hover:bg-white/5">
                 {{ t('page.3b9f1e3ddd11') }}
               </button>
-              <button v-if="detail.hasEdit" @click="showRevertConfirm = true"
+              <button v-if="isCustomSaved" @click="showDeleteConfirm = true"
+                class="text-xs text-red-400 hover:text-red-300 transition-colors px-2 py-1 rounded hover:bg-red-500/10">
+                {{ t('common.delete') }}
+              </button>
+              <button v-else-if="detail.hasEdit" @click="showRevertConfirm = true"
                 class="text-xs text-red-400 hover:text-red-300 transition-colors px-2 py-1 rounded hover:bg-red-500/10">
                 {{ t('page.2d41469ba61a') }}
               </button>
@@ -296,6 +364,23 @@ onMounted(() => {
               class="btn btn-sm bg-red-600 hover:bg-red-500 text-white flex items-center gap-1.5">
               <span v-if="reverting" class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
               <span>{{ reverting ? t('page.c93c8b1cadcc') : t('page.51e44d56ec90') }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+    <Teleport to="body">
+      <div v-if="showDeleteConfirm" class="fixed inset-0 z-50 flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/60" @click="showDeleteConfirm = false"></div>
+        <div class="relative bg-dark-card border border-dark-border rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
+          <h3 class="text-lg font-semibold text-gray-100 mb-2">{{ t('errorTemplates.deleteTitle') }}</h3>
+          <p class="text-sm text-gray-400 mb-5">{{ t('errorTemplates.deleteConfirm', { code: selectedCode! }) }}</p>
+          <div class="flex justify-end gap-3">
+            <button @click="showDeleteConfirm = false" class="btn btn-sm btn-secondary">{{ t('common.cancel') }}</button>
+            <button @click="deleteTemplate" :disabled="deleting"
+              class="btn btn-sm bg-red-600 hover:bg-red-500 text-white flex items-center gap-1.5">
+              <span v-if="deleting" class="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
+              {{ t('common.delete') }}
             </button>
           </div>
         </div>

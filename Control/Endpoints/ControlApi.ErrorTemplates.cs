@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Net;
 using LyWaf.Control.Endpoints;
 using LyWaf.Services.ABTest;
 using LyWaf.Services.AccessControl;
@@ -52,7 +54,27 @@ public static partial class ControlApi
     {
         if (statusCode is < 400 or > 599) throw new ArgumentException("错误状态码必须在 400 到 599 之间", nameof(statusCode));
     }
-    private sealed record ErrorTemplateListItem(int StatusCode, bool HasOriginal, bool HasEdit);
+    private sealed record ErrorTemplateListItem(int StatusCode, bool HasOriginal, bool HasEdit, string? Title);
+
+    private static string? ReadTemplateTitle(string path)
+    {
+        try
+        {
+            using var reader = new StreamReader(path, Encoding.UTF8);
+            var buffer = new char[64 * 1024];
+            var length = reader.ReadBlock(buffer, 0, buffer.Length);
+            var match = Regex.Match(new string(buffer, 0, length), @"<title\b[^>]*>(.*?)</title\s*>",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline, TimeSpan.FromMilliseconds(100));
+            if (!match.Success) return null;
+            var title = WebUtility.HtmlDecode(Regex.Replace(match.Groups[1].Value, @"\s+", " ")).Trim();
+            var separatorIndex = title.IndexOf('-');
+            if (separatorIndex >= 0) title = title[..separatorIndex].Trim();
+            return title.Length == 0 ? null : title[..Math.Min(title.Length, 120)];
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+        catch (RegexMatchTimeoutException) { return null; }
+    }
     private static void MapErrorTemplateEndpoints(WebApplication app, int controlPort)
     {
         // =============== 错误模板管理 ===============
@@ -67,11 +89,33 @@ public static partial class ControlApi
                 var service = templateService as LyWaf.Services.ErrorTemplate.ErrorTemplateService;
                 var list = new List<ErrorTemplateListItem>();
 
-                foreach (var code in errorTemplateCodes)
+                var codes = new HashSet<int>(errorTemplateCodes);
+                if (service is not null)
+                {
+                    var templateDirectory = Path.GetDirectoryName(service.GetEditFilePath(403))!;
+                    if (Directory.Exists(templateDirectory))
+                    {
+                        foreach (var path in Directory.EnumerateFiles(templateDirectory, ".lywaf.*.html")
+                            .Concat(Directory.EnumerateFiles(templateDirectory, "*.html")))
+                        {
+                            var name = Path.GetFileName(path);
+                            var codeText = name.StartsWith(".lywaf.", StringComparison.Ordinal)
+                                ? name[7..^5] : name[..^5];
+                            if (int.TryParse(codeText, out var code) && code is >= 400 and <= 599)
+                                codes.Add(code);
+                        }
+                    }
+                }
+
+                foreach (var code in codes)
                 {
                     var originalPath = service?.GetOriginalFilePath(code) ?? "";
                     var editPath = service?.GetEditFilePath(code) ?? "";
-                    list.Add(new(code, File.Exists(originalPath), File.Exists(editPath)));
+                    var hasOriginal = File.Exists(originalPath);
+                    var hasEdit = File.Exists(editPath);
+                    var title = hasEdit ? ReadTemplateTitle(editPath) : null;
+                    title ??= hasOriginal ? ReadTemplateTitle(originalPath) : null;
+                    list.Add(new(code, hasOriginal, hasEdit, title));
                 }
                 return Results.Ok(ManagementLists.From(list).Sort("statusCode", item => item.StatusCode)
                     .Search(item => item.StatusCode.ToString(System.Globalization.CultureInfo.InvariantCulture)).Read(ctx.Request.Query, "statusCode"));
@@ -162,6 +206,28 @@ public static partial class ControlApi
                 }
                 return Results.Json(new { success = true, message = "没有编辑版本需要恢复" });
             }
+        }).Produces<ErrorTemplateSavedResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
+
+        // 非预制模板可完整删除，预制状态码只能恢复原始版本。
+        app.MapDelete("/api/error-templates/{statusCode:int}", (int statusCode, HttpContext ctx) =>
+        {
+            ValidateTemplateCode(statusCode);
+            if (errorTemplateCodes.Contains(statusCode))
+                return Results.Json(new { success = false, message = "预制错误模板不能删除" }, statusCode: 400);
+
+            var templateService = ctx.RequestServices.GetRequiredService<LyWaf.Services.ErrorTemplate.IErrorTemplateService>();
+            var service = templateService as LyWaf.Services.ErrorTemplate.ErrorTemplateService;
+            var editPath = service?.GetEditFilePath(statusCode)
+                ?? Path.Combine(Directory.GetCurrentDirectory(), "templates", $".lywaf.{statusCode}.html");
+            var originalPath = service?.GetOriginalFilePath(statusCode)
+                ?? Path.Combine(Directory.GetCurrentDirectory(), "templates", $"{statusCode}.html");
+            if (!File.Exists(editPath) && !File.Exists(originalPath))
+                return Results.Json(new { success = false, message = "模板不存在" }, statusCode: 404);
+
+            if (File.Exists(editPath)) File.Delete(editPath);
+            if (File.Exists(originalPath)) File.Delete(originalPath);
+            service?.ClearCache();
+            return Results.Json(new { success = true, message = "模板已删除" });
         }).Produces<ErrorTemplateSavedResponse>().RequireHost($"*:{controlPort}").RequireManagementPermission();
 
         // WAF 自定义规则管理
